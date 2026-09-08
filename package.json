@@ -1,0 +1,10 @@
+{
+  "name": "mi-pronostico-deportivo",
+  "version": "4.0.0",
+  "private": true,
+  "description": "App personal de pronósticos deportivos con API-Football y modelo Poisson",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "express": "^5.1.0" }
+}
