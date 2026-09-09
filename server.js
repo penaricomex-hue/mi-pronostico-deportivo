@@ -1282,7 +1282,7 @@ button {
   </div>
 
   <div class="status">
-    ● V7.2
+    ● V7.3
   </div>
 </div>
 
@@ -1705,7 +1705,7 @@ app.listen(
   PORT,
   () =>
     console.log(
-      `Mi Pronóstico Deportivo V7.2 ` +
+      `Mi Pronóstico Deportivo V7.3 ` +
       `escuchando en puerto ${PORT}`
     )
 );
