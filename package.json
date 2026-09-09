@@ -4,7 +4,7 @@
   "private":true,
   "description":"Aplicación móvil/web de pronósticos deportivos con football-data.org, The Odds API y modelo Poisson",
   "main":"server.js",
-  "scripts":{"start":"node server.js"},
+  "scripts":{"start":"node stability.js"}
   "engines":{"node":">=18"},
   "dependencies":{"express":"^5.1.0"}
 }
