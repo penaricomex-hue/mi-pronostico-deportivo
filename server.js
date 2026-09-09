@@ -30,7 +30,7 @@ const CACHE_TTL_MS =
   5 * 60 * 1000;
 
 const MODEL_VERSION =
-  'V7.4';
+  'V7.4.1';
 
 const cache =
   new Map();
