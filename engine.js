@@ -473,10 +473,12 @@ function matchModel(
     under25Pct: pct(under25),
 
     bttsYesPct: pct(bttsYes),
-    bttsNoPct: pct(bttsNo),
+bttsNoPct: pct(bttsNo),
 
-    homeXg:
-      Math.round(homeXg * 1000) / 1000,
+btts: bttsYes,
+
+homeXg:
+  Math.round(homeXg * 1000) / 1000,
 
     awayXg:
       Math.round(awayXg * 1000) / 1000,
