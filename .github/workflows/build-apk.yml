@@ -28,17 +28,34 @@ jobs:
         run: |
           yes | sdkmanager --licenses || true
 
-      - name: Install Android SDK components
+      - name: Install Android SDK
         run: |
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-35"
           sdkmanager "build-tools;35.0.0"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+      - name: Install Gradle 8.9
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          unzip -q gradle-8.9-bin.zip
+          echo "$GITHUB_WORKSPACE/gradle-8.9/bin" >> "$GITHUB_PATH"
+
+      - name: Check Gradle
+        run: |
+          gradle --version
 
       - name: Build Android APK
-        working-directory: ./android
-        run: grad
+        working-directory: android
+        run: |
+          gradle assembleDebug
+
+      - name: Verify APK
+        run: |
+          ls -lh android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mi-Pronostico-Deportivo-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
