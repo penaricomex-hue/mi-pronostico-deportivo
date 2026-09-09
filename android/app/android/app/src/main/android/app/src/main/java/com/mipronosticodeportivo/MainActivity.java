@@ -26,9 +26,7 @@ public class MainActivity extends Activity {
 
         setContentView(webView);
 
-        webView.loadUrl(
-            "https://mi-pronostico-deportivo.onrender.com/"
-        );
+        webView.loadUrl("https://mi-pronostico-deportivo.onrender.com/");
     }
 
     @Override
