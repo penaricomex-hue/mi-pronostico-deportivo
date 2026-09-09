@@ -1,5 +1,13 @@
 const express = require('express');
-const { matchModel, pct, implied, ev, confidence } = require('./engine');
+const {
+  matchModel,
+  pct,
+  implied,
+  ev,
+  confidence,
+  stabilizeStats,
+  shrinkToMean
+} = require('./engine');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -683,64 +691,90 @@ app.get('/api/analyze', async (req, res) => {
         awayId
       );
 
-    const homeAttack =
-      weightedAverage([
-        ha.homeGF,
-        ha.gf,
-        ha.gf
-      ].filter(
-        x => x != null
-      )) ?? 1.35;
+const homeStats =
+  stabilizeStats(
+    ha,
+    ha.matches.length
+  );
 
-    const homeDefense =
-      weightedAverage([
-        ha.homeGA,
-        ha.ga,
-        ha.ga
-      ].filter(
-        x => x != null
-      )) ?? 1.20;
+const awayStats =
+  stabilizeStats(
+    aa,
+    aa.matches.length
+  );
 
-    const awayAttack =
-      weightedAverage([
-        aa.awayGF,
-        aa.gf,
-        aa.gf
-      ].filter(
-        x => x != null
-      )) ?? 1.10;
+const homeAttack =
+  weightedAverage([
+    homeStats.homeGF,
+    homeStats.gf,
+    homeStats.gf
+  ].filter(
+    x => x != null
+  )) ?? 1.35;
 
-    const awayDefense =
-      weightedAverage([
-        aa.awayGA,
-        aa.ga,
-        aa.ga
-      ].filter(
-        x => x != null
-      )) ?? 1.30;
+const homeDefense =
+  weightedAverage([
+    homeStats.homeGA,
+    homeStats.ga,
+    homeStats.ga
+  ].filter(
+    x => x != null
+  )) ?? 1.20;
 
-    let homeXg =
-      (homeAttack * 0.60) +
-      (awayDefense * 0.40);
+const awayAttack =
+  weightedAverage([
+    awayStats.awayGF,
+    awayStats.gf,
+    awayStats.gf
+  ].filter(
+    x => x != null
+  )) ?? 1.35;
 
-    let awayXg =
-      (awayAttack * 0.60) +
-      (homeDefense * 0.40);
+const awayDefense =
+  weightedAverage([
+    awayStats.awayGA,
+    awayStats.ga,
+    awayStats.ga
+  ].filter(
+    x => x != null
+  )) ?? 1.20;
 
-    homeXg *= 1.08;
-    awayXg *= 0.94;
+const homeForm =
+  shrinkToMean(
+    ha.form,
+    0.50,
+    ha.matches.length
+  );
 
-    if (ha.form != null) {
-      homeXg *=
-        0.94 +
-        (ha.form * 0.12);
-    }
+const awayForm =
+  shrinkToMean(
+    aa.form,
+    0.50,
+    aa.matches.length
+  );
 
-    if (aa.form != null) {
-      awayXg *=
-        0.94 +
-        (aa.form * 0.12);
-    }
+let homeXg =
+  (homeAttack * 0.60) +
+  (awayDefense * 0.40);
+
+let awayXg =
+  (awayAttack * 0.60) +
+  (homeDefense * 0.40);
+
+homeXg *= 1.08;
+awayXg *= 0.94;
+
+if (homeForm != null) {
+  homeXg *=
+    0.94 +
+    (homeForm * 0.12);
+}
+
+if (awayForm != null) {
+  awayXg *=
+    0.94 +
+    (awayForm * 0.12);
+}
 
     homeXg =
       Math.min(
