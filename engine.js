@@ -406,83 +406,10 @@ function confidence(
       99
     )
   );
-}
-  if (
-    probability == null ||
-    !Number.isFinite(Number(probability))
-  ) {
-    return 0;
-  }
-
-  const p =
-    clamp(
-      Number(probability),
-      0,
-      1
-    );
-
-  /*
-    Distance from 50%.
-
-    Example:
-      55% -> 5
-      70% -> 20
-      80% -> 30
-  */
-  const base =
-    Math.abs(p - 0.5) * 100;
-
-  /*
-    Reliability grows with sample size,
-    but slowly.
-  */
-  const reliability =
-    sampleWeight(sampleSize);
-
-  /*
-    Maximum contribution from sample quality
-    is 20 points.
-  */
-  const sampleContribution =
-    reliability * 20;
-
-  /*
-    Positive EV contributes only slightly.
-  */
-  const positiveEdge =
-    Math.max(
-      0,
-      Number(edge) || 0
-    ) * 100;
-
-  const edgeContribution =
-    positiveEdge * 0.20;
-
-  /*
-    Explicit uncertainty penalty.
-
-    With very small samples:
-      n=1 -> strong penalty
-      n=3 -> noticeable penalty
-      n=10 -> almost no penalty
-  */
-  const uncertaintyPenalty =
-    (1 - reliability) * 15;
-
-  const value =
-    50 +
-    base * 0.50 +
-    sampleContribution +
-    edgeContribution -
-    uncertaintyPenalty;
-
-  return Math.round(
-    clamp(
-      value,
-      0,
-      99
-    )
-  );
+}/*
+  Generates the principal probabilities
+  from the score matrix.
+*/
 }
 
 /*
