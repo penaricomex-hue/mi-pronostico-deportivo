@@ -405,11 +405,7 @@ function confidence(
       0,
       99
     )
-  );
-}/*
-  Generates the principal probabilities
-  from the score matrix.
-*/
+  ); 
 }
 
 /*
