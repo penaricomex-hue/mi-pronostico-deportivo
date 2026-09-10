@@ -1599,10 +1599,10 @@ app.get(
           markets
         );
 
-      /*
-      ----------------------------------------------
-      CONFIANZA
-      ----------------------------------------------
+            /*
+      ------------------------------
+      CONFIANZA V7.6
+      ------------------------------
       */
 
       const topProbability =
@@ -1625,6 +1625,53 @@ app.get(
           ha.matches.length,
           aa.matches.length
         );
+
+      const modelConfidence =
+        confidence(
+          topProbability,
+          sampleSize,
+          topEdge
+        );
+
+      /*
+        V7.6 evita recomendar
+        apuestas débiles.
+
+        BET:
+        - probabilidad >= 55%
+        - EV >= 2%
+        - confianza >= 60
+        - muestra mínima de 4 partidos
+
+        NO BET:
+        cualquier escenario
+        que no cumpla lo anterior.
+      */
+
+      const betEligible =
+        Boolean(best) &&
+        Number(best.probabilityPct) >= 55 &&
+        Number(best.evPct) >= 2 &&
+        modelConfidence >= 60 &&
+        sampleSize >= 4;
+
+      const recommendation =
+        betEligible
+          ? 'BET'
+          : 'NO BET';
+
+      const recommendationReason =
+        betEligible
+          ? 'Valor positivo con probabilidad, confianza y muestra suficientes.'
+          : !best
+            ? 'No existe una oportunidad de valor positiva.'
+            : sampleSize < 4
+              ? 'Muestra estadística insuficiente.'
+              : Number(best.probabilityPct) < 55
+                ? 'La probabilidad del modelo es demasiado baja.'
+                : Number(best.evPct) < 2
+                  ? 'La ventaja estadística sobre la cuota es demasiado pequeña.'
+                  : 'La confianza del modelo no alcanza el nivel mínimo.';
 
       const confidenceRaw =
         confidence(
