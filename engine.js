@@ -312,6 +312,115 @@ function confidence(
       1
     );
 
+  const n =
+    Math.max(
+      0,
+      Number(sampleSize) || 0
+    );
+
+  /*
+    V7.6
+    La confianza se basa en:
+    1. Distancia real respecto al 50%.
+    2. Tamaño de muestra.
+    3. Valor esperado.
+    4. Penalización fuerte cuando
+       existen muy pocos partidos.
+  */
+
+  const probabilityStrength =
+    Math.max(
+      0,
+      (p - 0.50) * 100
+    );
+
+  const reliability =
+    sampleWeight(
+      n,
+      6
+    );
+
+  const sampleContribution =
+    reliability * 22;
+
+  const positiveEdge =
+    Math.max(
+      0,
+      Number(edge) || 0
+    );
+
+  const edgeContribution =
+    Math.min(
+      10,
+      positiveEdge * 100 * 0.25
+    );
+
+  let uncertaintyPenalty = 0;
+
+  if (n <= 2) {
+    uncertaintyPenalty = 15;
+  } else if (n <= 4) {
+    uncertaintyPenalty = 10;
+  } else if (n <= 6) {
+    uncertaintyPenalty = 6;
+  } else if (n <= 8) {
+    uncertaintyPenalty = 3;
+  }
+
+  /*
+    Evita que una probabilidad
+    apenas superior al 50%
+    produzca una confianza alta.
+  */
+
+  let baseScore =
+    probabilityStrength * 0.70;
+
+  /*
+    Probabilidades especialmente fuertes.
+  */
+
+  if (p >= 0.70) {
+    baseScore += 5;
+  }
+
+  if (p >= 0.75) {
+    baseScore += 5;
+  }
+
+  if (p >= 0.80) {
+    baseScore += 4;
+  }
+
+  const value =
+    50 +
+    baseScore +
+    sampleContribution +
+    edgeContribution -
+    uncertaintyPenalty;
+
+  return Math.round(
+    clamp(
+      value,
+      0,
+      99
+    )
+  );
+}
+  if (
+    probability == null ||
+    !Number.isFinite(Number(probability))
+  ) {
+    return 0;
+  }
+
+  const p =
+    clamp(
+      Number(probability),
+      0,
+      1
+    );
+
   /*
     Distance from 50%.
 
