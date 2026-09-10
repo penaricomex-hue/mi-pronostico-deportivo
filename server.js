@@ -34,7 +34,6 @@ const ODDS_SPORT_BY_COMPETITION = {
 };
 
 const CACHE_MINUTES = 5;
-
 const cache = new Map();
 
 function now() {
@@ -161,7 +160,6 @@ async function footballData(path) {
 
 async function getTeamRecentMatches(teamId) {
   const key = `team:${teamId}:recent`;
-
   const cached = cacheGet(key);
 
   if (cached) return cached;
@@ -217,8 +215,11 @@ function calculateRecentTeamStats(teamId, matches) {
     goalsFor += gf;
     goalsAgainst += ga;
 
-    if (gf > ga) points += 3;
-    else if (gf === ga) points += 1;
+    if (gf > ga) {
+      points += 3;
+    } else if (gf === ga) {
+      points += 1;
+    }
   }
 
   const avgGoalsFor = goalsFor / relevant.length;
@@ -231,7 +232,10 @@ function calculateRecentTeamStats(teamId, matches) {
 
   const defenseStrength = Math.max(
     0.45,
-    Math.min(1.8, 1.35 / Math.max(avgGoalsAgainst, 0.25))
+    Math.min(
+      1.8,
+      1.35 / Math.max(avgGoalsAgainst, 0.25)
+    )
   );
 
   return {
@@ -243,18 +247,19 @@ function calculateRecentTeamStats(teamId, matches) {
     attackStrength,
     defenseStrength,
     formPoints: points,
-    formPct: (points / (relevant.length * 3)) * 100
+    formPct:
+      (points / (relevant.length * 3)) * 100
   };
 }
 
 async function getFixture(date) {
   const key = `fixtures:${date}`;
-
   const cached = cacheGet(key);
 
   if (cached) return cached;
 
-  const competitions = Object.keys(ODDS_SPORT_BY_COMPETITION);
+  const competitions =
+    Object.keys(ODDS_SPORT_BY_COMPETITION);
 
   const allMatches = [];
 
@@ -273,23 +278,13 @@ async function getFixture(date) {
         );
       }
     } catch {
-      // Una competición que falle no debe tumbar todo el análisis.
+      // Una competición que falle no debe tumbar el análisis.
     }
   }
 
   cacheSet(key, allMatches);
 
   return allMatches;
-}
-
-function parseDate(value) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-
-  return date;
 }
 
 function selectFixture(matches, homeName, awayName) {
@@ -327,462 +322,402 @@ function collectPrice(prices, bookmaker, odds) {
     bookmaker,
     odds: Number(odds)
   });
+}async function footballData(path, options = {}) {
+  const headers = {
+    'X-Auth-Token': FOOTBALL_DATA_TOKEN,
+    ...(options.headers || {})
+  };
+
+  return fetchJson(`${FOOTBALL_DATA_BASE}${path}`, {
+    ...options,
+    headers
+  });
 }
 
-/*
- * Analizador robusto de precios.
- *
- * La idea V7.6.1:
- *
- * bestOdds      = mejor precio disponible.
- * referenceOdds = mediana del mercado.
- * secondBest    = segunda mejor cuota.
- *
- * Una cuota exageradamente alta frente al consenso se considera
- * sospechosa y NO puede generar Value Pick.
- */
-function analyzePriceSet(prices) {
-  const valid = prices
-    .filter(item =>
-      item &&
-      Number.isFinite(Number(item.odds)) &&
-      Number(item.odds) > 1
-    )
+async function getTeamRecentMatches(teamId, limit = 10) {
+  if (!teamId) return [];
+
+  const data = await footballData(
+    `/teams/${teamId}/matches?status=FINISHED&limit=${limit}`
+  );
+
+  return Array.isArray(data?.matches) ? data.matches : [];
+}
+
+function calculateRecentTeamStats(matches, teamId) {
+  const stats = {
+    matches: 0,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    goalsFor: 0,
+    goalsAgainst: 0,
+    avgGoalsFor: 0,
+    avgGoalsAgainst: 0,
+    pointsPerGame: 0,
+    form: []
+  };
+
+  if (!Array.isArray(matches) || !matches.length) {
+    return stats;
+  }
+
+  for (const match of matches) {
+    const isHome = Number(match?.homeTeam?.id) === Number(teamId);
+    const isAway = Number(match?.awayTeam?.id) === Number(teamId);
+
+    if (!isHome && !isAway) continue;
+
+    const homeGoals = Number(match?.score?.fullTime?.home);
+    const awayGoals = Number(match?.score?.fullTime?.away);
+
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) {
+      continue;
+    }
+
+    const gf = isHome ? homeGoals : awayGoals;
+    const ga = isHome ? awayGoals : homeGoals;
+
+    stats.matches += 1;
+    stats.goalsFor += gf;
+    stats.goalsAgainst += ga;
+
+    if (gf > ga) {
+      stats.wins += 1;
+      stats.form.push('W');
+    } else if (gf === ga) {
+      stats.draws += 1;
+      stats.form.push('D');
+    } else {
+      stats.losses += 1;
+      stats.form.push('L');
+    }
+  }
+
+  if (stats.matches > 0) {
+    stats.avgGoalsFor = stats.goalsFor / stats.matches;
+    stats.avgGoalsAgainst = stats.goalsAgainst / stats.matches;
+    stats.pointsPerGame =
+      ((stats.wins * 3) + stats.draws) / stats.matches;
+  }
+
+  return stats;
+}
+
+async function getFixture(homeName, awayName, competitionCode = null) {
+  const params = new URLSearchParams({
+    status: 'SCHEDULED'
+  });
+
+  if (competitionCode) {
+    params.set('competitions', competitionCode);
+  }
+
+  const data = await footballData(`/matches?${params.toString()}`);
+  const matches = Array.isArray(data?.matches) ? data.matches : [];
+
+  const fixture = matches.find(match => {
+    const home = match?.homeTeam?.name || '';
+    const away = match?.awayTeam?.name || '';
+
+    return namesMatch(home, homeName) &&
+           namesMatch(away, awayName);
+  });
+
+  return fixture || null;
+}
+
+async function selectFixture(homeName, awayName, competitionCode = null) {
+  const fixture = await getFixture(
+    homeName,
+    awayName,
+    competitionCode
+  );
+
+  if (fixture) return fixture;
+
+  const allMatches = await footballData('/matches?status=SCHEDULED');
+  const matches = Array.isArray(allMatches?.matches)
+    ? allMatches.matches
+    : [];
+
+  return matches.find(match => {
+    const home = match?.homeTeam?.name || '';
+    const away = match?.awayTeam?.name || '';
+
+    return namesMatch(home, homeName) &&
+           namesMatch(away, awayName);
+  }) || null;
+}function collectPrice(prices, bookmaker, marketKey, outcomeKey, outcomeName) {
+  const value = Number(prices?.[outcomeKey]);
+
+  if (!Number.isFinite(value) || value <= 1) return;
+
+  prices._items = prices._items || [];
+
+  prices._items.push({
+    bookmaker,
+    marketKey,
+    outcomeKey,
+    outcomeName,
+    odds: value
+  });
+}
+
+function analyzePriceSet(items) {
+  const valid = (items || [])
     .map(item => ({
-      bookmaker: item.bookmaker || 'Unknown',
+      ...item,
       odds: Number(item.odds)
-    }));
+    }))
+    .filter(item => Number.isFinite(item.odds) && item.odds > 1);
 
   if (!valid.length) {
     return {
       bestOdds: null,
-      referenceOdds: null,
       secondBestOdds: null,
-      bookmakerCount: 0,
+      referenceOdds: null,
       supportCount: 0,
-      priceGapPct: 0,
-      secondGapPct: 0,
+      bookmakerCount: 0,
       isOutlier: false,
-      marketDepth: 'none',
-      prices: []
+      bestBookmaker: null
     };
   }
 
-  const odds = valid
-    .map(x => x.odds)
-    .sort((a, b) => a - b);
+  const sortedDesc = [...valid].sort((a, b) => b.odds - a.odds);
+  const uniqueDesc = uniqueNumbers(
+    sortedDesc.map(item => item.odds)
+  ).sort((a, b) => b - a);
 
-  const referenceOdds = median(odds);
-  const bestOdds = odds[odds.length - 1];
+  const bestOdds = uniqueDesc[0] || null;
+  const secondBestOdds = uniqueDesc[1] || null;
 
-  const uniqueDescending = uniqueNumbers(odds)
-    .sort((a, b) => b - a);
+  const referenceOdds = median(
+    valid.map(item => item.odds)
+  );
 
-  const secondBestOdds =
-    uniqueDescending.length > 1
-      ? uniqueDescending[1]
-      : null;
-
-  /*
-   * Una cuota cuenta como respaldada si está dentro de 10%
-   * de la referencia del mercado.
-   */
-  const supportCount = odds.filter(odd =>
-    referenceOdds &&
-    Math.abs(odd - referenceOdds) / referenceOdds <= 0.10
+  const supportCount = valid.filter(item =>
+    item.odds >= referenceOdds * 0.90 &&
+    item.odds <= referenceOdds * 1.10
   ).length;
 
-  const priceGapPct = referenceOdds
-    ? ((bestOdds / referenceOdds) - 1) * 100
-    : 0;
+  const bookmakerCount = new Set(
+    valid.map(item => item.bookmaker)
+  ).size;
 
-  const secondGapPct =
-    secondBestOdds
-      ? ((bestOdds / secondBestOdds) - 1) * 100
-      : 0;
+  const bestBookmaker =
+    sortedDesc.find(item => item.odds === bestOdds)?.bookmaker || null;
 
-  /*
-   * Reglas anti-outlier:
-   *
-   * 1. Si la mejor cuota supera 30% la mediana:
-   *    sospechosa automáticamente.
-   *
-   * 2. Si supera 20% y además no tiene suficiente respaldo:
-   *    sospechosa.
-   *
-   * 3. Si supera 20% a la segunda mejor cuota:
-   *    sospechosa.
-   */
-  const extremeAgainstReference =
-    bestOdds > referenceOdds * 1.30;
+  let isOutlier = false;
 
-  const weakAgainstReference =
-    bestOdds > referenceOdds * 1.20 &&
-    supportCount < 2;
+  if (bestOdds && referenceOdds) {
+    if (bestOdds > referenceOdds * 1.30) {
+      isOutlier = true;
+    }
 
-  const extremeAgainstSecond =
-    secondBestOdds !== null &&
-    bestOdds > secondBestOdds * 1.20;
+    if (
+      bestOdds > referenceOdds * 1.20 &&
+      supportCount < 2
+    ) {
+      isOutlier = true;
+    }
 
-  const isOutlier =
-    odds.length >= 2 &&
-    (
-      extremeAgainstReference ||
-      weakAgainstReference ||
-      extremeAgainstSecond
-    );
-
-  let marketDepth = 'low';
-
-  if (odds.length >= 6 && supportCount >= 4) {
-    marketDepth = 'strong';
-  } else if (odds.length >= 3 && supportCount >= 2) {
-    marketDepth = 'medium';
+    if (
+      secondBestOdds &&
+      bestOdds > secondBestOdds * 1.20
+    ) {
+      isOutlier = true;
+    }
   }
 
   return {
     bestOdds,
-    referenceOdds,
     secondBestOdds,
-    bookmakerCount: valid.length,
+    referenceOdds,
     supportCount,
-    priceGapPct,
-    secondGapPct,
+    bookmakerCount,
     isOutlier,
-    marketDepth,
-    prices: valid
+    bestBookmaker
   };
 }
 
-function marketName(type, outcome) {
-  if (type === 'h2h') {
-    if (outcome === 'home') return 'Gana local';
-    if (outcome === 'draw') return 'Empate';
-    if (outcome === 'away') return 'Gana visitante';
-  }
+function marketName(key) {
+  const names = {
+    home: 'Local',
+    draw: 'Empate',
+    away: 'Visitante',
+    over25: 'Over 2.5',
+    under25: 'Under 2.5'
+  };
 
-  if (type === 'totals') {
-    if (outcome === 'over') return 'Over 2.5';
-    if (outcome === 'under') return 'Under 2.5';
-  }
-
-  return outcome;
+  return names[key] || key;
 }
 
-function buildMarket({
-  type,
-  outcome,
+function buildMarket(
+  key,
   probability,
-  prices
-}) {
-  const priceInfo = analyzePriceSet(prices);
+  priceData
+) {
+  const probabilityPct = Number(probability) * 100;
 
-  const modelProbability = Number(probability);
+  const bestOdds = Number(priceData?.bestOdds);
+  const referenceOdds = Number(priceData?.referenceOdds);
+
+  const bestImplied =
+    bestOdds > 1
+      ? (1 / bestOdds) * 100
+      : null;
+
+  const referenceImplied =
+    referenceOdds > 1
+      ? (1 / referenceOdds) * 100
+      : null;
 
   const bestEvPct =
-    priceInfo.bestOdds
-      ? ev(modelProbability, priceInfo.bestOdds)
+    bestOdds > 1
+      ? ((Number(probability) * bestOdds) - 1) * 100
       : null;
 
   const referenceEvPct =
-    priceInfo.referenceOdds
-      ? ev(modelProbability, priceInfo.referenceOdds)
+    referenceOdds > 1
+      ? ((Number(probability) * referenceOdds) - 1) * 100
       : null;
-
-  const impliedBest =
-    priceInfo.bestOdds
-      ? implied(priceInfo.bestOdds)
-      : null;
-
-  const impliedReference =
-    priceInfo.referenceOdds
-      ? implied(priceInfo.referenceOdds)
-      : null;
-
-  const valueEligible =
-    priceInfo.bookmakerCount >= 2 &&
-    priceInfo.supportCount >= 2 &&
-    !priceInfo.isOutlier &&
-    Number.isFinite(referenceEvPct) &&
-    referenceEvPct > 0;
 
   return {
-    type,
-    outcome,
-    name: marketName(type, outcome),
-
-    probability: modelProbability,
-
-    odds: priceInfo.bestOdds,
-    bestOdds: priceInfo.bestOdds,
-    referenceOdds: priceInfo.referenceOdds,
-    secondBestOdds: priceInfo.secondBestOdds,
-
-    impliedProbability: impliedBest,
-    referenceImpliedProbability: impliedReference,
-
-    evPct: bestEvPct,
+    key,
+    name: marketName(key),
+    probability: probabilityPct,
+    bestOdds: Number.isFinite(bestOdds) ? bestOdds : null,
+    referenceOdds: Number.isFinite(referenceOdds)
+      ? referenceOdds
+      : null,
+    bestImplied,
+    referenceImplied,
     bestEvPct,
     referenceEvPct,
-
-    bookmaker: priceInfo.prices
-      .find(x => x.odds === priceInfo.bestOdds)
-      ?.bookmaker || null,
-
-    bookmakerCount: priceInfo.bookmakerCount,
-    supportCount: priceInfo.supportCount,
-
-    priceGapPct: Number(priceInfo.priceGapPct.toFixed(1)),
-    secondGapPct: Number(priceInfo.secondGapPct.toFixed(1)),
-
-    isOutlier: priceInfo.isOutlier,
-    marketDepth: priceInfo.marketDepth,
-
-    valueEligible,
-
-    valueLevel:
-      priceInfo.isOutlier
-        ? 'Precio atípico'
-        : referenceEvPct >= 10
-          ? 'Valor fuerte'
-          : referenceEvPct >= 5
-            ? 'Valor'
-            : referenceEvPct > 0
-              ? 'Valor leve'
-              : 'Sin valor'
+    secondBestOdds: priceData?.secondBestOdds ?? null,
+    supportCount: Number(priceData?.supportCount || 0),
+    bookmakerCount: Number(priceData?.bookmakerCount || 0),
+    bestBookmaker: priceData?.bestBookmaker || null,
+    isOutlier: Boolean(priceData?.isOutlier)
   };
-}
-
-function buildMarkets(model, oddsData, fixture) {
+}function buildMarkets(model, odds) {
   const markets = [];
 
-  const h2hPrices = {
-    home: [],
-    draw: [],
-    away: []
+  const priceGroups = {
+    home: odds?.home || [],
+    draw: odds?.draw || [],
+    away: odds?.away || [],
+    over25: odds?.over25 || [],
+    under25: odds?.under25 || []
   };
 
-  const totalPrices = {
-    over: [],
-    under: []
-  };
-
-  const bookmakers = Array.isArray(oddsData?.bookmakers)
-    ? oddsData.bookmakers
-    : [];
-
-  for (const bookmaker of bookmakers) {
-    const bookmakerName =
-      bookmaker?.title ||
-      bookmaker?.key ||
-      'Unknown';
-
-    const marketsList = Array.isArray(bookmaker?.markets)
-      ? bookmaker.markets
-      : [];
-
-    for (const market of marketsList) {
-      if (market?.key === 'h2h') {
-        for (const outcome of market.outcomes || []) {
-          const name = outcome?.name;
-          const price = Number(outcome?.price);
-
-          if (namesMatch(name, fixture.homeName)) {
-            collectPrice(
-              h2hPrices.home,
-              bookmakerName,
-              price
-            );
-          } else if (namesMatch(name, fixture.awayName)) {
-            collectPrice(
-              h2hPrices.away,
-              bookmakerName,
-              price
-            );
-          } else if (
-            normalizeName(name) === 'draw' ||
-            normalizeName(name) === 'tie' ||
-            normalizeName(name) === 'empate'
-          ) {
-            collectPrice(
-              h2hPrices.draw,
-              bookmakerName,
-              price
-            );
-          }
-        }
-      }
-
-      if (market?.key === 'totals') {
-        for (const outcome of market.outcomes || []) {
-          const point = Number(outcome?.point);
-          const name = normalizeName(outcome?.name);
-          const price = Number(outcome?.price);
-
-          if (point !== 2.5) continue;
-
-          if (name === 'over') {
-            collectPrice(
-              totalPrices.over,
-              bookmakerName,
-              price
-            );
-          }
-
-          if (name === 'under') {
-            collectPrice(
-              totalPrices.under,
-              bookmakerName,
-              price
-            );
-          }
-        }
-      }
-    }
-  }
-
   markets.push(
-    buildMarket({
-      type: 'h2h',
-      outcome: 'home',
-      probability: model.homeWin,
-      prices: h2hPrices.home
-    })
+    buildMarket(
+      'home',
+      model.homeWin,
+      analyzePriceSet(priceGroups.home)
+    )
   );
 
   markets.push(
-    buildMarket({
-      type: 'h2h',
-      outcome: 'draw',
-      probability: model.draw,
-      prices: h2hPrices.draw
-    })
+    buildMarket(
+      'draw',
+      model.draw,
+      analyzePriceSet(priceGroups.draw)
+    )
   );
 
   markets.push(
-    buildMarket({
-      type: 'h2h',
-      outcome: 'away',
-      probability: model.awayWin,
-      prices: h2hPrices.away
-    })
+    buildMarket(
+      'away',
+      model.awayWin,
+      analyzePriceSet(priceGroups.away)
+    )
   );
 
   markets.push(
-    buildMarket({
-      type: 'totals',
-      outcome: 'over',
-      probability: model.over25,
-      prices: totalPrices.over
-    })
+    buildMarket(
+      'over25',
+      model.over25,
+      analyzePriceSet(priceGroups.over25)
+    )
   );
 
   markets.push(
-    buildMarket({
-      type: 'totals',
-      outcome: 'under',
-      probability: model.under25,
-      prices: totalPrices.under
-    })
+    buildMarket(
+      'under25',
+      model.under25,
+      analyzePriceSet(priceGroups.under25)
+    )
   );
 
   return markets;
 }
 
-/*
- * Value Pick V7.6.1
- *
- * IMPORTANTE:
- * No usamos solamente bestEvPct.
- *
- * El EV de una cuota aislada puede ser enorme y falso.
- * El filtro principal utiliza referenceEvPct, basado en
- * el consenso del mercado.
- */
-function bestValue(markets, modelConfidence) {
-  const candidates = markets
+function bestValue(markets, confidenceScore) {
+  const eligible = (markets || [])
     .filter(market =>
-      market.valueEligible &&
+      !market.isOutlier &&
       market.bookmakerCount >= 2 &&
       market.supportCount >= 2 &&
-      !market.isOutlier &&
       market.probability >= 55 &&
+      Number(confidenceScore) >= 60 &&
       Number(market.referenceEvPct) >= 2 &&
-      Number(market.bestEvPct) >= 2 &&
-      Number(modelConfidence) >= 60
+      Number(market.bestEvPct) >= 2
     )
     .sort((a, b) => {
-      if (b.referenceEvPct !== a.referenceEvPct) {
-        return b.referenceEvPct - a.referenceEvPct;
+      const evDiff =
+        Number(b.referenceEvPct || 0) -
+        Number(a.referenceEvPct || 0);
+
+      if (evDiff !== 0) return evDiff;
+
+      const probabilityDiff =
+        Number(b.probability || 0) -
+        Number(a.probability || 0);
+
+      if (probabilityDiff !== 0) {
+        return probabilityDiff;
       }
 
-      if (b.probability !== a.probability) {
-        return b.probability - a.probability;
-      }
-
-      return b.supportCount - a.supportCount;
+      return Number(b.supportCount || 0) -
+        Number(a.supportCount || 0);
     });
 
-  return candidates[0] || null;
+  return eligible[0] || null;
 }
 
 function buildValueAlert(markets) {
-  const outliers = markets
-    .filter(market =>
-      market.isOutlier &&
-      market.odds
-    )
-    .sort((a, b) =>
-      Number(b.bestEvPct || 0) -
-      Number(a.bestEvPct || 0)
+  const suspicious = (markets || [])
+    .filter(market => market.isOutlier)
+    .sort(
+      (a, b) =>
+        Number(b.bestEvPct || 0) -
+        Number(a.bestEvPct || 0)
     );
 
-  if (outliers.length) {
-    const market = outliers[0];
-
-    return {
-      type: 'outlier',
-      market: market.name,
-      odds: market.bestOdds,
-      bestEvPct: market.bestEvPct,
-      referenceOdds: market.referenceOdds,
-      referenceEvPct: market.referenceEvPct,
-      bookmaker: market.bookmaker,
-      message:
-        `La cuota ${market.bestOdds.toFixed(2)} está muy ` +
-        `alejada del consenso del mercado. Se excluye del ` +
-        `Value Pick para evitar una falsa oportunidad.`
-    };
+  if (!suspicious.length) {
+    return null;
   }
 
-  const positive = markets
-    .filter(market =>
-      Number(market.referenceEvPct) > 0 &&
-      market.odds
-    )
-    .sort((a, b) =>
-      Number(b.referenceEvPct) -
-      Number(a.referenceEvPct)
-    );
+  const market = suspicious[0];
 
-  if (positive.length) {
-    const market = positive[0];
-
-    return {
-      type: 'normal',
-      market: market.name,
-      odds: market.bestOdds,
-      bestEvPct: market.bestEvPct,
-      referenceOdds: market.referenceOdds,
-      referenceEvPct: market.referenceEvPct,
-      bookmaker: market.bookmaker,
-      message:
-        `El modelo detecta una ventaja moderada, ` +
-        `pero debe superar todos los filtros antes de recomendar apuesta.`
-    };
-  }
-
-  return null;
+  return {
+    type: 'outlier',
+    market: market.name,
+    odds: market.bestOdds,
+    referenceOdds: market.referenceOdds,
+    bestEvPct: market.bestEvPct,
+    referenceEvPct: market.referenceEvPct,
+    supportCount: market.supportCount,
+    bookmakerCount: market.bookmakerCount,
+    message:
+      `Precio atípico detectado en ${market.name}. ` +
+      `La cuota ${market.bestOdds} está muy alejada ` +
+      `del consenso (${market.referenceOdds}). ` +
+      `No se utiliza para seleccionar Value Pick.`
+  };
 }
 
 function mostLikelyScore(homeXg, awayXg) {
@@ -792,28 +727,11 @@ function mostLikelyScore(homeXg, awayXg) {
     probability: 0
   };
 
-  const homeLambda = Math.max(0.01, Number(homeXg));
-  const awayLambda = Math.max(0.01, Number(awayXg));
-
-  function poisson(k, lambda) {
-    let factorial = 1;
-
-    for (let i = 2; i <= k; i++) {
-      factorial *= i;
-    }
-
-    return (
-      Math.exp(-lambda) *
-      Math.pow(lambda, k) /
-      factorial
-    );
-  }
-
   for (let home = 0; home <= 7; home++) {
     for (let away = 0; away <= 7; away++) {
       const probability =
-        poisson(home, homeLambda) *
-        poisson(away, awayLambda);
+        poissonProbability(home, homeXg) *
+        poissonProbability(away, awayXg);
 
       if (probability > best.probability) {
         best = {
@@ -825,61 +743,109 @@ function mostLikelyScore(homeXg, awayXg) {
     }
   }
 
-  return {
-    score: `${best.home}-${best.away}`,
-    probability: Number((best.probability * 100).toFixed(1))
-  };
+  return best;
+}
+
+function poissonProbability(k, lambda) {
+  if (!Number.isFinite(lambda) || lambda < 0) {
+    return 0;
+  }
+
+  let factorial = 1;
+
+  for (let i = 2; i <= k; i++) {
+    factorial *= i;
+  }
+
+  return (
+    Math.exp(-lambda) *
+    Math.pow(lambda, k) /
+    factorial
+  );
 }
 
 function createModelInput(homeStats, awayStats) {
   const homeAttack =
-    homeStats.avgGoalsFor *
-    Math.max(0.75, Math.min(1.35, homeStats.attackStrength));
+    Number(homeStats?.avgGoalsFor || 0);
 
   const awayAttack =
-    awayStats.avgGoalsFor *
-    Math.max(0.75, Math.min(1.35, awayStats.attackStrength));
+    Number(awayStats?.avgGoalsFor || 0);
 
   const homeDefense =
-    homeStats.avgGoalsAgainst;
+    Number(homeStats?.avgGoalsAgainst || 0);
 
   const awayDefense =
-    awayStats.avgGoalsAgainst;
+    Number(awayStats?.avgGoalsAgainst || 0);
 
   let homeXg =
-    (
-      homeAttack +
-      awayDefense
-    ) / 2;
+    ((homeAttack + awayDefense) / 2) * 1.08;
 
   let awayXg =
-    (
-      awayAttack +
-      homeDefense
-    ) / 2;
+    (awayAttack + homeDefense) / 2;
 
-  /*
-   * Ventaja local moderada.
-   */
-  homeXg *= 1.08;
+  homeXg = Math.max(0.15, homeXg);
+  awayXg = Math.max(0.15, awayXg);
 
-  /*
-   * Evitamos valores extremos derivados de muestras pequeñas.
-   */
-  homeXg = Math.max(0.25, Math.min(3.8, homeXg));
-  awayXg = Math.max(0.20, Math.min(3.5, awayXg));
+  const totalXg = homeXg + awayXg;
+
+  const probabilities = {
+    homeWin: 0,
+    draw: 0,
+    awayWin: 0,
+    over25: 0,
+    under25: 0,
+    btts: 0
+  };
+
+  for (let home = 0; home <= 8; home++) {
+    for (let away = 0; away <= 8; away++) {
+      const probability =
+        poissonProbability(home, homeXg) *
+        poissonProbability(away, awayXg);
+
+      if (home > away) {
+        probabilities.homeWin += probability;
+      } else if (home === away) {
+        probabilities.draw += probability;
+      } else {
+        probabilities.awayWin += probability;
+      }
+
+      if (home + away >= 3) {
+        probabilities.over25 += probability;
+      } else {
+        probabilities.under25 += probability;
+      }
+
+      if (home >= 1 && away >= 1) {
+        probabilities.btts += probability;
+      }
+    }
+  }
+
+  const score = mostLikelyScore(
+    homeXg,
+    awayXg
+  );
 
   return {
     homeXg,
-    awayXg
+    awayXg,
+    totalXg,
+    ...probabilities,
+    mostLikelyScore: score
   };
 }
 
-async function getOdds(homeName, awayName, competitionCode, kickoff) {
+async function getOdds(
+  homeName,
+  awayName,
+  competitionCode
+) {
   if (!ODDS_API_KEY) {
     return {
       available: false,
-      reason: 'ODDS_API_KEY no configurada'
+      markets: {}
     };
   }
 
@@ -889,1481 +855,126 @@ async function getOdds(homeName, awayName, competitionCode, kickoff) {
   if (!sport) {
     return {
       available: false,
-      reason: 'Competición no soportada por The Odds API'
+      markets: {}
     };
   }
-
-  const cacheKey =
-    `odds:${sport}:${normalizeName(homeName)}:${normalizeName(awayName)}`;
-
-  const cached = cacheGet(cacheKey);
-
-  if (cached) return cached;
 
   const url =
-    `${ODDS_BASE}/sports/${sport}/odds` +
-    `?regions=us,uk` +
+    `${ODDS_API_BASE}/${sport}/odds` +
+    `?apiKey=${encodeURIComponent(ODDS_API_KEY)}` +
+    `&regions=eu,uk` +
     `&markets=h2h,totals` +
-    `&oddsFormat=decimal` +
-    `&apiKey=${encodeURIComponent(ODDS_API_KEY)}`;
+    `&oddsFormat=decimal`;
 
-  let data;
+  const data = await fetchJson(url);
 
-  try {
-    data = await fetchJson(url);
-  } catch (error) {
-    return {
-      available: false,
-      reason: error.message,
-      errorStatus: error.status || null
-    };
-  }
+  const events = Array.isArray(data) ? data : [];
 
-  const events = Array.isArray(data)
-    ? data
-    : [];
+  const event = events.find(item => {
+    const home = item?.home_team || '';
+    const away = item?.away_team || '';
 
-  /*
-   * Primero buscamos coincidencia directa.
-   * Si viene invertida, se corrige la orientación.
-   */
-  let event = events.find(item =>
-    namesMatch(item?.home_team, homeName) &&
-    namesMatch(item?.away_team, awayName)
-  );
-
-  let reversed = false;
-
-  if (!event) {
-    event = events.find(item =>
-      namesMatch(item?.home_team, awayName) &&
-      namesMatch(item?.away_team, homeName)
+    return (
+      namesMatch(home, homeName) &&
+      namesMatch(away, awayName)
     );
-
-    reversed = Boolean(event);
-  }
-
-  if (!event) {
-    return {
-      available: false,
-      reason: 'Partido no encontrado en The Odds API'
-    };
-  }
-
-  const bookmakers = Array.isArray(event?.bookmakers)
-    ? event.bookmakers
-    : [];
-
-  const normalizedBookmakers = bookmakers.map(bookmaker => {
-    if (!reversed) {
-      return bookmaker;
-    }
-
-    /*
-     * Si el evento viene invertido, intercambiamos los nombres
-     * de las selecciones para que buildMarkets vea correctamente
-     * Local y Visitante.
-     */
-    const clone = {
-      ...bookmaker,
-      markets: (bookmaker.markets || []).map(market => {
-        if (market.key !== 'h2h') {
-          return market;
-        }
-
-        return {
-          ...market,
-          outcomes: (market.outcomes || []).map(outcome => {
-            if (namesMatch(outcome.name, event.home_team)) {
-              return {
-                ...outcome,
-                name: homeName
-              };
-            }
-
-            if (namesMatch(outcome.name, event.away_team)) {
-              return {
-                ...outcome,
-                name: awayName
-              };
-            }
-
-            return outcome;
-          })
-        };
-      })
-    };
-
-    return clone;
   });
 
-  const result = {
-    available: true,
-    eventId: event.id || null,
-    commenceTime: event.commence_time || kickoff || null,
-    homeTeam: homeName,
-    awayTeam: awayName,
-    reversed,
-    bookmakers: normalizedBookmakers
+  if (!event) {
+    return {
+      available: false,
+      markets: {}
+    };
+  }
+
+  const markets = {
+    home: [],
+    draw: [],
+    away: [],
+    over25: [],
+    under25: []
   };
 
-  cacheSet(cacheKey, result);
-
-  return result;
-}
-
-function formatPct(value) {
-  if (!Number.isFinite(Number(value))) {
-    return '-';
-  }
-
-  return `${Number(value).toFixed(1)}%`;
-}
-
-function marketHtml(market) {
-  const outlier = market.isOutlier;
-
-  return `
-    <div class="market">
-      <div class="market-top">
-        <strong>${market.name}</strong>
-        <span>${formatPct(market.probability)}</span>
-      </div>
-
-      <div class="market-details">
-        <span>
-          Mejor cuota:
-          <b>${market.bestOdds ? market.bestOdds.toFixed(2) : '-'}</b>
-        </span>
-
-        <span>
-          Mercado:
-          <b>${market.referenceOdds ? market.referenceOdds.toFixed(2) : '-'}</b>
-        </span>
-
-        <span>
-          EV mercado:
-          <b>${market.referenceEvPct !== null
-            ? `${market.referenceEvPct >= 0 ? '+' : ''}${market.referenceEvPct.toFixed(1)}%`
-            : '-'}</b>
-        </span>
-
-        <span>
-          Casas:
-          <b>${market.bookmakerCount}</b>
-        </span>
-      </div>
-
-      ${
-        outlier
-          ? `
-            <div class="warning">
-              ⚠️ Precio atípico · excluido de Value Pick
-            </div>
-          `
-          : ''
-      }
-    </div>
-  `;
-}
-
-function renderPage() {
-  return `<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport"
-      content="width=device-width, initial-scale=1.0,
-      maximum-scale=1.0,user-scalable=no">
-
-<title>Pronóstico Deportivo V7.6.1</title>
-
-<style>
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-  background: #080b10;
-  color: #f5f7fa;
-}
-
-button,
-input,
-select {
-  font: inherit;
-}
-
-.app {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 18px 14px 90px;
-}
-
-.header {
-  padding: 12px 4px 20px;
-}
-
-.version {
-  display: inline-block;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: #171c25;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: .5px;
-}
-
-h1 {
-  margin: 18px 0 8px;
-  font-size: 32px;
-  line-height: 1.05;
-}
-
-.subtitle {
-  color: #9da5b2;
-  font-size: 15px;
-}
-
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin: 16px 0;
-}
-
-.chip {
-  background: #151a22;
-  border: 1px solid #252c37;
-  border-radius: 999px;
-  padding: 8px 10px;
-  font-size: 12px;
-}
-
-.card {
-  background: #10151d;
-  border: 1px solid #242b36;
-  border-radius: 18px;
-  padding: 16px;
-  margin-top: 14px;
-}
-
-.card-title {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: #929ba9;
-  margin-bottom: 12px;
-}
-
-input,
-select {
-  width: 100%;
-  background: #090d13;
-  border: 1px solid #303846;
-  color: white;
-  border-radius: 12px;
-  padding: 13px;
-  margin-bottom: 10px;
-  outline: none;
-}
-
-.primary {
-  width: 100%;
-  border: 0;
-  border-radius: 13px;
-  padding: 14px;
-  background: #f4f5f7;
-  color: #080b10;
-  font-weight: 900;
-  cursor: pointer;
-}
-
-.primary:disabled {
-  opacity: .55;
-}
-
-.result {
-  display: none;
-}
-
-.decision {
-  text-align: center;
-  padding: 22px 10px;
-}
-
-.decision h2 {
-  margin: 8px 0;
-  font-size: 30px;
-}
-
-.noBet {
-  color: #ffb45d;
-}
-
-.bet {
-  color: #7ee787;
-}
-
-.score {
-  font-size: 38px;
-  font-weight: 900;
-  margin: 10px 0;
-}
-
-.scoreProb {
-  color: #9da5b2;
-}
-
-.prob-grid {
-  display: grid;
-  grid-template-columns: repeat(3,1fr);
-  gap: 8px;
-}
-
-.prob {
-  background: #090d13;
-  border-radius: 12px;
-  padding: 12px 8px;
-  text-align: center;
-}
-
-.prob span {
-  display: block;
-  color: #8e97a5;
-  font-size: 11px;
-  margin-bottom: 5px;
-}
-
-.prob b {
-  font-size: 20px;
-}
-
-.xg-grid {
-  display: grid;
-  grid-template-columns: repeat(3,1fr);
-  gap: 8px;
-}
-
-.xg {
-  background: #090d13;
-  border-radius: 12px;
-  padding: 12px 8px;
-  text-align: center;
-}
-
-.xg span {
-  display: block;
-  color: #8e97a5;
-  font-size: 11px;
-}
-
-.xg b {
-  display: block;
-  margin-top: 5px;
-  font-size: 21px;
-}
-
-.market {
-  background: #090d13;
-  border-radius: 13px;
-  padding: 12px;
-  margin-bottom: 8px;
-}
-
-.market-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.market-top span {
-  font-weight: 800;
-}
-
-.market-details {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin-top: 10px;
-  color: #8e97a5;
-  font-size: 12px;
-}
-
-.market-details b {
-  color: white;
-}
-
-.warning {
-  margin-top: 9px;
-  padding: 8px;
-  border-radius: 9px;
-  background: #291b0d;
-  color: #ffc078;
-  font-size: 12px;
-}
-
-.value-box {
-  border: 1px solid #33414d;
-  border-radius: 13px;
-  padding: 13px;
-}
-
-.value-box h3 {
-  margin: 0 0 8px;
-}
-
-.muted {
-  color: #9099a7;
-}
-
-.loading {
-  text-align: center;
-  color: #9da5b2;
-  padding: 18px;
-}
-
-.error {
-  color: #ff7b72;
-}
-
-.nav {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  max-width: 760px;
-  margin: auto;
-  background: rgba(10,13,18,.96);
-  border-top: 1px solid #252c37;
-  display: flex;
-  justify-content: space-around;
-  padding: 11px 5px;
-  font-size: 11px;
-  color: #929ba9;
-}
-
-.nav strong {
-  color: white;
-}
-</style>
-</head>
-
-<body>
-
-<div class="app">
-
-  <header class="header">
-    <span class="version">● V7.6.1 ANALYST</span>
-
-    <h1>Analiza antes de apostar.</h1>
-
-    <div class="subtitle">
-      Modelo estadístico + xG + forma + cuotas reales +
-      filtro de valor.
-    </div>
-
-    <div class="chips">
-      <span class="chip">📊 1X2</span>
-      <span class="chip">⚽ xG</span>
-      <span class="chip">🥅 BTTS</span>
-      <span class="chip">💰 VALUE</span>
-      <span class="chip">🎯 CONFIDENCE</span>
-      <span class="chip">🛡️ NO BET FILTER</span>
-    </div>
-  </header>
-
-  <section class="card">
-    <div class="card-title">Partido</div>
-
-    <input
-      id="home"
-      placeholder="Equipo local"
-      autocomplete="off"
-    >
-
-    <input
-      id="away"
-      placeholder="Equipo visitante"
-      autocomplete="off"
-    >
-
-    <input
-      id="date"
-      type="date"
-    >
-
-    <button
-      class="primary"
-      id="analyzeBtn"
-      onclick="analyze()">
-      🧠 ANALIZAR CON V7.6.1
-    </button>
-  </section>
-
-  <div id="loading" class="loading" style="display:none">
-    Analizando partido...
-  </div>
-
-  <div id="error" class="card error" style="display:none"></div>
-
-  <main id="result" class="result">
-
-    <section class="card decision">
-      <div class="card-title">Decisión del modelo</div>
-      <h2 id="decision"></h2>
-      <div id="decisionText" class="muted"></div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">🎯 Marcador más probable</div>
-
-      <div id="teams" class="muted"></div>
-      <div id="score" class="score"></div>
-      <div id="scoreProb" class="scoreProb"></div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">📊 Probabilidades</div>
-
-      <div class="prob-grid">
-        <div class="prob">
-          <span>🏠 LOCAL</span>
-          <b id="homeProb">-</b>
-        </div>
-
-        <div class="prob">
-          <span>🤝 EMPATE</span>
-          <b id="drawProb">-</b>
-        </div>
-
-        <div class="prob">
-          <span>✈️ VISITANTE</span>
-          <b id="awayProb">-</b>
-        </div>
-      </div>
-
-      <br>
-
-      <div class="prob-grid">
-        <div class="prob">
-          <span>OVER 2.5</span>
-          <b id="overProb">-</b>
-        </div>
-
-        <div class="prob">
-          <span>UNDER 2.5</span>
-          <b id="underProb">-</b>
-        </div>
-
-        <div class="prob">
-          <span>BTTS</span>
-          <b id="bttsProb">-</b>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">⚽ Goles esperados · xG</div>
-
-      <div class="xg-grid">
-        <div class="xg">
-          <span>LOCAL</span>
-          <b id="homeXg">-</b>
-        </div>
-
-        <div class="xg">
-          <span>VISITANTE</span>
-          <b id="awayXg">-</b>
-        </div>
-
-        <div class="xg">
-          <span>TOTAL</span>
-          <b id="totalXg">-</b>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">🎯 Confianza del análisis</div>
-
-      <h2 id="confidenceLevel"></h2>
-
-      <div class="muted">
-        Puntuación técnica:
-        <b id="confidenceScore"></b> / 100
-      </div>
-
-      <p id="confidenceExplanation" class="muted"></p>
-    </section>
-
-    <section class="card">
-      <div class="card-title">💪 Fuerza reciente</div>
-      <div id="form"></div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">💰 Cuotas reales</div>
-      <div id="markets"></div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">🛡️ Value Pick</div>
-      <div id="value"></div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">⚠️ Revisión de valor</div>
-      <div id="alert"></div>
-    </section>
-
-  </main>
-</div>
-
-<nav class="nav">
-  <span>⌂<br>Inicio</span>
-  <span><strong>🧠<br>Analyst</strong></span>
-  <span>💰<br>Value</span>
-</nav>
-
-<script>
-function pctText(value) {
-  if (value === null || value === undefined) return '-';
-  return Number(value).toFixed(1) + '%';
-}
-
-function moneyPct(value) {
-  if (value === null || value === undefined) return '-';
-
-  const n = Number(value);
-
-  return (n >= 0 ? '+' : '') +
-    n.toFixed(1) + '%';
-}
-
-async function analyze() {
-  const home =
-    document.getElementById('home').value.trim();
-
-  const away =
-    document.getElementById('away').value.trim();
-
-  const date =
-    document.getElementById('date').value;
-
-  const loading =
-    document.getElementById('loading');
-
-  const error =
-    document.getElementById('error');
-
-  const result =
-    document.getElementById('result');
-
-  if (!home || !away) {
-    error.style.display = 'block';
-    error.textContent =
-      'Escribe el equipo local y el visitante.';
-    result.style.display = 'none';
-    return;
-  }
-
-  error.style.display = 'none';
-  result.style.display = 'none';
-  loading.style.display = 'block';
-
-  try {
-    const params =
-      new URLSearchParams({
-        home,
-        away,
-        ...(date ? { date } : {})
-      });
-
-    const response =
-      await fetch('/api/analyze?' + params.toString(), {
-        cache: 'no-store'
-      });
-
-    const data =
-      await response.json();
-
-    if (!response.ok || !data.ok) {
-      throw new Error(
-        data.message ||
-        data.error ||
-        'No se pudo analizar el partido.'
-      );
-    }
-
-    render(data);
-
-    result.style.display = 'block';
-
-  } catch (err) {
-    error.style.display = 'block';
-    error.textContent =
-      err.message || 'Error de análisis.';
-  } finally {
-    loading.style.display = 'none';
-  }
-}
-
-function render(data) {
-  const decision =
-    document.getElementById('decision');
-
-  decision.textContent =
-    data.recommendation || 'NO BET';
-
-  decision.className =
-    data.betEligible ? 'bet' : 'noBet';
-
-  document.getElementById('decisionText')
-    .textContent =
-      data.reason || '';
-
-  document.getElementById('teams')
-    .textContent =
-      data.match?.home +
-      ' vs ' +
-      data.match?.away;
-
-  document.getElementById('score')
-    .textContent =
-      data.mostLikelyScore?.score || '-';
-
-  document.getElementById('scoreProb')
-    .textContent =
-      'Probabilidad estimada: ' +
-      pctText(data.mostLikelyScore?.probability);
-
-  document.getElementById('homeProb')
-    .textContent =
-      pctText(data.probabilities?.homeWin);
-
-  document.getElementById('drawProb')
-    .textContent =
-      pctText(data.probabilities?.draw);
-
-  document.getElementById('awayProb')
-    .textContent =
-      pctText(data.probabilities?.awayWin);
-
-  document.getElementById('overProb')
-    .textContent =
-      pctText(data.probabilities?.over25);
-
-  document.getElementById('underProb')
-    .textContent =
-      pctText(data.probabilities?.under25);
-
-  document.getElementById('bttsProb')
-    .textContent =
-      pctText(data.probabilities?.btts);
-
-  document.getElementById('homeXg')
-    .textContent =
-      Number(data.xG?.home || 0).toFixed(2);
-
-  document.getElementById('awayXg')
-    .textContent =
-      Number(data.xG?.away || 0).toFixed(2);
-
-  document.getElementById('totalXg')
-    .textContent =
-      Number(data.xG?.total || 0).toFixed(2);
-
-  document.getElementById('confidenceLevel')
-    .textContent =
-      data.confidenceLevel || '-';
-
-  document.getElementById('confidenceScore')
-    .textContent =
-      data.confidence ?? '-';
-
-  document.getElementById('confidenceExplanation')
-    .textContent =
-      data.confidenceExplanation || '';
-
-  const form =
-    document.getElementById('form');
-
-  const local =
-    data.recentForm?.home;
-
-  const visitor =
-    data.recentForm?.away;
-
-  form.innerHTML = `
-    <div class="market">
-      <b>LOCAL · ATAQUE</b>
-      <div class="muted">
-        ${Number(local?.avgGoalsFor || 0).toFixed(2)}
-        · Form ${pctText(local?.formPct)}
-      </div>
-    </div>
-
-    <div class="market">
-      <b>VISITANTE · ATAQUE</b>
-      <div class="muted">
-        ${Number(visitor?.avgGoalsFor || 0).toFixed(2)}
-        · Form ${pctText(visitor?.formPct)}
-      </div>
-    </div>
-  `;
-
-  const markets =
-    document.getElementById('markets');
-
-  if (!data.oddsAvailable) {
-    markets.innerHTML =
-      '<div class="muted">Cuotas reales no disponibles.</div>';
-  } else {
-    markets.innerHTML =
-      (data.markets || [])
-        .map(marketHtml)
-        .join('');
-  }
-
-  const value =
-    document.getElementById('value');
-
-  if (data.bestValue) {
-    const v = data.bestValue;
-
-    value.innerHTML = `
-      <div class="value-box">
-        <h3>💰 ${v.name}</h3>
-
-        <div class="muted">
-          Probabilidad modelo:
-          <b>${pctText(v.probability)}</b>
-        </div>
-
-        <div class="muted">
-          Mejor cuota:
-          <b>${v.bestOdds?.toFixed(2) || '-'}</b>
-        </div>
-
-        <div class="muted">
-          Cuota mercado:
-          <b>${v.referenceOdds?.toFixed(2) || '-'}</b>
-        </div>
-
-        <div class="muted">
-          EV mercado:
-          <b>${moneyPct(v.referenceEvPct)}</b>
-        </div>
-
-        <div class="muted">
-          EV mejor cuota:
-          <b>${moneyPct(v.bestEvPct)}</b>
-        </div>
-
-        <div class="muted">
-          ${v.bookmaker || 'Casa no disponible'}
-          · ${v.bookmakerCount} casas
-        </div>
-      </div>
-    `;
-  } else {
-    value.innerHTML = `
-      <div class="value-box">
-        <h3>🚫 SIN VALUE PICK</h3>
-        <div class="muted">
-          No existe una oportunidad que cumpla
-          simultáneamente los filtros de probabilidad,
-          EV, confianza, respaldo de mercado y
-          control de outliers.
-        </div>
-      </div>
-    `;
-  }
-
-  const alert =
-    document.getElementById('alert');
-
-  if (data.valueAlert) {
-    const a = data.valueAlert;
-
-    alert.innerHTML = `
-      <div class="value-box">
-        <h3>
-          ${
-            a.type === 'outlier'
-              ? '🟠 PRECIO ATÍPICO'
-              : '📊 REVISIÓN'
+  for (const bookmaker of event.bookmakers || []) {
+    const bookmakerName =
+      bookmaker?.title ||
+      bookmaker?.key ||
+      'Bookmaker';
+
+    for (const market of bookmaker.markets || []) {
+      if (market.key === 'h2h') {
+        for (const outcome of market.outcomes || []) {
+          const name =
+            outcome?.name || '';
+
+          const price =
+            Number(outcome?.price);
+
+          if (!Number.isFinite(price) || price <= 1) {
+            continue;
           }
-        </h3>
 
-        <div>
-          <b>${a.market}</b>
-        </div>
-
-        <div class="muted">
-          Mejor cuota:
-          ${a.odds ? Number(a.odds).toFixed(2) : '-'}
-        </div>
-
-        <div class="muted">
-          Cuota de mercado:
-          ${
-            a.referenceOdds
-              ? Number(a.referenceOdds).toFixed(2)
-              : '-'
+          if (namesMatch(name, homeName)) {
+            markets.home.push({
+              bookmaker: bookmakerName,
+              odds: price
+            });
+          } else if (namesMatch(name, awayName)) {
+            markets.away.push({
+              bookmaker: bookmakerName,
+              odds: price
+            });
+          } else if (
+            name.toLowerCase() === 'draw'
+          ) {
+            markets.draw.push({
+              bookmaker: bookmakerName,
+              odds: price
+            });
           }
-        </div>
-
-        <p class="muted">
-          ${a.message}
-        </p>
-      </div>
-    `;
-  } else {
-    alert.innerHTML =
-      '<div class="muted">No se detectaron anomalías relevantes.</div>';
-  }
-}
-</script>
-
-</body>
-</html>`;
-}
-
-/*
- * API STATUS
- */
-app.get('/api/status', (req, res) => {
-  res.json({
-    ok: true,
-    footballDataConfigured: Boolean(FOOTBALL_DATA_TOKEN),
-    oddsApiConfigured: Boolean(ODDS_API_KEY),
-    provider:
-      'football-data.org + The Odds API',
-    cacheMinutes: CACHE_MINUTES,
-    modelVersion: MODEL_VERSION
-  });
-});
-
-/*
- * API ANALYZE
- */
-app.get('/api/analyze', async (req, res) => {
-  try {
-    const homeName =
-      String(req.query.home || '').trim();
-
-    const awayName =
-      String(req.query.away || '').trim();
-
-    const requestedDate =
-      String(req.query.date || '').trim();
-
-    if (!homeName || !awayName) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          'Debes proporcionar home y away.'
-      });
-    }
-
-    let date = requestedDate;
-
-    if (!date) {
-      date = new Date()
-        .toISOString()
-        .slice(0, 10);
-    }
-
-    const fixtures =
-      await getFixture(date);
-
-    let selected =
-      selectFixture(
-        fixtures,
-        homeName,
-        awayName
-      );
-
-    /*
-     * Si no aparece en la fecha solicitada,
-     * buscamos el siguiente día como tolerancia.
-     */
-    if (!selected) {
-      const nextDate =
-        new Date(`${date}T12:00:00`);
-
-      nextDate.setDate(
-        nextDate.getDate() + 1
-      );
-
-      const next =
-        nextDate
-          .toISOString()
-          .slice(0, 10);
-
-      const nextFixtures =
-        await getFixture(next);
-
-      selected =
-        selectFixture(
-          nextFixtures,
-          homeName,
-          awayName
-        );
-
-      if (selected) {
-        date = next;
-      }
-    }
-
-    if (!selected) {
-      return res.status(404).json({
-        ok: false,
-        error:
-          'No se encontró el partido solicitado en las competiciones configuradas.'
-      });
-    }
-
-    const fixture =
-      selected.fixture;
-
-    /*
-     * Normalizamos nombres siempre a la perspectiva
-     * que solicita el usuario.
-     */
-    const homeId =
-      selected.reversed
-        ? fixture.awayTeam.id
-        : fixture.homeTeam.id;
-
-    const awayId =
-      selected.reversed
-        ? fixture.homeTeam.id
-        : fixture.awayTeam.id;
-
-    const actualHomeName = homeName;
-    const actualAwayName = awayName;
-
-    const [
-      homeMatches,
-      awayMatches
-    ] = await Promise.all([
-      getTeamRecentMatches(homeId),
-      getTeamRecentMatches(awayId)
-    ]);
-
-    let homeStats =
-      calculateRecentTeamStats(
-        homeId,
-        homeMatches
-      );
-
-    let awayStats =
-      calculateRecentTeamStats(
-        awayId,
-        awayMatches
-      );
-
-    /*
-     * Estabilización para evitar que una muestra pequeña
-     * produzca xG exagerado.
-     */
-    try {
-      homeStats =
-        stabilizeStats(homeStats) ||
-        homeStats;
-
-      awayStats =
-        stabilizeStats(awayStats) ||
-        awayStats;
-    } catch {
-      // Continuamos con las estadísticas originales.
-    }
-
-    try {
-      homeStats =
-        shrinkToMean(homeStats) ||
-        homeStats;
-
-      awayStats =
-        shrinkToMean(awayStats) ||
-        awayStats;
-    } catch {
-      // Continuamos.
-    }
-
-    const modelInput =
-      createModelInput(
-        homeStats,
-        awayStats
-      );
-
-    const model =
-      matchModel(
-        modelInput.homeXg,
-        modelInput.awayXg
-      );
-
-    /*
-     * Confidence V7.6.1
-     */
-    let modelConfidence = 50;
-
-    try {
-      modelConfidence =
-        confidence({
-          homeXg: modelInput.homeXg,
-          awayXg: modelInput.awayXg,
-          homeStats,
-          awayStats,
-          model
-        });
-    } catch {
-      /*
-       * Fallback robusto.
-       */
-      const sample =
-        Math.min(
-          1,
-          (
-            homeStats.matches +
-            awayStats.matches
-          ) / 20
-        );
-
-      const dominance =
-        Math.abs(
-          model.homeWin -
-          model.awayWin
-        );
-
-      modelConfidence =
-        Math.round(
-          45 +
-          sample * 15 +
-          dominance * 30
-        );
-    }
-
-    modelConfidence =
-      Math.max(
-        0,
-        Math.min(
-          100,
-          Number(modelConfidence) || 50
-        )
-      );
-
-    /*
-     * Buscamos cuotas reales.
-     */
-    const odds =
-      await getOdds(
-        actualHomeName,
-        actualAwayName,
-        fixture.competitionCode,
-        fixture.utcDate
-      );
-
-    const markets =
-      odds.available
-        ? buildMarkets(
-            model,
-            odds,
-            {
-              homeName: actualHomeName,
-              awayName: actualAwayName
-            }
-          )
-        : [];
-
-    /*
-     * EV de mercado, NO EV de una cuota sospechosa.
-     */
-    const topReferenceEv =
-      markets
-        .map(m => Number(m.referenceEvPct))
-        .filter(Number.isFinite)
-        .reduce(
-          (max, value) =>
-            Math.max(max, value),
-          -Infinity
-        );
-
-    /*
-     * Si confidence() dio un resultado extremo,
-     * lo estabilizamos.
-     */
-    const confidenceAdjusted =
-      Math.max(
-        0,
-        Math.min(
-          100,
-          Math.round(
-            Number(modelConfidence)
-          )
-        )
-      );
-
-    /*
-     * Un Value Pick requiere:
-     *
-     * - probabilidad >= 55%
-     * - confidence >= 60
-     * - EV positivo en referencia
-     * - cuota real
-     * - suficiente respaldo
-     * - no outlier
-     */
-    const value =
-      bestValue(
-        markets,
-        confidenceAdjusted
-      );
-
-    const betEligible =
-      Boolean(value) &&
-      confidenceAdjusted >= 60 &&
-      Number(value.referenceEvPct) >= 2 &&
-      Number(value.probability) >= 55;
-
-    const recommendation =
-      betEligible
-        ? value.name
-        : 'NO BET';
-
-    let reason;
-
-    if (betEligible) {
-      reason =
-        `El modelo detecta valor respaldado por el mercado ` +
-        `con ${value.probability.toFixed(1)}% de probabilidad ` +
-        `y EV de mercado de ${value.referenceEvPct.toFixed(1)}%.`;
-    } else {
-      reason =
-        'No existe una oportunidad de valor positiva que ' +
-        'cumpla los filtros de probabilidad, EV, confianza ' +
-        'y respaldo del mercado.';
-    }
-
-    let confidenceLevel = 'Baja';
-
-    if (confidenceAdjusted >= 75) {
-      confidenceLevel = 'Alta';
-    } else if (confidenceAdjusted >= 60) {
-      confidenceLevel = 'Media';
-    }
-
-    const confidenceExplanation =
-      confidenceAdjusted >= 75
-        ? 'El análisis presenta una señal estadística fuerte y suficiente respaldo.'
-        : confidenceAdjusted >= 60
-          ? 'El análisis presenta respaldo moderado, pero debe mantenerse disciplina en la selección.'
-          : 'La señal no es suficientemente sólida para justificar una apuesta.';
-
-    const score =
-      mostLikelyScore(
-        modelInput.homeXg,
-        modelInput.awayXg
-      );
-
-    const valueAlert =
-      buildValueAlert(markets);
-
-    return res.json({
-      ok: true,
-
-      modelVersion: MODEL_VERSION,
-
-      match: {
-        id: fixture.id || null,
-        home: actualHomeName,
-        away: actualAwayName,
-        date,
-        kickoff: fixture.utcDate || null,
-        competition:
-          fixture.competition?.name ||
-          fixture.competitionCode ||
-          null
-      },
-
-      recommendation,
-      reason,
-      betEligible,
-      strength:
-        value?.valueLevel ||
-        'Sin valor',
-
-      recentForm: {
-        home: homeStats,
-        away: awayStats
-      },
-
-      averages: {
-        home: {
-          goalsFor:
-            Number(homeStats.avgGoalsFor.toFixed(2)),
-          goalsAgainst:
-            Number(homeStats.avgGoalsAgainst.toFixed(2))
-        },
-
-        away: {
-          goalsFor:
-            Number(awayStats.avgGoalsFor.toFixed(2)),
-          goalsAgainst:
-            Number(awayStats.avgGoalsAgainst.toFixed(2))
-        }
-      },
-
-      xG: {
-        home:
-          Number(modelInput.homeXg.toFixed(2)),
-        away:
-          Number(modelInput.awayXg.toFixed(2)),
-        total:
-          Number(
-            (
-              modelInput.homeXg +
-              modelInput.awayXg
-            ).toFixed(2)
-          )
-      },
-
-      mostLikelyScore: score,
-
-      probabilities: {
-        homeWin:
-          Number(model.homeWin.toFixed(4)) * 100,
-
-        draw:
-          Number(model.draw.toFixed(4)) * 100,
-
-        awayWin:
-          Number(model.awayWin.toFixed(4)) * 100,
-
-        over25:
-          Number(model.over25.toFixed(4)) * 100,
-
-        under25:
-          Number(model.under25.toFixed(4)) * 100,
-
-        btts:
-          Number(model.btts.toFixed(4)) * 100
-      },
-
-      markets,
-
-      oddsAvailable:
-        Boolean(odds.available),
-
-      oddsReason:
-        odds.available
-          ? null
-          : odds.reason || null,
-
-      bestValue:
-        value || null,
-
-      valueAlert,
-
-      confidence:
-        confidenceAdjusted,
-
-      confidenceLevel,
-
-      confidenceExplanation,
-
-      diagnostics: {
-        topReferenceEv:
-          Number.isFinite(topReferenceEv)
-            ? Number(topReferenceEv.toFixed(2))
-            : null,
-
-        outlierMarkets:
-          markets
-            .filter(m => m.isOutlier)
-            .map(m => ({
-              name: m.name,
-              bestOdds: m.bestOdds,
-              referenceOdds: m.referenceOdds,
-              bestEvPct: m.bestEvPct,
-              referenceEvPct: m.referenceEvPct
-            })),
-
-        valueFilter: {
-          minimumProbability: 55,
-          minimumConfidence: 60,
-          minimumReferenceEv: 2,
-          minimumBookmakers: 2,
-          minimumSupport: 2,
-          outliersAllowed: false
         }
       }
-    });
 
-  } catch (error) {
-    console.error(
-      'ANALYZE ERROR:',
-      error
-    );
+      if (market.key === 'totals') {
+        for (const outcome of market.outcomes || []) {
+          const point =
+            Number(outcome?.point);
 
-    return res.status(500).json({
-      ok: false,
-      error:
-        error.message ||
-        'Error interno del servidor.',
-      modelVersion: MODEL_VERSION
-    });
+          const price =
+            Number(outcome?.price);
+
+          if (
+            point !== 2.5 ||
+            !Number.isFinite(price) ||
+            price <= 1
+          ) {
+            continue;
+          }
+
+          const name =
+            String(outcome?.name || '')
+              .toLowerCase();
+
+          if (name === 'over') {
+            markets.over25.push({
+              bookmaker: bookmakerName,
+              odds: price
+            });
+          }
+
+          if (name === 'under') {
+            markets.under25.push({
+              bookmaker: bookmakerName,
+              odds: price
+            });
+          }
+        }
+      }
+    }
   }
-});
 
-/*
- * HOME
- */
-app.get('/', (req, res) => {
-  res.set(
-    'Cache-Control',
-    'no-store, no-cache, must-revalidate, proxy-revalidate'
-  );
-
-  res.set(
-    'Pragma',
-    'no-cache'
-  );
-
-  res.set(
-    'Expires',
-    '0'
-  );
-
-  res.type('html').send(
-    renderPage()
-  );
-});
-
-/*
- * HEALTH
- */
-app.get('/health', (req, res) => {
-  res.json({
-    ok: true,
-    modelVersion: MODEL_VERSION,
-    uptime: process.uptime()
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(
-    `V7.6.1 ANALYST running on port ${PORT}`
-  );
-});
+  return {
+    available: true,
+    markets
+  };
+        }
