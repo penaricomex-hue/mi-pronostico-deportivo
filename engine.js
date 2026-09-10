@@ -1,5 +1,40 @@
+/*
+  ============================================================
+  MI PRONÓSTICO DEPORTIVO
+  ENGINE V7.6.1 ANALYST
+  ============================================================
+
+  Motor estadístico:
+  - Poisson
+  - Dixon-Coles
+  - Matriz de marcadores 0-12
+  - 1X2
+  - Over / Under 2.5
+  - BTTS
+  - xG
+  - Marcador más probable
+  - Sample weighting
+  - Shrinkage hacia media
+  - Confidence score
+  - EV
+  - Implied probability
+
+  IMPORTANTE:
+  BTTS se calcula estadísticamente.
+  NO se solicita como mercado a The Odds API.
+*/
+
+
+/* ============================================================
+   BASIC HELPERS
+   ============================================================ */
+
 function factorial(n) {
-  if (n <= 1) return 1;
+  n = Math.floor(Number(n));
+
+  if (!Number.isFinite(n) || n <= 1) {
+    return 1;
+  }
 
   let result = 1;
 
@@ -10,8 +45,23 @@ function factorial(n) {
   return result;
 }
 
+
+/* ============================================================
+   POISSON
+   ============================================================ */
+
 function poisson(lambda, k) {
-  if (lambda <= 0) return 0;
+  lambda = Number(lambda);
+  k = Math.floor(Number(k));
+
+  if (
+    !Number.isFinite(lambda) ||
+    !Number.isFinite(k) ||
+    lambda <= 0 ||
+    k < 0
+  ) {
+    return 0;
+  }
 
   return (
     Math.exp(-lambda) *
@@ -20,17 +70,32 @@ function poisson(lambda, k) {
   );
 }
 
-/*
-  Dixon-Coles low-score correction.
 
-  rho:
-  - negative values slightly reduce 0-0 / 1-1 combinations
-  - positive values increase them
+/* ============================================================
+   DIXON-COLES
+   ============================================================
 
-  V7.3 keeps the same conservative correction
-  used in V7.1.
+   rho negativo:
+   - aumenta ligeramente 0-0 y 1-1
+   - reduce ligeramente 0-1 y 1-0
+
+   Esta es la corrección estándar utilizada
+   para resultados de pocos goles.
 */
-function dixonColesCorrection(homeGoals, awayGoals, rho = -0.08) {
+
+function dixonColesCorrection(
+  homeGoals,
+  awayGoals,
+  rho = -0.08
+) {
+  homeGoals = Math.floor(Number(homeGoals));
+  awayGoals = Math.floor(Number(awayGoals));
+  rho = Number(rho);
+
+  if (!Number.isFinite(rho)) {
+    rho = -0.08;
+  }
+
   if (homeGoals === 0 && awayGoals === 0) {
     return 1 - rho;
   }
@@ -50,30 +115,73 @@ function dixonColesCorrection(homeGoals, awayGoals, rho = -0.08) {
   return 1;
 }
 
-/*
-  Builds a score probability matrix.
 
-  V7.3:
-  - goal range remains 0-12
-  - Dixon-Coles correction remains enabled
-  - final matrix is normalized
+/* ============================================================
+   SCORE MATRIX
+   ============================================================
+
+   Genera probabilidades de todos los marcadores
+   desde 0-0 hasta 12-12.
+
+   La matriz se normaliza al final.
 */
-function scoreMatrix(homeXg, awayXg) {
+
+function scoreMatrix(
+  homeXg,
+  awayXg
+) {
   const maxGoals = 12;
+
+  homeXg = Number(homeXg);
+  awayXg = Number(awayXg);
+
+  if (!Number.isFinite(homeXg)) {
+    homeXg = 1.35;
+  }
+
+  if (!Number.isFinite(awayXg)) {
+    awayXg = 1.35;
+  }
+
+  homeXg = clamp(
+    homeXg,
+    0.20,
+    4.50
+  );
+
+  awayXg = clamp(
+    awayXg,
+    0.20,
+    4.50
+  );
 
   const matrix = [];
 
   let totalProbability = 0;
 
-  for (let home = 0; home <= maxGoals; home++) {
+  for (
+    let home = 0;
+    home <= maxGoals;
+    home++
+  ) {
     matrix[home] = [];
 
-    for (let away = 0; away <= maxGoals; away++) {
-      const homeProbability =
-        poisson(homeXg, home);
+    const homeProbability =
+      poisson(
+        homeXg,
+        home
+      );
 
+    for (
+      let away = 0;
+      away <= maxGoals;
+      away++
+    ) {
       const awayProbability =
-        poisson(awayXg, away);
+        poisson(
+          awayXg,
+          away
+        );
 
       const correction =
         dixonColesCorrection(
@@ -81,23 +189,49 @@ function scoreMatrix(homeXg, awayXg) {
           away
         );
 
-      const probability =
+      let probability =
         homeProbability *
         awayProbability *
         correction;
 
-      matrix[home][away] = probability;
+      /*
+        Protección contra valores inválidos.
+      */
+      if (
+        !Number.isFinite(probability) ||
+        probability < 0
+      ) {
+        probability = 0;
+      }
 
-      totalProbability += probability;
+      matrix[home][away] =
+        probability;
+
+      totalProbability +=
+        probability;
     }
   }
 
-  if (totalProbability <= 0) {
+  /*
+    Normalización final.
+  */
+  if (
+    !Number.isFinite(totalProbability) ||
+    totalProbability <= 0
+  ) {
     return matrix;
   }
 
-  for (let home = 0; home <= maxGoals; home++) {
-    for (let away = 0; away <= maxGoals; away++) {
+  for (
+    let home = 0;
+    home <= maxGoals;
+    home++
+  ) {
+    for (
+      let away = 0;
+      away <= maxGoals;
+      away++
+    ) {
       matrix[home][away] =
         matrix[home][away] /
         totalProbability;
@@ -107,78 +241,141 @@ function scoreMatrix(homeXg, awayXg) {
   return matrix;
 }
 
-/*
-  Converts probability to percentage.
-*/
+
+/* ============================================================
+   PERCENTAGE
+   ============================================================ */
+
 function pct(value) {
-  return Math.round(value * 1000) / 10;
+  value = Number(value);
+
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.round(
+    value * 1000
+  ) / 10;
 }
 
-/*
-  Keeps a value inside a range.
-*/
-function clamp(value, min, max) {
+
+/* ============================================================
+   CLAMP
+   ============================================================ */
+
+function clamp(
+  value,
+  min,
+  max
+) {
+  value = Number(value);
+  min = Number(min);
+  max = Number(max);
+
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
   return Math.min(
     max,
-    Math.max(min, value)
+    Math.max(
+      min,
+      value
+    )
   );
 }
 
-/*
-  Converts decimal odds into implied probability.
+
+/* ============================================================
+   IMPLIED PROBABILITY
+   ============================================================
+
+   Decimal odds -> implied probability.
+
+   Ejemplo:
+   2.00 -> 50%
 */
+
 function implied(odds) {
+  odds = Number(odds);
+
   if (
-    odds == null ||
-    !Number.isFinite(Number(odds)) ||
-    Number(odds) <= 0
+    !Number.isFinite(odds) ||
+    odds <= 0
   ) {
     return null;
   }
 
-  return 1 / Number(odds);
+  return 1 / odds;
 }
 
-/*
-  Expected value.
 
-  EV = model probability × odds - 1
+/* ============================================================
+   EXPECTED VALUE
+   ============================================================
+
+   EV = probability × odds - 1
+
+   Ejemplo:
+   p = 0.60
+   odds = 2.00
+
+   EV = 0.60 × 2 - 1
+      = 0.20
+      = +20%
 */
-function ev(probability, odds) {
+
+function ev(
+  probability,
+  odds
+) {
+  probability =
+    Number(probability);
+
+  odds =
+    Number(odds);
+
   if (
-    probability == null ||
-    odds == null ||
-    !Number.isFinite(Number(probability)) ||
-    !Number.isFinite(Number(odds)) ||
-    Number(odds) <= 0
+    !Number.isFinite(probability) ||
+    !Number.isFinite(odds) ||
+    probability < 0 ||
+    probability > 1 ||
+    odds <= 0
   ) {
     return null;
   }
 
   return (
-    Number(probability) *
-    Number(odds)
+    probability *
+    odds
   ) - 1;
 }
 
-/*
-  V7.3
-  Statistical reliability based on sample size.
 
-  Instead of assuming that 3 matches are as reliable
-  as 10 matches, the model gradually increases the
-  weight of observed data.
+/* ============================================================
+   SAMPLE WEIGHT
+   ============================================================
 
-  k = 5 means:
-    1 match  -> 16.7%
-    3 matches -> 37.5%
-    4 matches -> 44.4%
-    5 matches -> 50.0%
-    10 matches -> 66.7%
-    20 matches -> 80.0%
+   Da más peso a muestras grandes.
+
+   k = 5:
+
+   1 partido  -> 16.7%
+   3 partidos -> 37.5%
+   5 partidos -> 50.0%
+   10 partidos -> 66.7%
+   20 partidos -> 80.0%
 */
-function sampleWeight(sampleSize, k = 5) {
-  const n = Number(sampleSize);
+
+function sampleWeight(
+  sampleSize,
+  k = 5
+) {
+  const n =
+    Number(sampleSize);
+
+  const smoothing =
+    Number(k);
 
   if (
     !Number.isFinite(n) ||
@@ -187,35 +384,58 @@ function sampleWeight(sampleSize, k = 5) {
     return 0;
   }
 
+  if (
+    !Number.isFinite(smoothing) ||
+    smoothing < 0
+  ) {
+    return 0;
+  }
+
   return clamp(
-    n / (n + k),
+    n /
+      (n + smoothing),
     0,
     1
   );
 }
 
-/*
-  Shrinks an observed statistic toward
-  a neutral/league baseline.
 
-  This prevents small samples from producing
-  extreme values.
+/* ============================================================
+   SHRINK TO MEAN
+   ============================================================
+
+   Reduce extremos producidos por muestras pequeñas.
 */
+
 function shrinkToMean(
   observed,
   baseline,
   sampleSize,
   k = 5
 ) {
+  baseline =
+    Number(baseline);
+
+  if (
+    !Number.isFinite(baseline)
+  ) {
+    baseline = 0;
+  }
+
   if (
     observed == null ||
-    !Number.isFinite(Number(observed))
+    !Number.isFinite(
+      Number(observed)
+    )
   ) {
     return baseline;
   }
 
   const weight =
-    sampleWeight(sampleSize, k);
+    sampleWeight(
+      sampleSize,
+      k
+    );
 
   return (
     baseline +
@@ -227,87 +447,122 @@ function shrinkToMean(
   );
 }
 
-/*
-  V7.3 helper for stabilizing attacking
-  and defensive statistics.
 
-  attackBaseline:
-    approximately 1.35 goals
+/* ============================================================
+   STABILIZE STATS
+   ============================================================
 
-  defenseBaseline:
-    approximately 1.20 goals conceded
+   Baselines conservadores.
+
+   attackBaseline:
+     1.35 goles
+
+   defenseBaseline:
+     1.20 goles concedidos
 */
+
 function stabilizeStats(
   stats = {},
   sampleSize = 0
 ) {
-  const attackBaseline = 1.35;
-  const defenseBaseline = 1.20;
+  const attackBaseline =
+    1.35;
 
-  const result = {
-    gf: shrinkToMean(
-      stats.gf,
-      attackBaseline,
-      sampleSize
-    ),
+  const defenseBaseline =
+    1.20;
 
-    ga: shrinkToMean(
-      stats.ga,
-      defenseBaseline,
-      sampleSize
-    ),
+  if (
+    !stats ||
+    typeof stats !== 'object'
+  ) {
+    stats = {};
+  }
 
-    homeGF: shrinkToMean(
-      stats.homeGF,
-      attackBaseline,
-      sampleSize
-    ),
+  return {
+    gf:
+      shrinkToMean(
+        stats.gf,
+        attackBaseline,
+        sampleSize
+      ),
 
-    homeGA: shrinkToMean(
-      stats.homeGA,
-      defenseBaseline,
-      sampleSize
-    ),
+    ga:
+      shrinkToMean(
+        stats.ga,
+        defenseBaseline,
+        sampleSize
+      ),
 
-    awayGF: shrinkToMean(
-      stats.awayGF,
-      attackBaseline,
-      sampleSize
-    ),
+    homeGF:
+      shrinkToMean(
+        stats.homeGF,
+        attackBaseline,
+        sampleSize
+      ),
 
-    awayGA: shrinkToMean(
-      stats.awayGA,
-      defenseBaseline,
-      sampleSize
-    )
+    homeGA:
+      shrinkToMean(
+        stats.homeGA,
+        defenseBaseline,
+        sampleSize
+      ),
+
+    awayGF:
+      shrinkToMean(
+        stats.awayGF,
+        attackBaseline,
+        sampleSize
+      ),
+
+    awayGA:
+      shrinkToMean(
+        stats.awayGA,
+        defenseBaseline,
+        sampleSize
+      )
   };
-
-  return result;
 }
 
-/*
-  V7.3 confidence.
 
-  The previous model could become too confident
-  with a very small number of matches.
+/* ============================================================
+   CONFIDENCE
+   ============================================================
 
-  This version explicitly penalizes small samples.
+   V7.6.1
+
+   La confianza considera:
+
+   1. Distancia respecto al 50%
+   2. Tamaño de muestra
+   3. EV positivo
+   4. Penalización por muestras pequeñas
+   5. Bonificación limitada por probabilidades fuertes
+
+   IMPORTANTE:
+
+   Confidence NO significa probabilidad de ganar.
+
+   Es una puntuación técnica de la calidad
+   de la señal estadística.
 */
+
 function confidence(
   probability,
   sampleSize,
   edge = 0
 ) {
+  probability =
+    Number(probability);
+
   if (
-    probability == null ||
-    !Number.isFinite(Number(probability))
+    !Number.isFinite(probability)
   ) {
     return 0;
   }
 
   const p =
     clamp(
-      Number(probability),
+      probability,
       0,
       1
     );
@@ -319,21 +574,18 @@ function confidence(
     );
 
   /*
-    V7.6
-    La confianza se basa en:
-    1. Distancia real respecto al 50%.
-    2. Tamaño de muestra.
-    3. Valor esperado.
-    4. Penalización fuerte cuando
-       existen muy pocos partidos.
+    Fuerza de la probabilidad
+    solamente cuando supera 50%.
   */
-
   const probabilityStrength =
     Math.max(
       0,
       (p - 0.50) * 100
     );
 
+  /*
+    Fiabilidad por tamaño de muestra.
+  */
   const reliability =
     sampleWeight(
       n,
@@ -343,6 +595,9 @@ function confidence(
   const sampleContribution =
     reliability * 22;
 
+  /*
+    Edge / EV positivo.
+  */
   const positiveEdge =
     Math.max(
       0,
@@ -352,9 +607,14 @@ function confidence(
   const edgeContribution =
     Math.min(
       10,
-      positiveEdge * 100 * 0.25
+      positiveEdge *
+        100 *
+        0.25
     );
 
+  /*
+    Penalización por muestra pequeña.
+  */
   let uncertaintyPenalty = 0;
 
   if (n <= 2) {
@@ -368,18 +628,17 @@ function confidence(
   }
 
   /*
-    Evita que una probabilidad
-    apenas superior al 50%
-    produzca una confianza alta.
+    Evita confianza elevada
+    cuando apenas existe una
+    diferencia sobre 50%.
   */
-
   let baseScore =
-    probabilityStrength * 0.70;
+    probabilityStrength *
+    0.70;
 
   /*
-    Probabilidades especialmente fuertes.
+    Bonificaciones controladas.
   */
-
   if (p >= 0.70) {
     baseScore += 5;
   }
@@ -405,17 +664,30 @@ function confidence(
       0,
       99
     )
-  ); 
+  );
 }
 
-/*
-  Generates the principal probabilities
-  from the score matrix.
+
+/* ============================================================
+   MATCH MODEL
+   ============================================================
+
+   Genera:
+
+   - 1X2
+   - Over/Under 2.5
+   - BTTS
+   - xG
+   - marcador más probable
 */
+
 function matchModel(
   homeXg,
   awayXg
 ) {
+  /*
+    Validación y límites conservadores.
+  */
   homeXg =
     clamp(
       Number(homeXg) || 0,
@@ -446,6 +718,13 @@ function matchModel(
   let bttsYes = 0;
   let bttsNo = 0;
 
+  /*
+    Marcador más probable.
+  */
+  let mostLikelyHome = 0;
+  let mostLikelyAway = 0;
+  let mostLikelyProbability = 0;
+
   for (
     let home = 0;
     home <= 12;
@@ -457,16 +736,26 @@ function matchModel(
       away++
     ) {
       const probability =
-        matrix[home][away];
+        Number(
+          matrix[home]?.[away]
+        ) || 0;
 
+      /*
+        1X2
+      */
       if (home > away) {
         homeWin += probability;
-      } else if (home === away) {
+      } else if (
+        home === away
+      ) {
         draw += probability;
       } else {
         awayWin += probability;
       }
 
+      /*
+        Over / Under 2.5
+      */
       if (
         home + away >= 3
       ) {
@@ -475,6 +764,9 @@ function matchModel(
         under25 += probability;
       }
 
+      /*
+        BTTS
+      */
       if (
         home >= 1 &&
         away >= 1
@@ -483,44 +775,179 @@ function matchModel(
       } else {
         bttsNo += probability;
       }
+
+      /*
+        Most probable score.
+      */
+      if (
+        probability >
+        mostLikelyProbability
+      ) {
+        mostLikelyProbability =
+          probability;
+
+        mostLikelyHome =
+          home;
+
+        mostLikelyAway =
+          away;
+      }
     }
   }
 
+  /*
+    Protección final contra pequeños
+    errores numéricos.
+  */
+  const total1X2 =
+    homeWin +
+    draw +
+    awayWin;
+
+  if (
+    total1X2 > 0
+  ) {
+    homeWin =
+      homeWin /
+      total1X2;
+
+    draw =
+      draw /
+      total1X2;
+
+    awayWin =
+      awayWin /
+      total1X2;
+  }
+
+  const totalOU =
+    over25 +
+    under25;
+
+  if (
+    totalOU > 0
+  ) {
+    over25 =
+      over25 /
+      totalOU;
+
+    under25 =
+      under25 /
+      totalOU;
+  }
+
+  const totalBTTS =
+    bttsYes +
+    bttsNo;
+
+  if (
+    totalBTTS > 0
+  ) {
+    bttsYes =
+      bttsYes /
+      totalBTTS;
+
+    bttsNo =
+      bttsNo /
+      totalBTTS;
+  }
+
+  /*
+    Resultado completo.
+  */
   return {
+    /*
+      1X2
+    */
     homeWin,
     draw,
     awayWin,
 
+    homeWinPct:
+      pct(homeWin),
+
+    drawPct:
+      pct(draw),
+
+    awayWinPct:
+      pct(awayWin),
+
+    /*
+      Over / Under
+    */
     over25,
     under25,
 
+    over25Pct:
+      pct(over25),
+
+    under25Pct:
+      pct(under25),
+
+    /*
+      BTTS
+    */
     bttsYes,
     bttsNo,
 
-    homeWinPct: pct(homeWin),
-    drawPct: pct(draw),
-    awayWinPct: pct(awayWin),
+    bttsYesPct:
+      pct(bttsYes),
 
-    over25Pct: pct(over25),
-    under25Pct: pct(under25),
+    bttsNoPct:
+      pct(bttsNo),
 
-    bttsYesPct: pct(bttsYes),
-bttsNoPct: pct(bttsNo),
+    /*
+      Alias utilizado por server.js.
+    */
+    btts:
+      bttsYes,
 
-btts: bttsYes,
+    bttsPct:
+      pct(bttsYes),
 
-homeXg:
-  Math.round(homeXg * 1000) / 1000,
+    /*
+      xG
+    */
+    homeXg:
+      Math.round(
+        homeXg * 1000
+      ) / 1000,
 
     awayXg:
-      Math.round(awayXg * 1000) / 1000,
+      Math.round(
+        awayXg * 1000
+      ) / 1000,
 
     totalXg:
       Math.round(
-        (homeXg + awayXg) * 1000
-      ) / 1000
+        (
+          homeXg +
+          awayXg
+        ) * 1000
+      ) / 1000,
+
+    /*
+      Marcador más probable.
+    */
+    mostLikelyHome,
+    mostLikelyAway,
+
+    mostLikelyScore:
+      `${mostLikelyHome}-${mostLikelyAway}`,
+
+    mostLikelyProbability,
+
+    mostLikelyScorePct:
+      pct(
+        mostLikelyProbability
+      )
   };
 }
+
+
+/* ============================================================
+   EXPORTS
+   ============================================================ */
 
 module.exports = {
   factorial,
