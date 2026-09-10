@@ -30,7 +30,7 @@ const CACHE_TTL_MS =
   5 * 60 * 1000;
 
 const MODEL_VERSION =
-  'V7.4.1';
+  'V7.6.1';
 
 const cache =
   new Map();
@@ -1081,34 +1081,39 @@ Para considerar un valor extremo
 como candidato debe existir respaldo
 de al menos dos casas.
 ====================================================
-*/
-
-function bestValue(
-  markets
-) {
-  const candidates =
-    markets.filter(
-      market =>
+*/function bestValue(markets) {
+  const valid =
+    (markets || [])
+      .filter(market =>
         Number.isFinite(
-          market.evPct
+          Number(market.evPct)
         ) &&
-        market.evPct > 0 &&
-        !market.isOutlier
-    );
+        Number(market.evPct) > 0 &&
+        Number.isFinite(
+          Number(market.probabilityPct)
+        ) &&
+        Number(market.probabilityPct) >= 55
+      );
 
-  if (!candidates.length) {
+  if (!valid.length) {
     return null;
   }
 
-  /*
-  Ordenamos por EV.
-  */
+  return valid
+    .sort((a, b) => {
+      const evDiff =
+        Number(b.evPct) -
+        Number(a.evPct);
 
-  return candidates.sort(
-    (a, b) =>
-      b.evPct -
-      a.evPct
-  )[0] || null;
+      if (Math.abs(evDiff) > 1) {
+        return evDiff;
+      }
+
+      return (
+        Number(b.probabilityPct) -
+        Number(a.probabilityPct)
+      );
+    })[0] || null;
 }
 
 /*
