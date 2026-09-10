@@ -1,4 +1,4 @@
-const express = require('express');
+0const express = require('express');
 
 const {
   matchModel,
@@ -978,3 +978,65 @@ async function getOdds(
     markets
   };
         }
+app.get('/api/status', (req, res) => {
+  res.json({
+    ok: true,
+    footballDataConfigured: Boolean(FOOTBALL_DATA_TOKEN),
+    oddsApiConfigured: Boolean(ODDS_API_KEY),
+    provider: 'football-data.org + The Odds API',
+    cacheMinutes: CACHE_MINUTES,
+    modelVersion: MODEL_VERSION
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    modelVersion: MODEL_VERSION,
+    uptime: process.uptime()
+  });
+});
+
+app.get('/', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.type('html').send(`
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>Pronóstico Deportivo V7.6.1</title>
+      <style>
+        body{
+          margin:0;
+          padding:30px 20px;
+          background:#080b10;
+          color:#fff;
+          font-family:Arial,sans-serif;
+          text-align:center;
+        }
+        .card{
+          max-width:600px;
+          margin:40px auto;
+          padding:30px;
+          background:#10151d;
+          border-radius:20px;
+        }
+        h1{font-size:30px}
+        .ok{color:#7ee787;font-weight:bold}
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>🧠 V7.6.1 ANALYST</h1>
+        <p class="ok">● SERVIDOR ACTIVO</p>
+        <p>El motor de pronósticos está funcionando correctamente.</p>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+app.listen(PORT, () => {
+  console.log(`V7.6.1 ANALYST running on port ${PORT}`);
+});
