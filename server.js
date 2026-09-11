@@ -435,6 +435,37 @@ function calculateRecentTeamStats(
   };
 }
 
+/*
+============================================================
+FIXTURE SEARCH
+============================================================
+
+IMPORTANTE:
+
+Antes se hacía una petición independiente por cada
+competición:
+
+PL
+PD
+BL1
+SA
+FL1
+CL
+EL
+
+Eso podía provocar muchos 429 del plan gratuito.
+
+Ahora se utiliza UNA SOLA petición:
+
+/matches?dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD
+
+Después filtramos únicamente las competiciones que nuestra
+aplicación soporta.
+
+Esto hace que BUSCAR PARTIDOS consuma muchas menos
+peticiones y sea mucho más estable.
+*/
+
 async function getFixture(
   date
 ) {
@@ -448,83 +479,176 @@ async function getFixture(
   if (cached) {
 
     console.log(
-      `[FIXTURES] ${date}: usando cache (${cached.length} partidos)`
+      `[FIXTURES] ${date}: CACHE HIT -> ${cached.length} partidos`
     );
 
     return cached;
   }
 
-  const allMatches = [];
-
+  console.log('');
   console.log(
-    `[FIXTURES] ===== INICIO ${date} =====`
+    '================================================'
+  );
+  console.log(
+    `[FIXTURES] INICIANDO CONSULTA PARA ${date}`
+  );
+  console.log(
+    '================================================'
   );
 
-  for (
-    const code of
-    Object.keys(
-      ODDS_SPORT_BY_COMPETITION
-    )
-  ) {
+  try {
 
-    try {
+    const path =
+      `/matches?dateFrom=${encodeURIComponent(date)}&dateTo=${encodeURIComponent(date)}`;
 
-      const data =
-        await footballData(
-          `/competitions/${code}/matches?dateFrom=${date}&dateTo=${date}`
-        );
+    console.log(
+      `[FIXTURES] ${date}: consultando Football-Data por fecha...`
+    );
 
-      const count =
-        Array.isArray(
-          data?.matches
-        )
-          ? data.matches.length
-          : 0;
-
-      console.log(
-        `[FIXTURES] ${date} ${code}: ${count} partidos`
+    const data =
+      await footballData(
+        path
       );
 
-      if (
-        Array.isArray(
-          data?.matches
-        )
-      ) {
+    const matches =
+      Array.isArray(
+        data?.matches
+      )
+        ? data.matches
+        : [];
 
-        allMatches.push(
-          ...data.matches.map(
-            m => ({
-              ...m,
-              competitionCode:
-                code
-            })
-          )
+    const allowedCodes =
+      new Set(
+        Object.keys(
+          ODDS_SPORT_BY_COMPETITION
+        )
+      );
+
+    const allMatches =
+      matches
+
+        .filter(
+          m => {
+
+            const code =
+              String(
+                m?.competition?.code ||
+                ''
+              ).toUpperCase();
+
+            return allowedCodes.has(
+              code
+            );
+
+          }
+        )
+
+        .map(
+          m => ({
+
+            ...m,
+
+            competitionCode:
+              String(
+                m?.competition?.code ||
+                ''
+              ).toUpperCase()
+
+          })
         );
 
-      }
+    console.log(
+      `[FIXTURES] ${date}: ${allMatches.length} partidos encontrados`
+    );
 
-    } catch (error) {
+    const counts = {};
 
-      console.error(
-        `[FIXTURES] ${date} ${code}: ERROR`,
-        error?.message ||
-        error
+    for (
+      const match of allMatches
+    ) {
+
+      const code =
+        match.competitionCode;
+
+      counts[code] =
+        (
+          counts[code] ||
+          0
+        ) + 1;
+
+    }
+
+    for (
+      const code of
+      Object.keys(
+        ODDS_SPORT_BY_COMPETITION
+      )
+    ) {
+
+      console.log(
+        `[FIXTURES] ${date} ${code}: ${counts[code] || 0} partidos`
       );
 
     }
 
+    console.log(
+      '================================================'
+    );
+
+    console.log(
+      `[FIXTURES] ${date}: TOTAL=${allMatches.length} partidos`
+    );
+
+    console.log(
+      '================================================'
+    );
+
+    console.log('');
+
+    cacheSet(
+      key,
+      allMatches
+    );
+
+    return allMatches;
+
+  } catch (error) {
+
+    console.error('');
+    console.error(
+      `[FIXTURES] ${date}: ERROR`
+    );
+
+    console.error(
+      `Mensaje: ${error?.message || error}`
+    );
+
+    console.error(
+      `HTTP Status: ${error?.status || 'N/D'}`
+    );
+
+    if (error?.data) {
+
+      console.error(
+        'Respuesta del proveedor:',
+        JSON.stringify(
+          error.data
+        )
+      );
+
+    }
+
+    console.error('');
+
+    /*
+      No guardamos errores en caché.
+      La siguiente búsqueda podrá reintentar.
+    */
+
+    throw error;
+
   }
 
-  console.log(
-    `[FIXTURES] ===== TOTAL ${date}: ${allMatches.length} partidos =====`
-  );
-
-  cacheSet(
-    key,
-    allMatches
-  );
-
-  return allMatches;
 }
 
 function selectFixture(
@@ -1728,6 +1852,7 @@ function formatPct(
   )
     ? `${Number(value).toFixed(1)}%`
     : '-';
+
 }
 
 function marketHtml(
@@ -1784,6 +1909,7 @@ function marketHtml(
 
     `</div>`
   );
+
 }
 
 function renderPage() {
@@ -1911,6 +2037,11 @@ input{
   color:#080b10;
   font-weight:900;
   cursor:pointer
+}
+
+.primary:disabled{
+  opacity:.65;
+  cursor:wait
 }
 
 .result{
@@ -2479,13 +2610,18 @@ function closeAllPanels(
 }
 
 /*
-  IMPORTANTE:
+============================================================
+FIXTURE HTML
+============================================================
 
-  fixtureHtml vive dentro del
-  navegador, no en el servidor.
+Esta función vive dentro del navegador.
 
-  Esto elimina el error:
-  "fixtureHtml is not defined".
+Evita:
+
+"fixtureHtml is not defined"
+
+También utiliza JSON.stringify con onclick delimitado
+por comillas simples para evitar romper el HTML.
 */
 
 function fixtureHtml(
@@ -2502,16 +2638,6 @@ function fixtureHtml(
       f.id ||
       index
     );
-
-  /*
-    JSON.stringify se utiliza para
-    generar argumentos JavaScript.
-
-    El onclick está DELIMITADO POR
-    COMILLAS SIMPLES, evitando que
-    las comillas del JSON rompan
-    el atributo HTML.
-  */
 
   const jsPanelId =
     JSON.stringify(
@@ -2644,10 +2770,10 @@ function fixtureHtml(
 
 async function searchFixtures(){
 
-  const date =
+  const dateElement =
     document.getElementById(
       'date'
-    ).value;
+    );
 
   const loading =
     document.getElementById(
@@ -2673,6 +2799,16 @@ async function searchFixtures(){
     document.getElementById(
       'searchSummary'
     );
+
+  const button =
+    document.getElementById(
+      'searchBtn'
+    );
+
+  const date =
+    dateElement
+      ? dateElement.value
+      : '';
 
   if (!date){
 
@@ -2704,6 +2840,13 @@ async function searchFixtures(){
   summary.textContent =
     '';
 
+  if (button){
+
+    button.disabled =
+      true;
+
+  }
+
   try{
 
     const response =
@@ -2718,8 +2861,20 @@ async function searchFixtures(){
         }
       );
 
-    const data =
-      await response.json();
+    let data = null;
+
+    try {
+
+      data =
+        await response.json();
+
+    } catch {
+
+      throw new Error(
+        'El servidor no devolvió una respuesta válida.'
+      );
+
+    }
 
     if (
       !response.ok ||
@@ -2809,6 +2964,13 @@ async function searchFixtures(){
     loading.style.display =
       'none';
 
+    if (button){
+
+      button.disabled =
+        false;
+
+    }
+
   }
 
 }
@@ -2868,6 +3030,9 @@ async function openAnalysis(
       'show'
     );
 
+  content.innerHTML =
+    '';
+
   try{
 
     const params =
@@ -2890,8 +3055,20 @@ async function openAnalysis(
         }
       );
 
-    const data =
-      await response.json();
+    let data = null;
+
+    try {
+
+      data =
+        await response.json();
+
+    } catch {
+
+      throw new Error(
+        'El servidor no devolvió una respuesta válida.'
+      );
+
+    }
 
     if (
       !response.ok ||
@@ -2982,6 +3159,14 @@ function analysisHtml(
     markets =
       '<div class="muted">' +
       'Cuotas reales no disponibles.' +
+      (
+        data.oddsReason
+          ? ' ' +
+            esc(
+              data.oddsReason
+            )
+          : ''
+      ) +
       '</div>';
 
   }else{
@@ -3549,8 +3734,11 @@ document.getElementById(
   localDateValue();
 
 /*
-  Exposición explícita de funciones
-  para los botones inline.
+============================================================
+FUNCIONES GLOBALES
+============================================================
+
+Necesarias para los onclick del HTML.
 */
 
 window.searchFixtures =
@@ -3625,6 +3813,7 @@ app.get(
             10
           );
 
+      console.log('');
       console.log(
         `[API] /api/fixtures solicitado para ${date}`
       );
