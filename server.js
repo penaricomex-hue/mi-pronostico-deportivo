@@ -38,10 +38,7 @@ function cacheGet(key) {
   const item = cache.get(key);
   if (!item) return null;
 
-  if (
-    now() - item.time >
-    CACHE_MINUTES * 60 * 1000
-  ) {
+  if (now() - item.time > CACHE_MINUTES * 60 * 1000) {
     cache.delete(key);
     return null;
   }
@@ -68,27 +65,13 @@ function namesMatch(a, b) {
   const x = normalizeName(a);
   const y = normalizeName(b);
 
-  if (
-    !x ||
-    !y ||
-    x.length < 6 ||
-    y.length < 6
-  ) {
-    return false;
-  }
+  if (!x || !y || x.length < 6 || y.length < 6) return false;
 
-  if (x === y) {
-    return true;
-  }
+  if (x === y) return true;
 
-  return (
-    x.length >= 8 &&
+  return x.length >= 8 &&
     y.length >= 8 &&
-    (
-      x.includes(y) ||
-      y.includes(x)
-    )
-  );
+    (x.includes(y) || y.includes(x));
 }
 
 function median(values) {
@@ -97,19 +80,13 @@ function median(values) {
     .filter(Number.isFinite)
     .sort((a, b) => a - b);
 
-  if (!nums.length) {
-    return null;
-  }
+  if (!nums.length) return null;
 
-  const m =
-    Math.floor(nums.length / 2);
+  const m = Math.floor(nums.length / 2);
 
   return nums.length % 2
     ? nums[m]
-    : (
-        nums[m - 1] +
-        nums[m]
-      ) / 2;
+    : (nums[m - 1] + nums[m]) / 2;
 }
 
 function uniqueNumbers(values) {
@@ -118,30 +95,18 @@ function uniqueNumbers(values) {
       values
         .map(Number)
         .filter(Number.isFinite)
-        .map(v =>
-          Number(
-            v.toFixed(4)
-          )
-        )
+        .map(v => Number(v.toFixed(4)))
     )
   ];
 }
 
-async function fetchJson(
-  url,
-  options = {}
-) {
-  const response =
-    await fetch(
-      url,
-      options
-    );
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options);
 
   let data = null;
 
   try {
-    data =
-      await response.json();
+    data = await response.json();
   } catch {
     data = null;
   }
@@ -153,14 +118,10 @@ async function fetchJson(
       data?.errors?.message ||
       `HTTP ${response.status}`;
 
-    const error =
-      new Error(message);
+    const error = new Error(message);
 
-    error.status =
-      response.status;
-
-    error.data =
-      data;
+    error.status = response.status;
+    error.data = data;
 
     throw error;
   }
@@ -168,91 +129,59 @@ async function fetchJson(
   return data;
 }
 
-async function footballData(
-  path
-) {
+async function footballData(path) {
   if (!FOOTBALL_DATA_TOKEN) {
-    throw new Error(
-      'FOOTBALL_DATA_TOKEN no configurado'
-    );
+    throw new Error('FOOTBALL_DATA_TOKEN no configurado');
   }
 
-  const key =
-    `football:${path}`;
+  const key = `football:${path}`;
 
-  const cached =
-    cacheGet(key);
+  const cached = cacheGet(key);
 
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
 
-  const data =
-    await fetchJson(
-      `${FOOTBALL_DATA_BASE}${path}`,
-      {
-        headers: {
-          'X-Auth-Token':
-            FOOTBALL_DATA_TOKEN
-        }
+  const data = await fetchJson(
+    `${FOOTBALL_DATA_BASE}${path}`,
+    {
+      headers: {
+        'X-Auth-Token': FOOTBALL_DATA_TOKEN
       }
-    );
-
-  cacheSet(
-    key,
-    data
+    }
   );
+
+  cacheSet(key, data);
 
   return data;
 }
 
-async function getTeamRecentMatches(
-  teamId
-) {
-  const key =
-    `team:${teamId}:recent`;
+async function getTeamRecentMatches(teamId) {
+  const key = `team:${teamId}:recent`;
 
-  const cached =
-    cacheGet(key);
+  const cached = cacheGet(key);
 
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
 
-  const data =
-    await footballData(
-      `/teams/${teamId}/matches?status=FINISHED&limit=20`
-    );
-
-  const matches =
-    Array.isArray(
-      data?.matches
-    )
-      ? data.matches
-      : [];
-
-  cacheSet(
-    key,
-    matches
+  const data = await footballData(
+    `/teams/${teamId}/matches?status=FINISHED&limit=20`
   );
+
+  const matches = Array.isArray(data?.matches)
+    ? data.matches
+    : [];
+
+  cacheSet(key, matches);
 
   return matches;
 }
 
-function calculateRecentTeamStats(
-  teamId,
-  matches
-) {
-  const relevant =
-    matches
-      .filter(
-        m =>
-          m?.homeTeam?.id ===
-            teamId ||
-          m?.awayTeam?.id ===
-            teamId
-      )
-      .slice(0, 10);
+function calculateRecentTeamStats(teamId, matches) {
+  const relevant = matches
+    .filter(
+      m =>
+        m?.homeTeam?.id === teamId ||
+        m?.awayTeam?.id === teamId
+    )
+    .slice(0, 10);
 
   if (!relevant.length) {
     return {
@@ -272,34 +201,20 @@ function calculateRecentTeamStats(
   let goalsAgainst = 0;
   let points = 0;
 
-  for (
-    const match of relevant
-  ) {
-    const home =
-      Number(
-        match?.score?.fullTime?.home ??
-        0
-      );
+  for (const match of relevant) {
+    const home = Number(
+      match?.score?.fullTime?.home ?? 0
+    );
 
-    const away =
-      Number(
-        match?.score?.fullTime?.away ??
-        0
-      );
+    const away = Number(
+      match?.score?.fullTime?.away ?? 0
+    );
 
     const isHome =
-      match?.homeTeam?.id ===
-      teamId;
+      match?.homeTeam?.id === teamId;
 
-    const gf =
-      isHome
-        ? home
-        : away;
-
-    const ga =
-      isHome
-        ? away
-        : home;
+    const gf = isHome ? home : away;
+    const ga = isHome ? away : home;
 
     goalsFor += gf;
     goalsAgainst += ga;
@@ -312,111 +227,76 @@ function calculateRecentTeamStats(
   }
 
   const avgGoalsFor =
-    goalsFor /
-    relevant.length;
+    goalsFor / relevant.length;
 
   const avgGoalsAgainst =
-    goalsAgainst /
-    relevant.length;
+    goalsAgainst / relevant.length;
 
   return {
-    matches:
-      relevant.length,
-
+    matches: relevant.length,
     goalsFor,
-
     goalsAgainst,
-
     avgGoalsFor,
-
     avgGoalsAgainst,
 
-    attackStrength:
-      Math.max(
-        0.45,
-        Math.min(
-          1.8,
-          avgGoalsFor / 1.35
-        )
-      ),
+    attackStrength: Math.max(
+      0.45,
+      Math.min(
+        1.8,
+        avgGoalsFor / 1.35
+      )
+    ),
 
-    defenseStrength:
-      Math.max(
-        0.45,
-        Math.min(
-          1.8,
-          1.35 /
+    defenseStrength: Math.max(
+      0.45,
+      Math.min(
+        1.8,
+        1.35 /
           Math.max(
             avgGoalsAgainst,
             0.25
           )
-        )
-      ),
+      )
+    ),
 
-    formPoints:
-      points,
+    formPoints: points,
 
     formPct:
-      (
-        points /
-        (
-          relevant.length *
-          3
-        )
-      ) *
+      (points /
+        (relevant.length * 3)) *
       100
   };
 }
 
-async function getFixture(
-  date
-) {
-  const key =
-    `fixtures:${date}`;
+async function getFixture(date) {
+  const key = `fixtures:${date}`;
 
-  const cached =
-    cacheGet(key);
+  const cached = cacheGet(key);
 
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
 
   const allMatches = [];
 
-  for (
-    const code of
-    Object.keys(
-      ODDS_SPORT_BY_COMPETITION
-    )
-  ) {
+  for (const code of Object.keys(
+    ODDS_SPORT_BY_COMPETITION
+  )) {
     try {
-      const data =
-        await footballData(
-          `/competitions/${code}/matches?dateFrom=${date}&dateTo=${date}`
-        );
+      const data = await footballData(
+        `/competitions/${code}/matches?dateFrom=${date}&dateTo=${date}`
+      );
 
-      if (
-        Array.isArray(
-          data?.matches
-        )
-      ) {
+      if (Array.isArray(data?.matches)) {
         allMatches.push(
-          ...data.matches.map(
-            m => ({
-              ...m,
-              competitionCode:
-                code
-            })
-          )
+          ...data.matches.map(m => ({
+            ...m,
+            competitionCode: code
+          }))
         );
       }
     } catch (_) {}
   }
 
-  cacheSet(
-    key,
-    allMatches
-  );
+  cacheSet(key, allMatches);
 
   return allMatches;
 }
@@ -426,18 +306,17 @@ function selectFixture(
   homeName,
   awayName
 ) {
-  const direct =
-    matches.find(
-      m =>
-        namesMatch(
-          m?.homeTeam?.name,
-          homeName
-        ) &&
-        namesMatch(
-          m?.awayTeam?.name,
-          awayName
-        )
-    );
+  const direct = matches.find(
+    m =>
+      namesMatch(
+        m?.homeTeam?.name,
+        homeName
+      ) &&
+      namesMatch(
+        m?.awayTeam?.name,
+        awayName
+      )
+  );
 
   if (direct) {
     return {
@@ -446,18 +325,17 @@ function selectFixture(
     };
   }
 
-  const reversed =
-    matches.find(
-      m =>
-        namesMatch(
-          m?.homeTeam?.name,
-          awayName
-        ) &&
-        namesMatch(
-          m?.awayTeam?.name,
-          homeName
-        )
-    );
+  const reversed = matches.find(
+    m =>
+      namesMatch(
+        m?.homeTeam?.name,
+        awayName
+      ) &&
+      namesMatch(
+        m?.awayTeam?.name,
+        homeName
+      )
+  );
 
   return reversed
     ? {
@@ -472,54 +350,34 @@ function collectPrice(
   bookmaker,
   odds
 ) {
-  const n =
-    Number(odds);
+  const n = Number(odds);
 
-  if (
-    !Number.isFinite(n) ||
-    n <= 1
-  ) {
+  if (!Number.isFinite(n) || n <= 1) {
     return;
   }
 
   prices.push({
     bookmaker:
-      bookmaker ||
-      'Unknown',
-
+      bookmaker || 'Unknown',
     odds: n
   });
 }
 
-/*
-V7.6.1:
-motor robusto de consenso
-y detección de outliers.
-*/
+/* V7.6.1: robust market consensus + anti-outlier engine. */
 
-function analyzePriceSet(
-  prices
-) {
-  const valid =
-    prices
-      .filter(
-        x =>
-          x &&
-          Number.isFinite(
-            Number(x.odds)
-          ) &&
-          Number(x.odds) > 1
-      )
-      .map(
-        x => ({
-          bookmaker:
-            x.bookmaker ||
-            'Unknown',
-
-          odds:
-            Number(x.odds)
-        })
-      );
+function analyzePriceSet(prices) {
+  const valid = prices
+    .filter(
+      x =>
+        x &&
+        Number.isFinite(Number(x.odds)) &&
+        Number(x.odds) > 1
+    )
+    .map(x => ({
+      bookmaker:
+        x.bookmaker || 'Unknown',
+      odds: Number(x.odds)
+    }));
 
   if (!valid.length) {
     return {
@@ -536,29 +394,18 @@ function analyzePriceSet(
     };
   }
 
-  const odds =
-    valid
-      .map(x => x.odds)
-      .sort(
-        (a, b) =>
-          a - b
-      );
+  const odds = valid
+    .map(x => x.odds)
+    .sort((a, b) => a - b);
 
-  const referenceOdds =
-    median(odds);
+  const referenceOdds = median(odds);
 
   const bestOdds =
-    odds[
-      odds.length - 1
-    ];
+    odds[odds.length - 1];
 
   const descending =
-    uniqueNumbers(
-      odds
-    ).sort(
-      (a, b) =>
-        b - a
-    );
+    uniqueNumbers(odds)
+      .sort((a, b) => b - a);
 
   const secondBestOdds =
     descending.length > 1
@@ -569,35 +416,20 @@ function analyzePriceSet(
     odds.filter(
       o =>
         referenceOdds &&
-        Math.abs(
-          o -
-          referenceOdds
-        ) /
-        referenceOdds <=
-        0.10
+        Math.abs(o - referenceOdds) /
+          referenceOdds <=
+          0.10
     ).length;
 
   const priceGapPct =
     referenceOdds
-      ? (
-          (
-            bestOdds /
-            referenceOdds
-          ) -
-          1
-        ) *
+      ? ((bestOdds / referenceOdds) - 1) *
         100
       : 0;
 
   const secondGapPct =
     secondBestOdds
-      ? (
-          (
-            bestOdds /
-            secondBestOdds
-          ) -
-          1
-        ) *
+      ? ((bestOdds / secondBestOdds) - 1) *
         100
       : 0;
 
@@ -605,54 +437,44 @@ function analyzePriceSet(
     odds.length >= 2 &&
     (
       bestOdds >
-        referenceOdds *
-        1.30 ||
-
+        referenceOdds * 1.30 ||
       (
         bestOdds >
-          referenceOdds *
-          1.20 &&
+          referenceOdds * 1.20 &&
         supportCount < 2
       ) ||
-
       (
         secondBestOdds !== null &&
         bestOdds >
-          secondBestOdds *
-          1.20
+          secondBestOdds * 1.20
       )
     );
 
-  let marketDepth =
-    'low';
+  let marketDepth = 'low';
 
   if (
     odds.length >= 6 &&
     supportCount >= 4
   ) {
-    marketDepth =
-      'strong';
+    marketDepth = 'strong';
   } else if (
     odds.length >= 3 &&
     supportCount >= 2
   ) {
-    marketDepth =
-      'medium';
+    marketDepth = 'medium';
   }
 
   return {
     bestOdds,
     referenceOdds,
     secondBestOdds,
-    bookmakerCount:
-      valid.length,
+    bookmakerCount: valid.length,
     supportCount,
     priceGapPct,
     secondGapPct,
     isOutlier,
     marketDepth,
-    prices:
-      valid
+    prices: valid
   };
 }
 
@@ -660,9 +482,7 @@ function marketName(
   type,
   outcome
 ) {
-  if (
-    type === 'h2h'
-  ) {
+  if (type === 'h2h') {
     return outcome === 'home'
       ? 'Gana local'
       : outcome === 'draw'
@@ -670,9 +490,7 @@ function marketName(
         : 'Gana visitante';
   }
 
-  if (
-    type === 'totals'
-  ) {
+  if (type === 'totals') {
     return outcome === 'over'
       ? 'Over 2.5'
       : 'Under 2.5';
@@ -688,14 +506,10 @@ function buildMarket({
   prices
 }) {
   const info =
-    analyzePriceSet(
-      prices
-    );
+    analyzePriceSet(prices);
 
   const modelProbability =
-    Number(
-      probability
-    );
+    Number(probability);
 
   const bestEvPct =
     info.bestOdds
@@ -715,16 +529,12 @@ function buildMarket({
 
   const impliedBest =
     info.bestOdds
-      ? implied(
-          info.bestOdds
-        )
+      ? implied(info.bestOdds)
       : null;
 
   const impliedReference =
     info.referenceOdds
-      ? implied(
-          info.referenceOdds
-        )
+      ? implied(info.referenceOdds)
       : null;
 
   const valueEligible =
@@ -738,14 +548,12 @@ function buildMarket({
 
   return {
     type,
-
     outcome,
 
-    name:
-      marketName(
-        type,
-        outcome
-      ),
+    name: marketName(
+      type,
+      outcome
+    ),
 
     probability:
       modelProbability,
@@ -780,8 +588,7 @@ function buildMarket({
         x =>
           x.odds ===
           info.bestOdds
-      )?.bookmaker ||
-      null,
+      )?.bookmaker || null,
 
     bookmakerCount:
       info.bookmakerCount,
@@ -791,16 +598,12 @@ function buildMarket({
 
     priceGapPct:
       Number(
-        info.priceGapPct.toFixed(
-          1
-        )
+        info.priceGapPct.toFixed(1)
       ),
 
     secondGapPct:
       Number(
-        info.secondGapPct.toFixed(
-          1
-        )
+        info.secondGapPct.toFixed(1)
       ),
 
     isOutlier:
@@ -847,10 +650,7 @@ function buildMarkets(
       ? oddsData.bookmakers
       : [];
 
-  for (
-    const bookmaker of
-    bookmakers
-  ) {
+  for (const bookmaker of bookmakers) {
     const bookmakerName =
       bookmaker?.title ||
       bookmaker?.key ||
@@ -864,10 +664,7 @@ function buildMarkets(
         ? bookmaker.markets
         : []
     ) {
-      if (
-        market?.key ===
-        'h2h'
-      ) {
+      if (market?.key === 'h2h') {
         for (
           const outcome of
           market.outcomes || []
@@ -891,9 +688,7 @@ function buildMarkets(
               bookmakerName,
               price
             );
-          }
-
-          else if (
+          } else if (
             namesMatch(
               name,
               fixture.awayName
@@ -904,17 +699,13 @@ function buildMarkets(
               bookmakerName,
               price
             );
-          }
-
-          else if (
+          } else if (
             [
               'draw',
               'tie',
               'empate'
             ].includes(
-              normalizeName(
-                name
-              )
+              normalizeName(name)
             )
           ) {
             collectPrice(
@@ -924,11 +715,8 @@ function buildMarkets(
             );
           }
         }
-      }
-
-      else if (
-        market?.key ===
-        'totals'
+      } else if (
+        market?.key === 'totals'
       ) {
         for (
           const outcome of
@@ -952,20 +740,14 @@ function buildMarkets(
               outcome?.price
             );
 
-          if (
-            name ===
-            'over'
-          ) {
+          if (name === 'over') {
             collectPrice(
               totals.over,
               bookmakerName,
               price
             );
-          }
-
-          else if (
-            name ===
-            'under'
+          } else if (
+            name === 'under'
           ) {
             collectPrice(
               totals.under,
@@ -1038,30 +820,18 @@ function bestValue(
         m.supportCount >= 2 &&
         !m.isOutlier &&
         m.probability >= 55 &&
-        Number(
-          m.referenceEvPct
-        ) >= 2 &&
-        Number(
-          m.bestEvPct
-        ) >= 2 &&
-        Number(
-          modelConfidence
-        ) >= 60
+        Number(m.referenceEvPct) >= 2 &&
+        Number(m.bestEvPct) >= 2 &&
+        Number(modelConfidence) >= 60
     )
     .sort(
       (a, b) =>
-        Number(
-          b.referenceEvPct
-        ) -
-        Number(
-          a.referenceEvPct
-        ) ||
-
+        Number(b.referenceEvPct) -
+          Number(a.referenceEvPct) ||
         b.probability -
-        a.probability ||
-
+          a.probability ||
         b.supportCount -
-        a.supportCount
+          a.supportCount
     )[0] || null;
 }
 
@@ -1085,31 +855,20 @@ function buildValueAlert(
           )
       );
 
-  if (
-    outliers.length
-  ) {
+  if (outliers.length) {
     const m =
       outliers[0];
 
     return {
-      type:
-        'outlier',
-
-      market:
-        m.name,
-
-      odds:
-        m.bestOdds,
-
+      type: 'outlier',
+      market: m.name,
+      odds: m.bestOdds,
       bestEvPct:
         m.bestEvPct,
-
       referenceOdds:
         m.referenceOdds,
-
       referenceEvPct:
         m.referenceEvPct,
-
       bookmaker:
         m.bookmaker,
 
@@ -1137,31 +896,20 @@ function buildValueAlert(
           )
       );
 
-  if (
-    positive.length
-  ) {
+  if (positive.length) {
     const m =
       positive[0];
 
     return {
-      type:
-        'normal',
-
-      market:
-        m.name,
-
-      odds:
-        m.bestOdds,
-
+      type: 'normal',
+      market: m.name,
+      odds: m.bestOdds,
       bestEvPct:
         m.bestEvPct,
-
       referenceOdds:
         m.referenceOdds,
-
       referenceEvPct:
         m.referenceEvPct,
-
       bookmaker:
         m.bookmaker,
 
@@ -1183,27 +931,26 @@ function mostLikelyScore(
     probability: 0
   };
 
-  const poisson =
-    (k, lambda) => {
-      let factorial = 1;
+  const poisson = (
+    k,
+    lambda
+  ) => {
+    let factorial = 1;
 
-      for (
-        let i = 2;
-        i <= k;
-        i++
-      ) {
-        factorial *= i;
-      }
+    for (
+      let i = 2;
+      i <= k;
+      i++
+    ) {
+      factorial *= i;
+    }
 
-      return (
-        Math.exp(-lambda) *
-        Math.pow(
-          lambda,
-          k
-        ) /
-        factorial
-      );
-    };
+    return (
+      Math.exp(-lambda) *
+      Math.pow(lambda, k) /
+      factorial
+    );
+  };
 
   for (
     let home = 0;
@@ -1287,7 +1034,7 @@ function createModelInput(
       homeAttack +
       awayStats.avgGoalsAgainst
     ) /
-    2 *
+      2 *
     1.08;
 
   let awayXg =
@@ -1324,9 +1071,7 @@ async function getOdds(
   competitionCode,
   kickoff
 ) {
-  if (
-    !ODDS_API_KEY
-  ) {
+  if (!ODDS_API_KEY) {
     return {
       available: false,
       reason:
@@ -1351,40 +1096,25 @@ async function getOdds(
     `odds:${sport}:${normalizeName(homeName)}:${normalizeName(awayName)}`;
 
   const cached =
-    cacheGet(
-      cacheKey
-    );
+    cacheGet(cacheKey);
 
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
 
   const url =
-    `${ODDS_BASE}/sports/${sport}/odds` +
-    `?regions=us,uk` +
-    `&markets=h2h,totals` +
-    `&oddsFormat=decimal` +
-    `&apiKey=${encodeURIComponent(
-      ODDS_API_KEY
-    )}`;
+    `${ODDS_BASE}/sports/${sport}/odds?regions=us,uk&markets=h2h,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(ODDS_API_KEY)}`;
 
   let data;
 
   try {
     data =
-      await fetchJson(
-        url
-      );
-  } catch (
-    error
-  ) {
+      await fetchJson(url);
+  } catch (error) {
     return {
       available: false,
       reason:
         error.message,
       errorStatus:
-        error.status ||
-        null
+        error.status || null
     };
   }
 
@@ -1406,8 +1136,7 @@ async function getOdds(
         )
     );
 
-  let reversed =
-    false;
+  let reversed = false;
 
   if (!event) {
     event =
@@ -1511,12 +1240,9 @@ async function getOdds(
     );
 
   const result = {
-    available:
-      true,
-
+    available: true,
     eventId:
-      event.id ||
-      null,
+      event.id || null,
 
     commenceTime:
       event.commence_time ||
@@ -1557,18 +1283,9 @@ function marketHtml(
   market
 ) {
   const evMarket =
-    market.referenceEvPct ==
-    null
+    market.referenceEvPct == null
       ? '-'
-      : `${
-          market.referenceEvPct >= 0
-            ? '+'
-            : ''
-        }${
-          market.referenceEvPct.toFixed(
-            1
-          )
-        }%`;
+      : `${market.referenceEvPct >= 0 ? '+' : ''}${market.referenceEvPct.toFixed(1)}%`;
 
   return `<div class="market"><div class="market-top"><strong>${market.name}</strong><span>${formatPct(market.probability)}</span></div><div class="market-details"><span>Mejor cuota: <b>${market.bestOdds ? market.bestOdds.toFixed(2) : '-'}</b></span><span>Mercado: <b>${market.referenceOdds ? market.referenceOdds.toFixed(2) : '-'}</b></span><span>EV mercado: <b>${evMarket}</b></span><span>Casas: <b>${market.bookmakerCount}</b></span></div>${market.isOutlier ? '<div class="warning">⚠️ Precio atípico · excluido de Value Pick</div>' : ''}</div>`;
 }
@@ -1582,9 +1299,7 @@ function renderPage() {
 <title>Pronóstico Deportivo V7.6.1</title>
 
 <style>
-*{
-  box-sizing:border-box
-}
+*{box-sizing:border-box}
 
 body{
   margin:0;
@@ -1593,8 +1308,7 @@ body{
   color:#f5f7fa
 }
 
-button,
-input{
+button,input{
   font:inherit
 }
 
@@ -1624,8 +1338,7 @@ h1{
   line-height:1.05
 }
 
-.subtitle,
-.muted{
+.subtitle,.muted{
   color:#9da5b2;
   font-size:15px
 }
@@ -1683,6 +1396,18 @@ input{
   cursor:pointer
 }
 
+.secondary{
+  width:100%;
+  border:1px solid #303846;
+  border-radius:13px;
+  padding:13px;
+  background:#151a22;
+  color:#fff;
+  font-weight:800;
+  cursor:pointer;
+  margin-top:8px
+}
+
 .result{
   display:none
 }
@@ -1715,30 +1440,26 @@ input{
   color:#9da5b2
 }
 
-.prob-grid,
-.xg-grid{
+.prob-grid,.xg-grid{
   display:grid;
   grid-template-columns:repeat(3,1fr);
   gap:8px
 }
 
-.prob,
-.xg{
+.prob,.xg{
   background:#090d13;
   border-radius:12px;
   padding:12px 8px;
   text-align:center
 }
 
-.prob span,
-.xg span{
+.prob span,.xg span{
   display:block;
   color:#8e97a5;
   font-size:11px
 }
 
-.prob b,
-.xg b{
+.prob b,.xg b{
   font-size:20px
 }
 
@@ -1821,6 +1542,126 @@ input{
 .nav strong{
   color:white
 }
+
+.fixture-list{
+  margin-top:14px
+}
+
+.fixture{
+  background:#090d13;
+  border:1px solid #252c37;
+  border-radius:15px;
+  padding:14px;
+  margin-bottom:9px
+}
+
+.fixture-head{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  align-items:flex-start
+}
+
+.fixture-teams{
+  font-size:16px;
+  font-weight:800;
+  line-height:1.3
+}
+
+.fixture-meta{
+  color:#8e97a5;
+  font-size:12px;
+  margin-top:5px
+}
+
+.analyze-small{
+  border:0;
+  border-radius:10px;
+  padding:9px 11px;
+  background:#f4f5f7;
+  color:#080b10;
+  font-size:11px;
+  font-weight:900;
+  white-space:nowrap;
+  cursor:pointer
+}
+
+.analysis-panel{
+  display:none;
+  margin-top:12px;
+  border-top:1px solid #252c37;
+  padding-top:12px
+}
+
+.analysis-panel.open{
+  display:block
+}
+
+.analysis-close{
+  width:100%;
+  border:1px solid #303846;
+  border-radius:10px;
+  padding:10px;
+  background:#151a22;
+  color:#fff;
+  font-weight:800;
+  cursor:pointer;
+  margin-bottom:10px
+}
+
+.analysis-loading{
+  text-align:center;
+  color:#9da5b2;
+  padding:18px 5px
+}
+
+.analysis-error{
+  color:#ff7b72;
+  background:#1b1012;
+  border-radius:10px;
+  padding:11px;
+  font-size:13px
+}
+
+.analysis-content{
+  display:none
+}
+
+.analysis-content.show{
+  display:block
+}
+
+.section-label{
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:1px;
+  color:#929ba9;
+  margin:14px 0 8px
+}
+
+.fixture-decision{
+  text-align:center;
+  background:#10151d;
+  border-radius:13px;
+  padding:14px
+}
+
+.fixture-decision h3{
+  margin:6px 0;
+  font-size:24px
+}
+
+.empty{
+  text-align:center;
+  color:#9da5b2;
+  padding:22px 8px
+}
+
+.search-summary{
+  color:#9da5b2;
+  font-size:13px;
+  margin-top:10px
+}
 </style>
 </head>
 
@@ -1875,230 +1716,59 @@ Modelo estadístico + xG + forma + cuotas reales + filtro de valor.
 <section class="card">
 
 <div class="card-title">
-Partido
+Buscar partidos por fecha
 </div>
 
 <input
-  id="home"
-  placeholder="Equipo local"
-  autocomplete="off"
->
-
-<input
-  id="away"
-  placeholder="Equipo visitante"
-  autocomplete="off"
->
-
-<input
-  id="date"
-  type="date"
+id="date"
+type="date"
 >
 
 <button
-  class="primary"
-  id="analyzeBtn"
-  onclick="analyze()"
+class="primary"
+id="searchBtn"
+onclick="searchFixtures()"
 >
-🧠 ANALIZAR CON V7.6.1
+🔎 BUSCAR PARTIDOS
 </button>
 
+<div
+id="searchSummary"
+class="search-summary"
+></div>
+
 </section>
 
 <div
-  id="loading"
-  class="loading"
-  style="display:none"
+id="loading"
+class="loading"
+style="display:none"
 >
-Analizando partido...
+Buscando partidos...
 </div>
 
 <div
-  id="error"
-  class="card error"
-  style="display:none"
+id="error"
+class="card error"
+style="display:none"
 ></div>
 
-<main
-  id="result"
-  class="result"
+<section
+id="fixturesCard"
+class="card"
+style="display:none"
 >
 
-<section class="card decision">
-
 <div class="card-title">
-Decisión del modelo
-</div>
-
-<h2 id="decision"></h2>
-
-<div
-  id="decisionText"
-  class="muted"
-></div>
-
-</section>
-
-<section class="card">
-
-<div class="card-title">
-🎯 Marcador más probable
+Partidos de la fecha
 </div>
 
 <div
-  id="teams"
-  class="muted"
-></div>
-
-<div
-  id="score"
-  class="score"
-></div>
-
-<div
-  id="scoreProb"
-  class="scoreProb"
+id="fixtureList"
+class="fixture-list"
 ></div>
 
 </section>
-
-<section class="card">
-
-<div class="card-title">
-📊 Probabilidades
-</div>
-
-<div class="prob-grid">
-
-<div class="prob">
-<span>🏠 LOCAL</span>
-<b id="homeProb">-</b>
-</div>
-
-<div class="prob">
-<span>🤝 EMPATE</span>
-<b id="drawProb">-</b>
-</div>
-
-<div class="prob">
-<span>✈️ VISITANTE</span>
-<b id="awayProb">-</b>
-</div>
-
-</div>
-
-<br>
-
-<div class="prob-grid">
-
-<div class="prob">
-<span>OVER 2.5</span>
-<b id="overProb">-</b>
-</div>
-
-<div class="prob">
-<span>UNDER 2.5</span>
-<b id="underProb">-</b>
-</div>
-
-<div class="prob">
-<span>BTTS</span>
-<b id="bttsProb">-</b>
-</div>
-
-</div>
-
-</section>
-
-<section class="card">
-
-<div class="card-title">
-⚽ Goles esperados · xG
-</div>
-
-<div class="xg-grid">
-
-<div class="xg">
-<span>LOCAL</span>
-<b id="homeXg">-</b>
-</div>
-
-<div class="xg">
-<span>VISITANTE</span>
-<b id="awayXg">-</b>
-</div>
-
-<div class="xg">
-<span>TOTAL</span>
-<b id="totalXg">-</b>
-</div>
-
-</div>
-
-</section>
-
-<section class="card">
-
-<div class="card-title">
-🎯 Confianza del análisis
-</div>
-
-<h2 id="confidenceLevel"></h2>
-
-<div class="muted">
-Puntuación técnica:
-<b id="confidenceScore"></b>
-/ 100
-</div>
-
-<p
-  id="confidenceExplanation"
-  class="muted"
-></p>
-
-</section>
-
-<section class="card">
-
-<div class="card-title">
-💪 Fuerza reciente
-</div>
-
-<div id="form"></div>
-
-</section>
-
-<section class="card">
-
-<div class="card-title">
-💰 Cuotas reales
-</div>
-
-<div id="markets"></div>
-
-</section>
-
-<section class="card">
-
-<div class="card-title">
-🛡️ Value Pick
-</div>
-
-<div id="value"></div>
-
-</section>
-
-<section class="card">
-
-<div class="card-title">
-⚠️ Revisión de valor
-</div>
-
-<div id="alert"></div>
-
-</section>
-
-</main>
 
 </div>
 
@@ -2125,76 +1795,168 @@ Value
 
 <script>
 
+function esc(value){
+  return String(
+    value === null ||
+    value === undefined
+      ? ''
+      : value
+  )
+  .replace(/&/g,'&amp;')
+  .replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;')
+  .replace(/"/g,'&quot;')
+  .replace(/'/g,'&#039;');
+}
+
 function pctText(value){
   return value === null ||
     value === undefined
-      ? '-'
-      : Number(value).toFixed(1) + '%';
+    ? '-'
+    : Number(value).toFixed(1) + '%';
 }
 
 function moneyPct(value){
-  if (
+  if(
     value === null ||
     value === undefined
-  ) {
+  ){
     return '-';
   }
 
-  const n =
-    Number(value);
+  const n = Number(value);
 
   return (
-    n >= 0
-      ? '+'
-      : ''
+    n >= 0 ? '+' : ''
   ) +
   n.toFixed(1) +
   '%';
 }
 
-async function analyze(){
+function localDateValue(){
 
-  const home =
-    document
-      .getElementById('home')
-      .value
-      .trim();
+  const d =
+    new Date();
 
-  const away =
-    document
-      .getElementById('away')
-      .value
-      .trim();
+  const offset =
+    d.getTimezoneOffset();
+
+  return new Date(
+    d.getTime() -
+    offset * 60000
+  )
+  .toISOString()
+  .slice(0,10);
+}
+
+function formatTime(value){
+
+  if(!value){
+    return '--:--';
+  }
+
+  const d =
+    new Date(value);
+
+  if(
+    Number.isNaN(
+      d.getTime()
+    )
+  ){
+    return '--:--';
+  }
+
+  return d.toLocaleTimeString(
+    'es-MX',
+    {
+      hour:'2-digit',
+      minute:'2-digit'
+    }
+  );
+}
+
+function formatDate(value){
+
+  if(!value){
+    return '';
+  }
+
+  const parts =
+    value.split('-');
+
+  return parts.length === 3
+    ? parts[2] +
+      '/' +
+      parts[1] +
+      '/' +
+      parts[0]
+    : value;
+}
+
+function closeAllPanels(
+  exceptId
+){
+
+  document
+    .querySelectorAll(
+      '.analysis-panel.open'
+    )
+    .forEach(
+      function(panel){
+
+        if(
+          panel.id !==
+          exceptId
+        ){
+          panel.classList
+            .remove('open');
+        }
+
+      }
+    );
+}
+
+async function searchFixtures(){
 
   const date =
-    document
-      .getElementById('date')
-      .value;
+    document.getElementById(
+      'date'
+    ).value;
 
   const loading =
-    document
-      .getElementById('loading');
+    document.getElementById(
+      'loading'
+    );
 
   const error =
-    document
-      .getElementById('error');
+    document.getElementById(
+      'error'
+    );
 
-  const result =
-    document
-      .getElementById('result');
+  const card =
+    document.getElementById(
+      'fixturesCard'
+    );
 
-  if (
-    !home ||
-    !away
-  ) {
+  const list =
+    document.getElementById(
+      'fixtureList'
+    );
+
+  const summary =
+    document.getElementById(
+      'searchSummary'
+    );
+
+  if(!date){
 
     error.style.display =
       'block';
 
     error.textContent =
-      'Escribe el equipo local y el visitante.';
+      'Selecciona una fecha.';
 
-    result.style.display =
+    card.style.display =
       'none';
 
     return;
@@ -2203,21 +1965,249 @@ async function analyze(){
   error.style.display =
     'none';
 
-  result.style.display =
+  card.style.display =
     'none';
 
   loading.style.display =
     'block';
 
-  try {
+  list.innerHTML =
+    '';
+
+  summary.textContent =
+    '';
+
+  try{
+
+    const response =
+      await fetch(
+        '/api/fixtures?date=' +
+        encodeURIComponent(date),
+        {
+          cache:'no-store'
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if(
+      !response.ok ||
+      !data.ok
+    ){
+      throw new Error(
+        data.error ||
+        data.message ||
+        'No se pudieron cargar los partidos.'
+      );
+    }
+
+    if(
+      !data.fixtures.length
+    ){
+
+      summary.textContent =
+        'No se encontraron partidos para ' +
+        formatDate(date) +
+        '.';
+
+      card.style.display =
+        'block';
+
+      list.innerHTML =
+        '<div class="empty">No hay partidos disponibles para esta fecha en las competiciones configuradas.</div>';
+
+      return;
+    }
+
+    summary.textContent =
+      data.fixtures.length +
+      ' partido' +
+      (
+        data.fixtures.length === 1
+          ? ''
+          : 's'
+      ) +
+      ' encontrado' +
+      (
+        data.fixtures.length === 1
+          ? ''
+          : 's'
+      ) +
+      '.';
+
+    card.style.display =
+      'block';
+
+    list.innerHTML =
+      data.fixtures
+        .map(
+          function(f,index){
+            return fixtureHtml(
+              f,
+              index,
+              date
+            );
+          }
+        )
+        .join('');
+
+  }catch(err){
+
+    error.style.display =
+      'block';
+
+    error.textContent =
+      err.message ||
+      'Error al buscar partidos.';
+
+  }finally{
+
+    loading.style.display =
+      'none';
+
+  }
+}
+
+function fixtureHtml(
+  f,
+  index,
+  date
+){
+
+  const panelId =
+    'analysis-' +
+    index +
+    '-' +
+    String(
+      f.id ||
+      index
+    );
+
+  return (
+    '<article class="fixture">' +
+
+      '<div class="fixture-head">' +
+
+        '<div>' +
+
+          '<div class="fixture-teams">' +
+            '⚽ ' +
+            esc(f.home) +
+            ' vs ' +
+            esc(f.away) +
+          '</div>' +
+
+          '<div class="fixture-meta">' +
+            '🕐 ' +
+            formatTime(f.kickoff) +
+            ' · 🏆 ' +
+            esc(
+              f.competition ||
+              'Competición'
+            ) +
+          '</div>' +
+
+        '</div>' +
+
+        '<button class="analyze-small" onclick="openAnalysis(' +
+          JSON.stringify(panelId) +
+          ',' +
+          JSON.stringify(f.home) +
+          ',' +
+          JSON.stringify(f.away) +
+          ',' +
+          JSON.stringify(date) +
+        ')">' +
+          '🧠 ANALIZAR' +
+        '</button>' +
+
+      '</div>' +
+
+      '<div id="' +
+        esc(panelId) +
+        '" class="analysis-panel">' +
+
+        '<button class="analysis-close" onclick="closeAnalysis(' +
+          JSON.stringify(panelId) +
+        ')">' +
+          '▲ CERRAR ANÁLISIS' +
+        '</button>' +
+
+        '<div id="' +
+          esc(panelId) +
+          '-loading" class="analysis-loading">' +
+          'Analizando partido...' +
+        '</div>' +
+
+        '<div id="' +
+          esc(panelId) +
+          '-error" class="analysis-error" style="display:none"></div>' +
+
+        '<div id="' +
+          esc(panelId) +
+          '-content" class="analysis-content"></div>' +
+
+      '</div>' +
+
+    '</article>'
+  );
+}
+
+async function openAnalysis(
+  panelId,
+  home,
+  away,
+  date
+){
+
+  closeAllPanels(
+    panelId
+  );
+
+  const panel =
+    document.getElementById(
+      panelId
+    );
+
+  panel.classList.add(
+    'open'
+  );
+
+  const loading =
+    document.getElementById(
+      panelId +
+      '-loading'
+    );
+
+  const error =
+    document.getElementById(
+      panelId +
+      '-error'
+    );
+
+  const content =
+    document.getElementById(
+      panelId +
+      '-content'
+    );
+
+  loading.style.display =
+    'block';
+
+  error.style.display =
+    'none';
+
+  content.classList
+    .remove('show');
+
+  try{
 
     const params =
       new URLSearchParams({
-        home,
-        away,
-        ...(date
-          ? { date }
-          : {})
+        home:home,
+        away:away,
+        date:date
       });
 
     const response =
@@ -2225,33 +2215,35 @@ async function analyze(){
         '/api/analyze?' +
         params.toString(),
         {
-          cache:
-            'no-store'
+          cache:'no-store'
         }
       );
 
     const data =
       await response.json();
 
-    if (
+    if(
       !response.ok ||
       !data.ok
-    ) {
+    ){
       throw new Error(
-        data.message ||
         data.error ||
+        data.message ||
         'No se pudo analizar el partido.'
       );
     }
 
-    render(data);
+    content.innerHTML =
+      analysisHtml(
+        data,
+        panelId
+      );
 
-    result.style.display =
-      'block';
+    content.classList.add(
+      'show'
+    );
 
-  } catch (
-    err
-  ) {
+  }catch(err){
 
     error.style.display =
       'block';
@@ -2260,7 +2252,7 @@ async function analyze(){
       err.message ||
       'Error de análisis.';
 
-  } finally {
+  }finally{
 
     loading.style.display =
       'none';
@@ -2268,363 +2260,481 @@ async function analyze(){
   }
 }
 
-function render(data){
+function closeAnalysis(
+  panelId
+){
 
-  const decision =
+  const panel =
     document.getElementById(
-      'decision'
+      panelId
     );
 
-  decision.textContent =
-    data.recommendation ||
-    'NO BET';
+  if(panel){
+    panel.classList
+      .remove('open');
+  }
+}
 
-  decision.className =
+function analysisHtml(
+  data,
+  panelId
+){
+
+  const decisionClass =
     data.betEligible
       ? 'bet'
       : 'noBet';
 
-  document.getElementById(
-    'decisionText'
-  ).textContent =
-    data.reason ||
-    '';
-
-  document.getElementById(
-    'teams'
-  ).textContent =
-    (
-      data.match?.home ||
-      ''
-    ) +
-    ' vs ' +
-    (
-      data.match?.away ||
-      ''
-    );
-
-  document.getElementById(
-    'score'
-  ).textContent =
-    data.mostLikelyScore?.score ||
-    '-';
-
-  document.getElementById(
-    'scoreProb'
-  ).textContent =
-    'Probabilidad estimada: ' +
-    pctText(
-      data.mostLikelyScore?.probability
-    );
-
-  document.getElementById(
-    'homeProb'
-  ).textContent =
-    pctText(
-      data.probabilities?.homeWin
-    );
-
-  document.getElementById(
-    'drawProb'
-  ).textContent =
-    pctText(
-      data.probabilities?.draw
-    );
-
-  document.getElementById(
-    'awayProb'
-  ).textContent =
-    pctText(
-      data.probabilities?.awayWin
-    );
-
-  document.getElementById(
-    'overProb'
-  ).textContent =
-    pctText(
-      data.probabilities?.over25
-    );
-
-  document.getElementById(
-    'underProb'
-  ).textContent =
-    pctText(
-      data.probabilities?.under25
-    );
-
-  document.getElementById(
-    'bttsProb'
-  ).textContent =
-    pctText(
-      data.probabilities?.btts
-    );
-
-  document.getElementById(
-    'homeXg'
-  ).textContent =
-    Number(
-      data.xG?.home ||
-      0
-    ).toFixed(2);
-
-  document.getElementById(
-    'awayXg'
-  ).textContent =
-    Number(
-      data.xG?.away ||
-      0
-    ).toFixed(2);
-
-  document.getElementById(
-    'totalXg'
-  ).textContent =
-    Number(
-      data.xG?.total ||
-      0
-    ).toFixed(2);
-
-  document.getElementById(
-    'confidenceLevel'
-  ).textContent =
-    data.confidenceLevel ||
-    '-';
-
-  document.getElementById(
-    'confidenceScore'
-  ).textContent =
-    data.confidence ??
-    '-';
-
-  document.getElementById(
-    'confidenceExplanation'
-  ).textContent =
-    data.confidenceExplanation ||
-    '';
-
   const local =
-    data.recentForm?.home;
+    data.recentForm &&
+    data.recentForm.home;
 
   const visitor =
-    data.recentForm?.away;
+    data.recentForm &&
+    data.recentForm.away;
 
-  document.getElementById(
-    'form'
-  ).innerHTML =
-    '<div class="market">' +
-    '<b>LOCAL · ATAQUE</b>' +
-    '<div class="muted">' +
-    Number(
-      local?.avgGoalsFor ||
-      0
-    ).toFixed(2) +
-    ' · Form ' +
-    pctText(
-      local?.formPct
-    ) +
-    '</div>' +
-    '</div>' +
+  let markets = '';
 
-    '<div class="market">' +
-    '<b>VISITANTE · ATAQUE</b>' +
-    '<div class="muted">' +
-    Number(
-      visitor?.avgGoalsFor ||
-      0
-    ).toFixed(2) +
-    ' · Form ' +
-    pctText(
-      visitor?.formPct
-    ) +
-    '</div>' +
-    '</div>';
-
-  const markets =
-    document.getElementById(
-      'markets'
-    );
-
-  if (
+  if(
     !data.oddsAvailable
-  ) {
+  ){
 
-    markets.innerHTML =
-      '<div class="muted">' +
-      'Cuotas reales no disponibles.' +
-      '</div>';
+    markets =
+      '<div class="muted">Cuotas reales no disponibles.</div>';
 
-  } else {
+  }else{
 
-    markets.innerHTML =
-      (
-        data.markets ||
-        []
-      )
-      .map(
-        marketHtmlClient
-      )
-      .join('');
-
+    markets =
+      (data.markets || [])
+        .map(
+          marketHtmlClient
+        )
+        .join('');
   }
 
-  const value =
-    document.getElementById(
-      'value'
-    );
+  let value = '';
 
-  if (
-    data.bestValue
-  ) {
+  if(data.bestValue){
 
     const v =
       data.bestValue;
 
-    value.innerHTML =
+    value =
       '<div class="value-box">' +
 
-      '<h3>💰 ' +
-      v.name +
-      '</h3>' +
+        '<h3>💰 ' +
+          esc(v.name) +
+        '</h3>' +
 
-      '<div class="muted">' +
-      'Probabilidad modelo: ' +
-      '<b>' +
-      pctText(
-        v.probability
-      ) +
-      '</b>' +
-      '</div>' +
+        '<div class="muted">' +
+          'Probabilidad modelo: ' +
+          '<b>' +
+            pctText(v.probability) +
+          '</b>' +
+        '</div>' +
 
-      '<div class="muted">' +
-      'Mejor cuota: ' +
-      '<b>' +
-      (
-        v.bestOdds?.toFixed(2) ||
-        '-'
-      ) +
-      '</b>' +
-      '</div>' +
+        '<div class="muted">' +
+          'Mejor cuota: ' +
+          '<b>' +
+            (
+              v.bestOdds
+                ? Number(
+                    v.bestOdds
+                  ).toFixed(2)
+                : '-'
+            ) +
+          '</b>' +
+        '</div>' +
 
-      '<div class="muted">' +
-      'Cuota mercado: ' +
-      '<b>' +
-      (
-        v.referenceOdds?.toFixed(2) ||
-        '-'
-      ) +
-      '</b>' +
-      '</div>' +
+        '<div class="muted">' +
+          'Cuota mercado: ' +
+          '<b>' +
+            (
+              v.referenceOdds
+                ? Number(
+                    v.referenceOdds
+                  ).toFixed(2)
+                : '-'
+            ) +
+          '</b>' +
+        '</div>' +
 
-      '<div class="muted">' +
-      'EV mercado: ' +
-      '<b>' +
-      moneyPct(
-        v.referenceEvPct
-      ) +
-      '</b>' +
-      '</div>' +
+        '<div class="muted">' +
+          'EV mercado: ' +
+          '<b>' +
+            moneyPct(
+              v.referenceEvPct
+            ) +
+          '</b>' +
+        '</div>' +
 
-      '<div class="muted">' +
-      'EV mejor cuota: ' +
-      '<b>' +
-      moneyPct(
-        v.bestEvPct
-      ) +
-      '</b>' +
-      '</div>' +
+        '<div class="muted">' +
+          'EV mejor cuota: ' +
+          '<b>' +
+            moneyPct(
+              v.bestEvPct
+            ) +
+          '</b>' +
+        '</div>' +
 
-      '<div class="muted">' +
-      (
-        v.bookmaker ||
-        'Casa no disponible'
-      ) +
-      ' · ' +
-      v.bookmakerCount +
-      ' casas' +
-      '</div>' +
+        '<div class="muted">' +
+          esc(
+            v.bookmaker ||
+            'Casa no disponible'
+          ) +
+          ' · ' +
+          v.bookmakerCount +
+          ' casas' +
+        '</div>' +
 
       '</div>';
 
-  } else {
+  }else{
 
-    value.innerHTML =
+    value =
       '<div class="value-box">' +
 
-      '<h3>🚫 SIN VALUE PICK</h3>' +
+        '<h3>🚫 SIN VALUE PICK</h3>' +
 
-      '<div class="muted">' +
-      'No existe una oportunidad que cumpla simultáneamente los filtros de probabilidad, EV, confianza, respaldo de mercado y control de outliers.' +
-      '</div>' +
+        '<div class="muted">' +
+          'No existe una oportunidad que cumpla simultáneamente los filtros de probabilidad, EV, confianza, respaldo de mercado y control de outliers.' +
+        '</div>' +
 
       '</div>';
-
   }
 
-  const alert =
-    document.getElementById(
-      'alert'
-    );
+  let alert = '';
 
-  if (
-    data.valueAlert
-  ) {
+  if(data.valueAlert){
 
     const a =
       data.valueAlert;
 
-    alert.innerHTML =
+    alert =
       '<div class="value-box">' +
 
-      '<h3>' +
-      (
-        a.type ===
-        'outlier'
-          ? '🟠 PRECIO ATÍPICO'
-          : '📊 REVISIÓN'
-      ) +
+        '<h3>' +
+          (
+            a.type === 'outlier'
+              ? '🟠 PRECIO ATÍPICO'
+              : '📊 REVISIÓN'
+          ) +
+        '</h3>' +
+
+        '<div>' +
+          '<b>' +
+            esc(a.market) +
+          '</b>' +
+        '</div>' +
+
+        '<div class="muted">' +
+          'Mejor cuota: ' +
+          (
+            a.odds
+              ? Number(
+                  a.odds
+                ).toFixed(2)
+              : '-'
+          ) +
+        '</div>' +
+
+        '<div class="muted">' +
+          'Cuota de mercado: ' +
+          (
+            a.referenceOdds
+              ? Number(
+                  a.referenceOdds
+                ).toFixed(2)
+              : '-'
+          ) +
+        '</div>' +
+
+        '<p class="muted">' +
+          esc(a.message) +
+        '</p>' +
+
+      '</div>';
+
+  }else{
+
+    alert =
+      '<div class="muted">' +
+        'No se detectaron anomalías relevantes.' +
+      '</div>';
+  }
+
+  return (
+
+    '<div class="fixture-decision">' +
+
+      '<div class="section-label">' +
+        'Decisión del modelo' +
+      '</div>' +
+
+      '<h3 class="' +
+        decisionClass +
+      '">' +
+        esc(
+          data.recommendation ||
+          'NO BET'
+        ) +
       '</h3>' +
 
-      '<div>' +
-      '<b>' +
-      a.market +
-      '</b>' +
+      '<div class="muted">' +
+        esc(
+          data.reason ||
+          ''
+        ) +
+      '</div>' +
+
+    '</div>' +
+
+    '<div class="section-label">' +
+      '🎯 Marcador más probable' +
+    '</div>' +
+
+    '<div class="market">' +
+
+      '<div class="fixture-teams">' +
+        esc(
+          data.match &&
+          data.match.home ||
+          ''
+        ) +
+        ' vs ' +
+        esc(
+          data.match &&
+          data.match.away ||
+          ''
+        ) +
+      '</div>' +
+
+      '<div class="score">' +
+        esc(
+          data.mostLikelyScore &&
+          data.mostLikelyScore.score ||
+          '-'
+        ) +
+      '</div>' +
+
+      '<div class="scoreProb">' +
+        'Probabilidad estimada: ' +
+        pctText(
+          data.mostLikelyScore &&
+          data.mostLikelyScore.probability
+        ) +
+      '</div>' +
+
+    '</div>' +
+
+    '<div class="section-label">' +
+      '📊 Probabilidades' +
+    '</div>' +
+
+    '<div class="prob-grid">' +
+
+      '<div class="prob">' +
+        '<span>🏠 LOCAL</span>' +
+        '<b>' +
+          pctText(
+            data.probabilities &&
+            data.probabilities.homeWin
+          ) +
+        '</b>' +
+      '</div>' +
+
+      '<div class="prob">' +
+        '<span>🤝 EMPATE</span>' +
+        '<b>' +
+          pctText(
+            data.probabilities &&
+            data.probabilities.draw
+          ) +
+        '</b>' +
+      '</div>' +
+
+      '<div class="prob">' +
+        '<span>✈️ VISITANTE</span>' +
+        '<b>' +
+          pctText(
+            data.probabilities &&
+            data.probabilities.awayWin
+          ) +
+        '</b>' +
+      '</div>' +
+
+    '</div>' +
+
+    '<br>' +
+
+    '<div class="prob-grid">' +
+
+      '<div class="prob">' +
+        '<span>OVER 2.5</span>' +
+        '<b>' +
+          pctText(
+            data.probabilities &&
+            data.probabilities.over25
+          ) +
+        '</b>' +
+      '</div>' +
+
+      '<div class="prob">' +
+        '<span>UNDER 2.5</span>' +
+        '<b>' +
+          pctText(
+            data.probabilities &&
+            data.probabilities.under25
+          ) +
+        '</b>' +
+      '</div>' +
+
+      '<div class="prob">' +
+        '<span>BTTS</span>' +
+        '<b>' +
+          pctText(
+            data.probabilities &&
+            data.probabilities.btts
+          ) +
+        '</b>' +
+      '</div>' +
+
+    '</div>' +
+
+    '<div class="section-label">' +
+      '⚽ Goles esperados · xG' +
+    '</div>' +
+
+    '<div class="xg-grid">' +
+
+      '<div class="xg">' +
+        '<span>LOCAL</span>' +
+        '<b>' +
+          Number(
+            data.xG &&
+            data.xG.home ||
+            0
+          ).toFixed(2) +
+        '</b>' +
+      '</div>' +
+
+      '<div class="xg">' +
+        '<span>VISITANTE</span>' +
+        '<b>' +
+          Number(
+            data.xG &&
+            data.xG.away ||
+            0
+          ).toFixed(2) +
+        '</b>' +
+      '</div>' +
+
+      '<div class="xg">' +
+        '<span>TOTAL</span>' +
+        '<b>' +
+          Number(
+            data.xG &&
+            data.xG.total ||
+            0
+          ).toFixed(2) +
+        '</b>' +
+      '</div>' +
+
+    '</div>' +
+
+    '<div class="section-label">' +
+      '🎯 Confianza del análisis' +
+    '</div>' +
+
+    '<div class="market">' +
+
+      '<div class="fixture-teams">' +
+        esc(
+          data.confidenceLevel ||
+          '-'
+        ) +
       '</div>' +
 
       '<div class="muted">' +
-      'Mejor cuota: ' +
-      (
-        a.odds
-          ? Number(
-              a.odds
-            ).toFixed(2)
-          : '-'
-      ) +
+        'Puntuación técnica: ' +
+        '<b>' +
+          esc(
+            data.confidence ??
+            '-'
+          ) +
+          ' / 100' +
+        '</b>' +
       '</div>' +
 
       '<div class="muted">' +
-      'Cuota de mercado: ' +
-      (
-        a.referenceOdds
-          ? Number(
-              a.referenceOdds
-            ).toFixed(2)
-          : '-'
-      ) +
+        esc(
+          data.confidenceExplanation ||
+          ''
+        ) +
       '</div>' +
 
-      '<p class="muted">' +
-      a.message +
-      '</p>' +
+    '</div>' +
 
-      '</div>';
+    '<div class="section-label">' +
+      '💪 Fuerza reciente' +
+    '</div>' +
 
-  } else {
+    '<div class="market">' +
 
-    alert.innerHTML =
+      '<b>LOCAL · ATAQUE</b>' +
+
       '<div class="muted">' +
-      'No se detectaron anomalías relevantes.' +
-      '</div>';
+        Number(
+          local &&
+          local.avgGoalsFor ||
+          0
+        ).toFixed(2) +
+        ' · Form ' +
+        pctText(
+          local &&
+          local.formPct
+        ) +
+      '</div>' +
 
-  }
+    '</div>' +
+
+    '<div class="market">' +
+
+      '<b>VISITANTE · ATAQUE</b>' +
+
+      '<div class="muted">' +
+        Number(
+          visitor &&
+          visitor.avgGoalsFor ||
+          0
+        ).toFixed(2) +
+        ' · Form ' +
+        pctText(
+          visitor &&
+          visitor.formPct
+        ) +
+      '</div>' +
+
+    '</div>' +
+
+    '<div class="section-label">' +
+      '💰 Cuotas reales' +
+    '</div>' +
+
+    markets +
+
+    '<div class="section-label">' +
+      '🛡️ Value Pick' +
+    '</div>' +
+
+    value +
+
+    '<div class="section-label">' +
+      '⚠️ Revisión de valor' +
+    '</div>' +
+
+    alert
+  );
 }
 
 function marketHtmlClient(
@@ -2632,8 +2742,7 @@ function marketHtmlClient(
 ){
 
   const evMarket =
-    m.referenceEvPct ==
-    null
+    m.referenceEvPct == null
       ? '-'
       : (
           m.referenceEvPct >= 0
@@ -2646,90 +2755,81 @@ function marketHtmlClient(
         '%';
 
   return (
+
     '<div class="market">' +
 
-    '<div class="market-top">' +
+      '<div class="market-top">' +
 
-    '<strong>' +
-    m.name +
-    '</strong>' +
+        '<strong>' +
+          esc(m.name) +
+        '</strong>' +
 
-    '<span>' +
-    pctText(
-      m.probability
-    ) +
-    '</span>' +
+        '<span>' +
+          pctText(
+            m.probability
+          ) +
+        '</span>' +
 
-    '</div>' +
+      '</div>' +
 
-    '<div class="market-details">' +
+      '<div class="market-details">' +
 
-    '<span>' +
-    'Mejor cuota: ' +
-    '<b>' +
-    (
-      m.bestOdds
-        ? Number(
-            m.bestOdds
-          ).toFixed(2)
-        : '-'
-    ) +
-    '</b>' +
-    '</span>' +
+        '<span>' +
+          'Mejor cuota: ' +
+          '<b>' +
+            (
+              m.bestOdds
+                ? Number(
+                    m.bestOdds
+                  ).toFixed(2)
+                : '-'
+            ) +
+          '</b>' +
+        '</span>' +
 
-    '<span>' +
-    'Mercado: ' +
-    '<b>' +
-    (
-      m.referenceOdds
-        ? Number(
-            m.referenceOdds
-          ).toFixed(2)
-        : '-'
-    ) +
-    '</b>' +
-    '</span>' +
+        '<span>' +
+          'Mercado: ' +
+          '<b>' +
+            (
+              m.referenceOdds
+                ? Number(
+                    m.referenceOdds
+                  ).toFixed(2)
+                : '-'
+            ) +
+          '</b>' +
+        '</span>' +
 
-    '<span>' +
-    'EV mercado: ' +
-    '<b>' +
-    evMarket +
-    '</b>' +
-    '</span>' +
+        '<span>' +
+          'EV mercado: ' +
+          '<b>' +
+            evMarket +
+          '</b>' +
+        '</span>' +
 
-    '<span>' +
-    'Casas: ' +
-    '<b>' +
-    m.bookmakerCount +
-    '</b>' +
-    '</span>' +
+        '<span>' +
+          'Casas: ' +
+          '<b>' +
+            m.bookmakerCount +
+          '</b>' +
+        '</span>' +
 
-    '</div>' +
+      '</div>' +
 
-    (
-      m.isOutlier
-        ? '<div class="warning">' +
-          '⚠️ Precio atípico · excluido de Value Pick' +
-          '</div>'
-        : ''
-    ) +
+      (
+        m.isOutlier
+          ? '<div class="warning">⚠️ Precio atípico · excluido de Value Pick</div>'
+          : ''
+      ) +
 
     '</div>'
   );
 }
 
-const dateInput =
-  document.getElementById(
-    'date'
-  );
-
-dateInput.value =
-  new Date()
-    .toISOString()
-    .slice(
-      0,
-      10
-    );
+document.getElementById(
+  'date'
+).value =
+  localDateValue();
 
 </script>
 
@@ -2739,10 +2839,7 @@ dateInput.value =
 
 app.get(
   '/api/status',
-  (
-    req,
-    res
-  ) => {
+  (req, res) => {
 
     res.json({
       ok: true,
@@ -2771,11 +2868,110 @@ app.get(
 );
 
 app.get(
+  '/api/fixtures',
+  async (req, res) => {
+
+    try {
+
+      const date =
+        String(
+          req.query.date ||
+          ''
+        ).trim() ||
+        new Date()
+          .toISOString()
+          .slice(0, 10);
+
+      const matches =
+        await getFixture(
+          date
+        );
+
+      const fixtures =
+        matches
+
+          .filter(
+            m =>
+              m?.homeTeam?.name &&
+              m?.awayTeam?.name
+          )
+
+          .sort(
+            (a, b) =>
+              String(
+                a?.utcDate || ''
+              ).localeCompare(
+                String(
+                  b?.utcDate || ''
+                )
+              )
+          )
+
+          .map(
+            m => ({
+              id:
+                m.id || null,
+
+              home:
+                m.homeTeam.name,
+
+              away:
+                m.awayTeam.name,
+
+              kickoff:
+                m.utcDate || null,
+
+              competition:
+                m.competition?.name ||
+                m.competitionCode ||
+                null,
+
+              competitionCode:
+                m.competitionCode ||
+                null,
+
+              status:
+                m.status ||
+                null
+            })
+          );
+
+      return res.json({
+        ok: true,
+        modelVersion:
+          MODEL_VERSION,
+        date,
+        count:
+          fixtures.length,
+        fixtures
+      });
+
+    } catch (error) {
+
+      console.error(
+        'FIXTURES ERROR:',
+        error
+      );
+
+      return res.status(
+        500
+      ).json({
+        ok: false,
+        error:
+          error.message ||
+          'Error al cargar los partidos.',
+        modelVersion:
+          MODEL_VERSION
+      });
+
+    }
+
+  }
+);
+
+app.get(
   '/api/analyze',
-  async (
-    req,
-    res
-  ) => {
+  async (req, res) => {
 
     try {
 
@@ -2798,24 +2994,20 @@ app.get(
         ).trim() ||
         new Date()
           .toISOString()
-          .slice(
-            0,
-            10
-          );
+          .slice(0, 10);
 
-      if (
+      if(
         !homeName ||
         !awayName
-      ) {
+      ){
 
-        return res
-          .status(400)
-          .json({
-            ok: false,
-
-            error:
-              'Debes proporcionar home y away.'
-          });
+        return res.status(
+          400
+        ).json({
+          ok: false,
+          error:
+            'Debes proporcionar home y away.'
+        });
 
       }
 
@@ -2828,7 +3020,7 @@ app.get(
           awayName
         );
 
-      if (!selected) {
+      if(!selected){
 
         const nextDate =
           new Date(
@@ -2836,17 +3028,13 @@ app.get(
           );
 
         nextDate.setDate(
-          nextDate.getDate() +
-          1
+          nextDate.getDate() + 1
         );
 
         const next =
           nextDate
             .toISOString()
-            .slice(
-              0,
-              10
-            );
+            .slice(0, 10);
 
         selected =
           selectFixture(
@@ -2857,24 +3045,20 @@ app.get(
             awayName
           );
 
-        if (
-          selected
-        ) {
-          date =
-            next;
+        if(selected){
+          date = next;
         }
       }
 
-      if (!selected) {
+      if(!selected){
 
-        return res
-          .status(404)
-          .json({
-            ok: false,
-
-            error:
-              'No se encontró el partido solicitado en las competiciones configuradas.'
-          });
+        return res.status(
+          404
+        ).json({
+          ok: false,
+          error:
+            'No se encontró el partido solicitado en las competiciones configuradas.'
+        });
 
       }
 
@@ -2899,7 +3083,6 @@ app.get(
           getTeamRecentMatches(
             homeId
           ),
-
           getTeamRecentMatches(
             awayId
           )
@@ -2975,6 +3158,7 @@ app.get(
               modelInput.awayXg,
 
             homeStats,
+
             awayStats,
 
             model
@@ -2988,8 +3172,7 @@ app.get(
             (
               homeStats.matches +
               awayStats.matches
-            ) /
-            20
+            ) / 20
           );
 
         const dominance =
@@ -3014,8 +3197,7 @@ app.get(
             Math.round(
               Number(
                 modelConfidence
-              ) ||
-              50
+              ) || 50
             )
           )
         );
@@ -3128,7 +3310,6 @@ app.get(
           MODEL_VERSION,
 
         match: {
-
           id:
             fixture.id ||
             null,
@@ -3149,7 +3330,6 @@ app.get(
             fixture.competition?.name ||
             fixture.competitionCode ||
             null
-
         },
 
         recommendation,
@@ -3163,19 +3343,16 @@ app.get(
           'Sin valor',
 
         recentForm: {
-
           home:
             homeStats,
 
           away:
             awayStats
-
         },
 
         averages: {
 
           home: {
-
             goalsFor:
               Number(
                 homeStats.avgGoalsFor.toFixed(
@@ -3189,11 +3366,9 @@ app.get(
                   2
                 )
               )
-
           },
 
           away: {
-
             goalsFor:
               Number(
                 awayStats.avgGoalsFor.toFixed(
@@ -3207,7 +3382,6 @@ app.get(
                   2
                 )
               )
-
           }
 
         },
@@ -3250,48 +3424,42 @@ app.get(
               model.homeWin.toFixed(
                 4
               )
-            ) *
-            100,
+            ) * 100,
 
           draw:
             Number(
               model.draw.toFixed(
                 4
               )
-            ) *
-            100,
+            ) * 100,
 
           awayWin:
             Number(
               model.awayWin.toFixed(
                 4
               )
-            ) *
-            100,
+            ) * 100,
 
           over25:
             Number(
               model.over25.toFixed(
                 4
               )
-            ) *
-            100,
+            ) * 100,
 
           under25:
             Number(
               model.under25.toFixed(
                 4
               )
-            ) *
-            100,
+            ) * 100,
 
           btts:
             Number(
               model.btts.toFixed(
                 4
               )
-            ) *
-            100
+            ) * 100
 
         },
 
@@ -3360,7 +3528,6 @@ app.get(
               ),
 
           valueFilter: {
-
             minimumProbability:
               55,
 
@@ -3378,37 +3545,31 @@ app.get(
 
             outliersAllowed:
               false
-
           }
 
         }
 
       });
 
-    } catch (
-      error
-    ) {
+    } catch (error) {
 
       console.error(
         'ANALYZE ERROR:',
         error
       );
 
-      return res
-        .status(500)
-        .json({
+      return res.status(
+        500
+      ).json({
+        ok: false,
 
-          ok: false,
+        error:
+          error.message ||
+          'Error interno del servidor.',
 
-          error:
-            error.message ||
-            'Error interno del servidor.',
-
-          modelVersion:
-            MODEL_VERSION
-
-        });
-
+        modelVersion:
+          MODEL_VERSION
+      });
     }
 
   }
@@ -3416,10 +3577,7 @@ app.get(
 
 app.get(
   '/',
-  (
-    req,
-    res
-  ) => {
+  (req, res) => {
 
     res.set(
       'Cache-Control',
@@ -3436,21 +3594,17 @@ app.get(
       '0'
     );
 
-    res.type(
-      'html'
-    ).send(
-      renderPage()
-    );
+    res.type('html')
+      .send(
+        renderPage()
+      );
 
   }
 );
 
 app.get(
   '/health',
-  (
-    req,
-    res
-  ) =>
+  (req, res) =>
     res.json({
       ok: true,
       modelVersion:
