@@ -5,8 +5,8 @@ const {
   implied,
   ev,
   confidence,
-  stabilizeStats,
-  shrinkToMean
+  shrinkToMean,
+  clamp
 } = require('./engine');
 
 const app = express();
@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const MODEL_VERSION = 'V7.6.5';
+const MODEL_VERSION = 'V7.6.6';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -2221,51 +2221,64 @@ app.get(
         );
 
       /*
-       * ESTABILIZACIÓN
+       * ESTABILIZACIÓN (shrinkage hacia la media)
+       *
+       * Aplicamos shrinkToMean directamente sobre los
+       * promedios reales de cada equipo (avgGoalsFor /
+       * avgGoalsAgainst), en vez de pasarle el objeto de
+       * stats completo a stabilizeStats/shrinkToMean —
+       * eso descartaba los datos reales por un mismatch
+       * de formato entre server.js y engine.js.
        */
       try {
 
-        homeStats =
-          stabilizeStats(
-            homeStats
-          ) ||
-          homeStats;
+        const attackBaseline = 1.35;
+        const defenseBaseline = 1.20;
 
-        awayStats =
-          stabilizeStats(
-            awayStats
-          ) ||
-          awayStats;
-
-      } catch (error) {
-
-        console.warn(
-          '[ANALYZE] stabilizeStats no disponible:',
-          error.message
+        const homeGF = shrinkToMean(
+          homeStats.avgGoalsFor,
+          attackBaseline,
+          homeStats.matches
         );
-      }
 
-      /*
-       * SHRINK TO MEAN
-       */
-      try {
+        const homeGA = shrinkToMean(
+          homeStats.avgGoalsAgainst,
+          defenseBaseline,
+          homeStats.matches
+        );
 
-        homeStats =
-          shrinkToMean(
-            homeStats
-          ) ||
-          homeStats;
+        const awayGF = shrinkToMean(
+          awayStats.avgGoalsFor,
+          attackBaseline,
+          awayStats.matches
+        );
 
-        awayStats =
-          shrinkToMean(
-            awayStats
-          ) ||
-          awayStats;
+        const awayGA = shrinkToMean(
+          awayStats.avgGoalsAgainst,
+          defenseBaseline,
+          awayStats.matches
+        );
+
+        homeStats = {
+          ...homeStats,
+          avgGoalsFor: homeGF,
+          avgGoalsAgainst: homeGA,
+          attackStrength: clamp(homeGF / attackBaseline, 0.45, 1.8),
+          defenseStrength: clamp(attackBaseline / Math.max(homeGA, 0.25), 0.45, 1.8)
+        };
+
+        awayStats = {
+          ...awayStats,
+          avgGoalsFor: awayGF,
+          avgGoalsAgainst: awayGA,
+          attackStrength: clamp(awayGF / attackBaseline, 0.45, 1.8),
+          defenseStrength: clamp(attackBaseline / Math.max(awayGA, 0.25), 0.45, 1.8)
+        };
 
       } catch (error) {
 
         console.warn(
-          '[ANALYZE] shrinkToMean no disponible:',
+          '[ANALYZE] estabilización fallback (se usan promedios crudos):',
           error.message
         );
       }
@@ -2287,26 +2300,35 @@ app.get(
 
       /*
        * CONFIANZA
+       *
+       * confidence(probability, sampleSize, edge) espera
+       * tres argumentos posicionales, no un objeto. Usamos
+       * la probabilidad 1X2 más alta del modelo y el tamaño
+       * de muestra más chico entre ambos equipos.
        */
       let modelConfidence =
         50;
 
       try {
 
+        const bestProbability =
+          Math.max(
+            model.homeWin,
+            model.draw,
+            model.awayWin
+          );
+
+        const confidenceSampleSize =
+          Math.min(
+            homeStats.matches,
+            awayStats.matches
+          );
+
         modelConfidence =
-          confidence({
-            homeXg:
-              modelInput.homeXg,
-
-            awayXg:
-              modelInput.awayXg,
-
-            homeStats,
-
-            awayStats,
-
-            model
-          });
+          confidence(
+            bestProbability,
+            confidenceSampleSize
+          );
 
       } catch (error) {
 
@@ -2703,7 +2725,7 @@ function renderPage() {
 >
 
 <title>
-Mi Pronóstico Deportivo V7.6.5
+Mi Pronóstico Deportivo V7.6.6
 </title>
 
 <style>
@@ -3057,7 +3079,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.6.5 ANALYST
+● V7.6.6 ANALYST
 </span>
 
 <h1>
@@ -3168,7 +3190,7 @@ Value
 'use strict';
 
 console.log(
-  '[V7.6.5] JavaScript cargado correctamente'
+  '[V7.6.6] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -3316,7 +3338,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.6.5] searchFixtures ejecutado'
+    '[V7.6.6] searchFixtures ejecutado'
   );
 
   const date =
@@ -3392,7 +3414,7 @@ async function searchFixtures(){
       await fetch(
         '/api/fixtures?date=' +
         encodeURIComponent(date) +
-        '&v=765',
+        '&v=766',
         {
           cache:'no-store',
 
@@ -3407,7 +3429,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.6.5] fixtures:',
+      '[V7.6.6] fixtures:',
       data
     );
 
@@ -3473,7 +3495,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.6.5] ERROR:',
+      '[V7.6.6] ERROR:',
       errorObject
     );
 
@@ -3512,7 +3534,7 @@ function fixtureHtml(
       index
     );
 
-  return `
+  return \`
 
     <article class="fixture">
 
@@ -3521,31 +3543,31 @@ function fixtureHtml(
         <div>
 
           <div class="fixture-teams">
-            ⚽ ${esc(
+            ⚽ \${esc(
               fixture.home
             )}
             vs
-            ${esc(
+            \${esc(
               fixture.away
             )}
           </div>
 
           <div class="fixture-meta">
 
-            🕐 ${
+            🕐 \${
               formatTime(
                 fixture.kickoff
               )
             }
 
-            · 🏆 ${
+            · 🏆 \${
               esc(
                 fixture.competition ||
                 'Competición'
               )
             }
 
-            · ${
+            · \${
               esc(
                 fixture.source ||
                 'football-data'
@@ -3559,10 +3581,10 @@ function fixtureHtml(
         <button
           class="analyze-small"
           type="button"
-          data-panel="${esc(panelId)}"
-          data-home="${esc(fixture.home)}"
-          data-away="${esc(fixture.away)}"
-          data-date="${esc(date)}"
+          data-panel="\${esc(panelId)}"
+          data-home="\${esc(fixture.home)}"
+          data-away="\${esc(fixture.away)}"
+          data-date="\${esc(date)}"
         >
           🧠 ANALIZAR
         </button>
@@ -3570,33 +3592,33 @@ function fixtureHtml(
       </div>
 
       <div
-        id="${esc(panelId)}"
+        id="\${esc(panelId)}"
         class="analysis-panel"
       >
 
         <button
           class="analysis-close"
           type="button"
-          data-close-panel="${esc(panelId)}"
+          data-close-panel="\${esc(panelId)}"
         >
           ▲ CERRAR ANÁLISIS
         </button>
 
         <div
-          id="${esc(panelId)}-loading"
+          id="\${esc(panelId)}-loading"
           class="analysis-loading"
         >
           Analizando partido...
         </div>
 
         <div
-          id="${esc(panelId)}-error"
+          id="\${esc(panelId)}-error"
           class="analysis-error"
           style="display:none"
         ></div>
 
         <div
-          id="${esc(panelId)}-content"
+          id="\${esc(panelId)}-content"
           class="analysis-content"
         ></div>
 
@@ -3604,7 +3626,7 @@ function fixtureHtml(
 
     </article>
 
-  `;
+  \`;
 }
 
 async function openAnalysis(
@@ -3674,7 +3696,7 @@ async function openAnalysis(
       await fetch(
         '/api/analyze?' +
         params.toString() +
-        '&v=765',
+        '&v=766',
         {
           cache:'no-store',
 
@@ -3689,7 +3711,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.6.5] análisis:',
+      '[V7.6.6] análisis:',
       data
     );
 
@@ -3716,7 +3738,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.6.5] ANALYZE ERROR:',
+      '[V7.6.6] ANALYZE ERROR:',
       errorObject
     );
 
@@ -3754,20 +3776,20 @@ function marketHtml(
   market
 ){
 
-  return `
+  return \`
 
     <div class="market">
 
       <div class="market-top">
 
         <strong>
-          ${esc(
+          \${esc(
             market.name
           )}
         </strong>
 
         <span>
-          ${pct(
+          \${pct(
             market.probability
           )}
         </span>
@@ -3779,7 +3801,7 @@ function marketHtml(
         <span>
           Mejor cuota:
           <b>
-            ${
+            \${
               market.bestOdds
                 ? Number(
                     market.bestOdds
@@ -3792,7 +3814,7 @@ function marketHtml(
         <span>
           Mercado:
           <b>
-            ${
+            \${
               market.referenceOdds
                 ? Number(
                     market.referenceOdds
@@ -3805,7 +3827,7 @@ function marketHtml(
         <span>
           EV:
           <b>
-            ${money(
+            \${money(
               market.referenceEvPct
             )}
           </b>
@@ -3814,7 +3836,7 @@ function marketHtml(
         <span>
           Casas:
           <b>
-            ${
+            \${
               market.bookmakerCount ||
               0
             }
@@ -3823,9 +3845,9 @@ function marketHtml(
 
       </div>
 
-      ${
+      \${
         market.isOutlier
-          ? `
+          ? \`
 
             <div class="value-box">
 
@@ -3835,13 +3857,13 @@ function marketHtml(
 
             </div>
 
-          `
+          \`
           : ''
       }
 
     </div>
 
-  `;
+  \`;
 }
 
 function analysisHtml(
@@ -3869,7 +3891,7 @@ function analysisHtml(
           marketHtml
         )
         .join('')
-      : `
+      : \`
 
         <div class="empty">
 
@@ -3877,24 +3899,24 @@ function analysisHtml(
 
           <br>
 
-          ${esc(
+          \${esc(
             data.oddsReason ||
             ''
           )}
 
         </div>
 
-      `;
+      \`;
 
   const value =
     data.bestValue
 
-      ? `
+      ? \`
 
         <div class="value-box">
 
           <h3>
-            💰 ${esc(
+            💰 \${esc(
               data.bestValue.name
             )}
           </h3>
@@ -3904,7 +3926,7 @@ function analysisHtml(
             Probabilidad:
 
             <b>
-              ${pct(
+              \${pct(
                 data.bestValue.probability
               )}
             </b>
@@ -3917,7 +3939,7 @@ function analysisHtml(
 
             <b>
 
-              ${
+              \${
                 data.bestValue.bestOdds
                   ? Number(
                       data.bestValue.bestOdds
@@ -3934,7 +3956,7 @@ function analysisHtml(
             EV mercado:
 
             <b>
-              ${money(
+              \${money(
                 data.bestValue.referenceEvPct
               )}
             </b>
@@ -3943,9 +3965,9 @@ function analysisHtml(
 
         </div>
 
-      `
+      \`
 
-      : `
+      : \`
 
         <div class="value-box">
 
@@ -3962,9 +3984,9 @@ function analysisHtml(
 
         </div>
 
-      `;
+      \`;
 
-  return `
+  return \`
 
     <div class="fixture-decision">
 
@@ -3973,16 +3995,16 @@ function analysisHtml(
       </div>
 
       <h3
-        class="${decisionClass}"
+        class="\${decisionClass}"
       >
-        ${esc(
+        \${esc(
           data.recommendation ||
           'NO BET'
         )}
       </h3>
 
       <div class="muted">
-        ${esc(
+        \${esc(
           data.reason ||
           ''
         )}
@@ -3998,13 +4020,13 @@ function analysisHtml(
 
       <div class="fixture-teams">
 
-        ${esc(
+        \${esc(
           data.match?.home
         )}
 
         vs
 
-        ${esc(
+        \${esc(
           data.match?.away
         )}
 
@@ -4012,7 +4034,7 @@ function analysisHtml(
 
       <div class="score">
 
-        ${esc(
+        \${esc(
           data.mostLikelyScore?.score ||
           '-'
         )}
@@ -4023,7 +4045,7 @@ function analysisHtml(
 
         Probabilidad:
 
-        ${pct(
+        \${pct(
           data.mostLikelyScore?.probability
         )}
 
@@ -4044,7 +4066,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${pct(
+          \${pct(
             data.probabilities?.homeWin
           )}
         </b>
@@ -4058,7 +4080,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${pct(
+          \${pct(
             data.probabilities?.draw
           )}
         </b>
@@ -4072,7 +4094,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${pct(
+          \${pct(
             data.probabilities?.awayWin
           )}
         </b>
@@ -4092,7 +4114,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${pct(
+          \${pct(
             data.probabilities?.over25
           )}
         </b>
@@ -4106,7 +4128,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${pct(
+          \${pct(
             data.probabilities?.under25
           )}
         </b>
@@ -4120,7 +4142,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${pct(
+          \${pct(
             data.probabilities?.btts
           )}
         </b>
@@ -4142,7 +4164,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${Number(
+          \${Number(
             data.xG?.home ||
             0
           ).toFixed(2)}
@@ -4157,7 +4179,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${Number(
+          \${Number(
             data.xG?.away ||
             0
           ).toFixed(2)}
@@ -4172,7 +4194,7 @@ function analysisHtml(
         </span>
 
         <b>
-          ${Number(
+          \${Number(
             data.xG?.total ||
             0
           ).toFixed(2)}
@@ -4190,7 +4212,7 @@ function analysisHtml(
 
       <div class="fixture-teams">
 
-        ${esc(
+        \${esc(
           data.confidenceLevel
         )}
 
@@ -4198,7 +4220,7 @@ function analysisHtml(
 
       <div class="muted">
 
-        ${esc(
+        \${esc(
           data.confidence
         )}
         / 100
@@ -4207,7 +4229,7 @@ function analysisHtml(
 
       <div class="muted">
 
-        ${esc(
+        \${esc(
           data.confidenceExplanation
         )}
 
@@ -4229,21 +4251,21 @@ function analysisHtml(
 
         GF:
 
-        ${Number(
+        \${Number(
           local?.avgGoalsFor ||
           0
         ).toFixed(2)}
 
         · GA:
 
-        ${Number(
+        \${Number(
           local?.avgGoalsAgainst ||
           0
         ).toFixed(2)}
 
         · Form:
 
-        ${pct(
+        \${pct(
           local?.formPct
         )}
 
@@ -4261,21 +4283,21 @@ function analysisHtml(
 
         GF:
 
-        ${Number(
+        \${Number(
           visitor?.avgGoalsFor ||
           0
         ).toFixed(2)}
 
         · GA:
 
-        ${Number(
+        \${Number(
           visitor?.avgGoalsAgainst ||
           0
         ).toFixed(2)}
 
         · Form:
 
-        ${pct(
+        \${pct(
           visitor?.formPct
         )}
 
@@ -4287,15 +4309,15 @@ function analysisHtml(
       💰 Cuotas reales
     </div>
 
-    ${markets}
+    \${markets}
 
     <div class="section-label">
       🛡️ Value Pick
     </div>
 
-    ${value}
+    \${value}
 
-  `;
+  \`;
 }
 
 /* =========================================================
@@ -4305,7 +4327,7 @@ function analysisHtml(
 function initializeApp(){
 
   console.log(
-    '[V7.6.5] inicializando interfaz'
+    '[V7.6.6] inicializando interfaz'
   );
 
   const date =
@@ -4327,7 +4349,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.6.5] searchBtn no encontrado'
+      '[V7.6.6] searchBtn no encontrado'
     );
 
     return;
@@ -4375,7 +4397,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.6.5] interfaz inicializada correctamente'
+    '[V7.6.6] interfaz inicializada correctamente'
   );
 }
 
@@ -4477,7 +4499,7 @@ app.listen(
   () => {
 
     console.log(
-      `V7.6.5 ANALYST running on port ${PORT}`
+      `V7.6.6 ANALYST running on port ${PORT}`
     );
 
     console.log(
