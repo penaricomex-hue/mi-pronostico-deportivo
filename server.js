@@ -14,7 +14,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
-const MODEL_VERSION = 'V7.6.1';
+const MODEL_VERSION = 'V7.6.2';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -268,21 +268,62 @@ function calculateRecentTeamStats(teamId, matches) {
   };
 }
 
+/*
+  V7.6.2 DIAGNOSTIC
+
+  Esta función ahora muestra en Render:
+  - qué competición se está consultando
+  - cuántos partidos devuelve
+  - código HTTP cuando existe
+  - mensaje exacto del proveedor cuando falla
+  - total final de partidos
+
+  Antes los errores estaban ocultos con:
+      catch (_) {}
+*/
+
 async function getFixture(date) {
   const key = `fixtures:${date}`;
 
   const cached = cacheGet(key);
 
-  if (cached) return cached;
+  if (cached) {
+    console.log(
+      `[FIXTURES] ${date}: CACHE HIT -> ${cached.length} partidos`
+    );
+
+    return cached;
+  }
+
+  console.log('');
+  console.log('================================================');
+  console.log(`[FIXTURES] INICIANDO CONSULTA PARA ${date}`);
+  console.log('================================================');
 
   const allMatches = [];
 
   for (const code of Object.keys(
     ODDS_SPORT_BY_COMPETITION
   )) {
+
+    const path =
+      `/competitions/${code}/matches?dateFrom=${date}&dateTo=${date}`;
+
+    console.log(
+      `[FIXTURES] ${date} ${code}: consultando Football-Data...`
+    );
+
     try {
-      const data = await footballData(
-        `/competitions/${code}/matches?dateFrom=${date}&dateTo=${date}`
+      const data =
+        await footballData(path);
+
+      const count =
+        Array.isArray(data?.matches)
+          ? data.matches.length
+          : 0;
+
+      console.log(
+        `[FIXTURES] ${date} ${code}: ${count} partidos`
       );
 
       if (Array.isArray(data?.matches)) {
@@ -293,10 +334,46 @@ async function getFixture(date) {
           }))
         );
       }
-    } catch (_) {}
+
+    } catch (error) {
+
+      console.error('');
+      console.error(
+        `[FIXTURES] ${date} ${code}: ERROR`
+      );
+
+      console.error(
+        `Mensaje: ${error?.message || error}`
+      );
+
+      console.error(
+        `HTTP Status: ${error?.status || 'N/D'}`
+      );
+
+      if (error?.data) {
+        console.error(
+          'Respuesta del proveedor:',
+          JSON.stringify(
+            error.data
+          )
+        );
+      }
+
+      console.error('');
+    }
   }
 
-  cacheSet(key, allMatches);
+  console.log('================================================');
+  console.log(
+    `[FIXTURES] ${date}: TOTAL=${allMatches.length} partidos`
+  );
+  console.log('================================================');
+  console.log('');
+
+  cacheSet(
+    key,
+    allMatches
+  );
 
   return allMatches;
 }
@@ -1296,7 +1373,7 @@ function renderPage() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<title>Pronóstico Deportivo V7.6.1</title>
+<title>Pronóstico Deportivo V7.6.2</title>
 
 <style>
 *{box-sizing:border-box}
@@ -1672,7 +1749,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.6.1 ANALYST
+● V7.6.2 ANALYST
 </span>
 
 <h1>
@@ -2882,6 +2959,10 @@ app.get(
           .toISOString()
           .slice(0, 10);
 
+      console.log(
+        `[API] /api/fixtures solicitado para ${date}`
+      );
+
       const matches =
         await getFixture(
           date
@@ -2935,6 +3016,10 @@ app.get(
                 null
             })
           );
+
+      console.log(
+        `[API] /api/fixtures ${date}: devolviendo ${fixtures.length} partidos`
+      );
 
       return res.json({
         ok: true,
@@ -3618,6 +3703,6 @@ app.listen(
   PORT,
   () =>
     console.log(
-      `V7.6.1 ANALYST running on port ${PORT}`
+      `V7.6.2 ANALYST running on port ${PORT}`
     )
 );
