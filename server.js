@@ -1,4 +1,5 @@
 const express = require('express');
+const { Pool } = require('pg');
 
 const {
   matchModel,
@@ -15,7 +16,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const MODEL_VERSION = 'V7.6.6';
+const MODEL_VERSION = 'V7.8.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -30,6 +31,54 @@ const ODDS_API_KEY =
   process.env.ODDS_API_KEY;
 
 const CACHE_MINUTES = 5;
+
+const STAKE_EUR = Number(process.env.STAKE_EUR) || 10;
+
+const DATABASE_URL = process.env.DATABASE_URL || '';
+
+const pool = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl: { rejectUnauthorized: false }
+    })
+  : null;
+
+async function ensureSchema() {
+  if (!pool) {
+    console.warn(
+      '[DB] DATABASE_URL no configurada. El simulador de apuestas no funcionará hasta que la configures.'
+    );
+    return;
+  }
+
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS simulated_bets (
+        id SERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        match_date DATE,
+        home TEXT NOT NULL,
+        away TEXT NOT NULL,
+        competition TEXT,
+        market TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        market_name TEXT NOT NULL,
+        odds NUMERIC NOT NULL,
+        model_probability NUMERIC,
+        stake_eur NUMERIC NOT NULL DEFAULT 10,
+        status TEXT NOT NULL DEFAULT 'pending',
+        profit_eur NUMERIC,
+        settled_at TIMESTAMPTZ,
+        legs_json JSONB
+      );
+    `);
+
+    console.log('[DB] Esquema verificado (simulated_bets).');
+
+  } catch (error) {
+    console.error('[DB] Error creando el esquema:', error.message);
+  }
+}
 
 const ODDS_SPORT_BY_COMPETITION = {
   PL: 'soccer_epl',
@@ -1844,6 +1893,12 @@ app.get(
           ODDS_API_KEY
         ),
 
+      databaseConfigured:
+        Boolean(DATABASE_URL),
+
+      stakeEur:
+        STAKE_EUR,
+
       provider:
         'football-data.org + The Odds API',
 
@@ -1972,6 +2027,286 @@ app.get(
           modelVersion:
             MODEL_VERSION
         });
+    }
+  }
+);
+
+/* =========================================================
+   ANÁLISIS REUTILIZABLE (para /api/analyze y /api/parlay)
+========================================================= */
+
+async function analyzeOneFixture(fixture) {
+
+  const actualHomeName = fixture.homeTeam?.name;
+  const actualAwayName = fixture.awayTeam?.name;
+
+  if (!actualHomeName || !actualAwayName) {
+    return null;
+  }
+
+  const competitionCode =
+    fixture.competitionCode ||
+    fixture.competition?.code ||
+    null;
+
+  let homeId = fixture.homeTeam?.id || null;
+  let awayId = fixture.awayTeam?.id || null;
+
+  if (!homeId && competitionCode) {
+    homeId = await findTeamId(actualHomeName, competitionCode);
+  }
+
+  if (!awayId && competitionCode) {
+    awayId = await findTeamId(actualAwayName, competitionCode);
+  }
+
+  if (!homeId || !awayId) {
+    return null;
+  }
+
+  const [homeMatches, awayMatches] = await Promise.all([
+    getTeamRecentMatches(homeId),
+    getTeamRecentMatches(awayId)
+  ]);
+
+  let homeStats = calculateRecentTeamStats(homeId, homeMatches);
+  let awayStats = calculateRecentTeamStats(awayId, awayMatches);
+
+  try {
+    const attackBaseline = 1.35;
+    const defenseBaseline = 1.20;
+
+    const homeGF = shrinkToMean(homeStats.avgGoalsFor, attackBaseline, homeStats.matches);
+    const homeGA = shrinkToMean(homeStats.avgGoalsAgainst, defenseBaseline, homeStats.matches);
+    const awayGF = shrinkToMean(awayStats.avgGoalsFor, attackBaseline, awayStats.matches);
+    const awayGA = shrinkToMean(awayStats.avgGoalsAgainst, defenseBaseline, awayStats.matches);
+
+    homeStats = {
+      ...homeStats,
+      avgGoalsFor: homeGF,
+      avgGoalsAgainst: homeGA,
+      attackStrength: clamp(homeGF / attackBaseline, 0.45, 1.8),
+      defenseStrength: clamp(attackBaseline / Math.max(homeGA, 0.25), 0.45, 1.8)
+    };
+
+    awayStats = {
+      ...awayStats,
+      avgGoalsFor: awayGF,
+      avgGoalsAgainst: awayGA,
+      attackStrength: clamp(awayGF / attackBaseline, 0.45, 1.8),
+      defenseStrength: clamp(attackBaseline / Math.max(awayGA, 0.25), 0.45, 1.8)
+    };
+
+  } catch (error) {
+    console.warn('[PARLAY] estabilización fallback:', error.message);
+  }
+
+  const modelInput = createModelInput(homeStats, awayStats);
+  const model = matchModel(modelInput.homeXg, modelInput.awayXg);
+
+  let modelConfidence = 50;
+
+  try {
+    const bestProbability = Math.max(model.homeWin, model.draw, model.awayWin);
+    const confidenceSampleSize = Math.min(homeStats.matches, awayStats.matches);
+
+    modelConfidence = confidence(bestProbability, confidenceSampleSize);
+
+  } catch (error) {
+    modelConfidence = 50;
+  }
+
+  const confidenceAdjusted =
+    Math.max(0, Math.min(100, Math.round(Number(modelConfidence) || 50)));
+
+  const odds = await getOdds(actualHomeName, actualAwayName, competitionCode);
+  const markets = buildMarkets(model, odds, actualHomeName, actualAwayName);
+
+  return {
+    home: actualHomeName,
+    away: actualAwayName,
+    date: fixture.utcDate ? datePartUTC(fixture.utcDate) : null,
+    kickoff: fixture.utcDate || null,
+    competition:
+      fixture.competitionName ||
+      fixture.competition?.name ||
+      competitionCode,
+    confidence: confidenceAdjusted,
+    markets,
+    oddsAvailable: Boolean(odds?.available)
+  };
+}
+
+/*
+ * Un "pick fuerte" es un mercado que ya pasa los filtros normales
+ * de value bet (probabilidad, EV, respaldo del mercado, confianza).
+ *
+ * Un "posible error de cuota" es un mercado marcado como isOutlier
+ * (una cuota anormalmente alta frente al resto del mercado) donde
+ * el modelo, aun así, le da al resultado al menos 50% de probabilidad.
+ * Estos NO se usan como value pick individual (por eso el filtro
+ * normal los excluye) pero son justo el tipo de "error de cuota"
+ * que se busca para combinadas de mayor riesgo/beneficio.
+ */
+function pickParlayCandidate(analysis) {
+
+  if (!analysis || !analysis.oddsAvailable) {
+    return null;
+  }
+
+  const candidates = [];
+
+  for (const market of analysis.markets) {
+
+    if (!market.bestOdds) {
+      continue;
+    }
+
+    const isStrong =
+      market.valueEligible &&
+      Number(market.referenceEvPct) >= 5 &&
+      analysis.confidence >= 65;
+
+    const isOddsError =
+      market.isOutlier &&
+      market.referenceOdds &&
+      market.bestOdds > market.referenceOdds * 1.20 &&
+      Number(market.probability) >= 50;
+
+    if (isStrong || isOddsError) {
+      candidates.push({
+        home: analysis.home,
+        away: analysis.away,
+        competition: analysis.competition,
+        date: analysis.date,
+        kickoff: analysis.kickoff,
+        market: market.type,
+        outcome: market.outcome,
+        marketName: market.name,
+        odds: market.bestOdds,
+        probability: market.probability,
+        referenceEvPct: market.referenceEvPct,
+        confidence: analysis.confidence,
+        tag: isOddsError ? 'Posible error de cuota' : 'Pick fuerte'
+      });
+    }
+  }
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  // Solo un pick por partido (el de mejor EV), para no combinar
+  // dos selecciones correlacionadas del mismo encuentro.
+  candidates.sort(
+    (a, b) => Number(b.referenceEvPct || 0) - Number(a.referenceEvPct || 0)
+  );
+
+  return candidates[0];
+}
+
+/* =========================================================
+   API PARLAY
+========================================================= */
+
+app.get(
+  '/api/parlay',
+  async (req, res) => {
+
+    try {
+
+      const date =
+        String(req.query.date || '').trim() ||
+        new Date().toISOString().slice(0, 10);
+
+      const maxLegs =
+        Math.min(6, Math.max(2, Number(req.query.legs) || 4));
+
+      const fixtures = await getFixture(date);
+
+      const withNames =
+        fixtures.filter(
+          match => match?.homeTeam?.name && match?.awayTeam?.name
+        );
+
+      const candidates = [];
+
+      for (const fixture of withNames) {
+
+        try {
+          const analysis = await analyzeOneFixture(fixture);
+          const pick = pickParlayCandidate(analysis);
+
+          if (pick) {
+            candidates.push(pick);
+          }
+
+        } catch (error) {
+          console.warn(
+            `[PARLAY] fallo analizando ${fixture?.homeTeam?.name} vs ${fixture?.awayTeam?.name}:`,
+            error.message
+          );
+        }
+      }
+
+      candidates.sort(
+        (a, b) => Number(b.referenceEvPct || 0) - Number(a.referenceEvPct || 0)
+      );
+
+      if (!candidates.length) {
+        return res.json({
+          ok: true,
+          date,
+          stakeEur: STAKE_EUR,
+          candidates: [],
+          parlays: [],
+          message: 'No se detectaron picks fuertes ni errores de cuota para esta fecha.'
+        });
+      }
+
+      const parlays = [];
+
+      for (
+        let legsCount = 2;
+        legsCount <= Math.min(maxLegs, candidates.length);
+        legsCount++
+      ) {
+        const legs = candidates.slice(0, legsCount);
+
+        const combinedOdds =
+          legs.reduce((acc, leg) => acc * Number(leg.odds), 1);
+
+        const combinedProbability =
+          legs.reduce((acc, leg) => acc * (Number(leg.probability) / 100), 1);
+
+        const combinedEvPct =
+          Number(((combinedProbability * combinedOdds - 1) * 100).toFixed(1));
+
+        parlays.push({
+          legsCount,
+          legs,
+          combinedOdds: Number(combinedOdds.toFixed(2)),
+          combinedProbabilityPct: Number((combinedProbability * 100).toFixed(1)),
+          combinedEvPct
+        });
+      }
+
+      return res.json({
+        ok: true,
+        date,
+        stakeEur: STAKE_EUR,
+        candidates,
+        parlays
+      });
+
+    } catch (error) {
+
+      console.error('PARLAY ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error al generar el parlay.'
+      });
     }
   }
 );
@@ -2610,6 +2945,9 @@ app.get(
 
         confidenceExplanation,
 
+        stakeEur:
+          STAKE_EUR,
+
         diagnostics: {
 
           fixtureSource:
@@ -2692,6 +3030,315 @@ app.get(
 );
 
 /* =========================================================
+   SIMULADOR DE APUESTAS
+========================================================= */
+
+function requireDb(res) {
+  if (!pool) {
+    res.status(503).json({
+      ok: false,
+      error: 'La base de datos no está configurada (falta DATABASE_URL). Configúrala en las variables de entorno de Render.'
+    });
+    return false;
+  }
+  return true;
+}
+
+function computeProfit(status, stakeEur, oddsValue) {
+  const stake = Number(stakeEur) || 0;
+  const odds = Number(oddsValue) || 0;
+
+  if (status === 'won') {
+    return Number((stake * (odds - 1)).toFixed(2));
+  }
+
+  if (status === 'lost') {
+    return Number((-stake).toFixed(2));
+  }
+
+  return 0;
+}
+
+app.post(
+  '/api/bets',
+  async (req, res) => {
+
+    if (!requireDb(res)) {
+      return;
+    }
+
+    try {
+      const {
+        home,
+        away,
+        date,
+        competition,
+        market,
+        outcome,
+        marketName,
+        odds,
+        probability,
+        legs
+      } = req.body || {};
+
+      if (!home || !away || !market || !outcome || !odds) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Faltan datos para registrar la apuesta simulada.'
+        });
+      }
+
+      const legsJson =
+        Array.isArray(legs) && legs.length
+          ? JSON.stringify(legs)
+          : null;
+
+      const result = await pool.query(
+        `INSERT INTO simulated_bets
+          (match_date, home, away, competition, market, outcome, market_name, odds, model_probability, stake_eur, status, legs_json)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
+         RETURNING *`,
+        [
+          date || null,
+          home,
+          away,
+          competition || null,
+          market,
+          outcome,
+          marketName || market,
+          Number(odds),
+          probability != null ? Number(probability) : null,
+          STAKE_EUR,
+          legsJson
+        ]
+      );
+
+      console.log(
+        `[BETS] simulada #${result.rows[0].id}: ${home} vs ${away} (${marketName || market}) @ ${odds}`
+      );
+
+      return res.json({
+        ok: true,
+        bet: result.rows[0]
+      });
+
+    } catch (error) {
+
+      console.error('BETS CREATE ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error al registrar la apuesta simulada.'
+      });
+    }
+  }
+);
+
+app.get(
+  '/api/bets',
+  async (req, res) => {
+
+    if (!requireDb(res)) {
+      return;
+    }
+
+    try {
+      const status = String(req.query.status || '').trim();
+      const period = String(req.query.period || '').trim();
+
+      const conditions = [];
+      const params = [];
+
+      if (status) {
+        params.push(status);
+        conditions.push(`status = $${params.length}`);
+      }
+
+      if (period === 'week') {
+        conditions.push(`created_at >= now() - interval '7 days'`);
+      } else if (period === 'month') {
+        conditions.push(`created_at >= now() - interval '30 days'`);
+      }
+
+      const whereClause =
+        conditions.length
+          ? `WHERE ${conditions.join(' AND ')}`
+          : '';
+
+      const result = await pool.query(
+        `SELECT * FROM simulated_bets ${whereClause} ORDER BY created_at DESC LIMIT 200`,
+        params
+      );
+
+      return res.json({
+        ok: true,
+        count: result.rows.length,
+        bets: result.rows
+      });
+
+    } catch (error) {
+
+      console.error('BETS LIST ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error al listar las apuestas simuladas.'
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/bets/:id/settle',
+  async (req, res) => {
+
+    if (!requireDb(res)) {
+      return;
+    }
+
+    try {
+      const id = Number(req.params.id);
+
+      const result = Array.isArray(req.body?.result)
+        ? req.body.result[0]
+        : req.body?.result;
+
+      if (!['won', 'lost', 'void'].includes(result)) {
+        return res.status(400).json({
+          ok: false,
+          error: "El resultado debe ser 'won', 'lost' o 'void'."
+        });
+      }
+
+      const existing = await pool.query(
+        'SELECT * FROM simulated_bets WHERE id = $1',
+        [id]
+      );
+
+      if (!existing.rows.length) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Apuesta simulada no encontrada.'
+        });
+      }
+
+      const bet = existing.rows[0];
+
+      const profitEur = computeProfit(
+        result,
+        bet.stake_eur,
+        bet.odds
+      );
+
+      const updated = await pool.query(
+        `UPDATE simulated_bets
+         SET status = $1, profit_eur = $2, settled_at = now()
+         WHERE id = $3
+         RETURNING *`,
+        [result, profitEur, id]
+      );
+
+      console.log(
+        `[BETS] #${id} liquidada como ${result} (${profitEur >= 0 ? '+' : ''}${profitEur}€)`
+      );
+
+      return res.json({
+        ok: true,
+        bet: updated.rows[0]
+      });
+
+    } catch (error) {
+
+      console.error('BETS SETTLE ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error al liquidar la apuesta simulada.'
+      });
+    }
+  }
+);
+
+app.get(
+  '/api/bets/summary',
+  async (req, res) => {
+
+    if (!requireDb(res)) {
+      return;
+    }
+
+    try {
+      const period = String(req.query.period || 'month').trim();
+
+      const interval =
+        period === 'week'
+          ? '7 days'
+          : '30 days';
+
+      const result = await pool.query(
+        `SELECT status, COUNT(*)::int AS count, COALESCE(SUM(profit_eur), 0)::float AS profit, COALESCE(SUM(stake_eur), 0)::float AS staked
+         FROM simulated_bets
+         WHERE created_at >= now() - interval '${interval}'
+         GROUP BY status`
+      );
+
+      const summary = {
+        pending: 0,
+        won: 0,
+        lost: 0,
+        void: 0,
+        totalProfitEur: 0,
+        totalStakedEur: 0
+      };
+
+      for (const row of result.rows) {
+        if (summary[row.status] !== undefined) {
+          summary[row.status] = row.count;
+        }
+
+        summary.totalProfitEur += row.profit;
+        summary.totalStakedEur += row.staked;
+      }
+
+      const settledCount = summary.won + summary.lost;
+
+      const accuracyPct =
+        settledCount > 0
+          ? Number(((summary.won / settledCount) * 100).toFixed(1))
+          : null;
+
+      const roiPct =
+        summary.totalStakedEur > 0
+          ? Number(((summary.totalProfitEur / summary.totalStakedEur) * 100).toFixed(1))
+          : null;
+
+      return res.json({
+        ok: true,
+        period,
+        pending: summary.pending,
+        won: summary.won,
+        lost: summary.lost,
+        void: summary.void,
+        settledCount,
+        accuracyPct,
+        totalProfitEur: Number(summary.totalProfitEur.toFixed(2)),
+        totalStakedEur: Number(summary.totalStakedEur.toFixed(2)),
+        roiPct
+      });
+
+    } catch (error) {
+
+      console.error('BETS SUMMARY ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error al calcular el resumen.'
+      });
+    }
+  }
+);
+
+/* =========================================================
    FRONTEND
 ========================================================= */
 
@@ -2725,7 +3372,7 @@ function renderPage() {
 >
 
 <title>
-Mi Pronóstico Deportivo V7.6.6
+Mi Pronóstico Deportivo V7.8.0
 </title>
 
 <style>
@@ -2887,14 +3534,27 @@ input{
 }
 
 .analysis-panel{
-  display:none;
-  margin-top:12px;
-  border-top:1px solid #252c37;
-  padding-top:12px;
+  display:grid;
+  grid-template-rows:0fr;
+  transition:grid-template-rows .28s ease, margin-top .28s ease;
+  border-top:0px solid #252c37;
+  margin-top:0;
 }
 
 .analysis-panel.open{
-  display:block;
+  grid-template-rows:1fr;
+  margin-top:12px;
+  border-top:1px solid #252c37;
+}
+
+.analysis-inner{
+  overflow:hidden;
+  min-height:0;
+  padding-top:0;
+}
+
+.analysis-panel.open .analysis-inner{
+  padding-top:12px;
 }
 
 .analysis-close{
@@ -3036,6 +3696,166 @@ input{
   margin:0 0 8px;
 }
 
+.simulate-bet-btn{
+  width:100%;
+  border:0;
+  border-radius:11px;
+  padding:12px;
+  margin-top:10px;
+  background:#7ee787;
+  color:#080b10;
+  font-weight:900;
+  cursor:pointer;
+}
+
+.simulate-bet-btn:disabled{
+  opacity:.6;
+  cursor:default;
+}
+
+.simulate-result{
+  margin-top:8px;
+}
+
+.history-summary{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:8px;
+  margin-bottom:14px;
+}
+
+.history-summary .prob{
+  background:#090d13;
+  border-radius:12px;
+  padding:12px 8px;
+  text-align:center;
+}
+
+.history-period-toggle{
+  display:flex;
+  gap:8px;
+  margin-bottom:14px;
+}
+
+.history-period-toggle button{
+  flex:1;
+  border:1px solid #303846;
+  border-radius:10px;
+  padding:9px;
+  background:#151a22;
+  color:#fff;
+  font-weight:800;
+  cursor:pointer;
+}
+
+.history-period-toggle button.active{
+  background:#f4f5f7;
+  color:#080b10;
+}
+
+.bet-row{
+  background:#090d13;
+  border:1px solid #252c37;
+  border-radius:13px;
+  padding:12px;
+  margin-bottom:9px;
+}
+
+.bet-row-head{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.bet-row-meta{
+  color:#8e97a5;
+  font-size:12px;
+  margin-top:4px;
+}
+
+.bet-row-actions{
+  display:flex;
+  gap:8px;
+  margin-top:10px;
+}
+
+.bet-row-actions button{
+  flex:1;
+  border:0;
+  border-radius:10px;
+  padding:9px;
+  font-weight:900;
+  cursor:pointer;
+}
+
+.btn-won{
+  background:#7ee787;
+  color:#080b10;
+}
+
+.btn-lost{
+  background:#ff7b72;
+  color:#080b10;
+}
+
+.status-won{
+  color:#7ee787;
+}
+
+.status-lost{
+  color:#ff7b72;
+}
+
+.status-pending{
+  color:#ffb45d;
+}
+
+.parlay-card{
+  background:#10151d;
+  border:1px solid #33414d;
+  border-radius:15px;
+  padding:14px;
+  margin-bottom:10px;
+}
+
+.parlay-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  margin-bottom:8px;
+}
+
+.parlay-head b{
+  font-size:18px;
+}
+
+.parlay-leg{
+  background:#090d13;
+  border-radius:11px;
+  padding:9px 11px;
+  margin-bottom:6px;
+  font-size:13px;
+}
+
+.parlay-leg .tag{
+  display:inline-block;
+  margin-left:6px;
+  padding:2px 7px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:800;
+  background:#252c37;
+  color:#ffb45d;
+}
+
+.parlay-summary{
+  display:flex;
+  justify-content:space-between;
+  color:#9da5b2;
+  font-size:13px;
+  margin:8px 0 10px;
+}
+
 .empty{
   text-align:center;
   color:#9da5b2;
@@ -3068,6 +3888,15 @@ input{
   color:white;
 }
 
+.nav span{
+  cursor:pointer;
+}
+
+.nav span.active-nav{
+  color:white;
+  font-weight:800;
+}
+
 </style>
 
 </head>
@@ -3079,7 +3908,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.6.6 ANALYST
+● V7.8.0 ANALYST
 </span>
 
 <h1>
@@ -3158,27 +3987,71 @@ Partidos de la fecha
   class="fixture-list"
 ></div>
 
+<button
+  class="primary"
+  id="parlayBtn"
+  type="button"
+  style="margin-top:12px"
+>
+🎰 GENERAR PARLAY SUGERIDO
+</button>
+
+<div id="parlayLoading" class="loading" style="display:none">
+Buscando picks fuertes y errores de cuota...
+</div>
+
+<div id="parlayError" class="analysis-error" style="display:none"></div>
+
+<div id="parlayResult"></div>
+
+</section>
+
+<section
+  id="historyCard"
+  class="card"
+  style="display:none"
+>
+
+<div class="card-title">
+Historial de apuestas simuladas
+</div>
+
+<div class="history-period-toggle">
+  <button type="button" id="periodWeekBtn" class="active" data-period="week">Semana</button>
+  <button type="button" id="periodMonthBtn" data-period="month">Mes</button>
+</div>
+
+<div id="historyLoading" class="loading" style="display:none">
+Cargando historial...
+</div>
+
+<div id="historyError" class="analysis-error" style="display:none"></div>
+
+<div id="historySummary" class="history-summary"></div>
+
+<div id="historyList" class="fixture-list"></div>
+
 </section>
 
 </div>
 
 <nav class="nav">
 
-<span>
+<span id="navHome">
 ⌂<br>
 Inicio
 </span>
 
-<span>
+<span id="navAnalyst" class="active-nav">
 <strong>
 🧠<br>
 Analyst
 </strong>
 </span>
 
-<span>
-💰<br>
-Value
+<span id="navHistory">
+📁<br>
+Historial
 </span>
 
 </nav>
@@ -3190,7 +4063,7 @@ Value
 'use strict';
 
 console.log(
-  '[V7.6.6] JavaScript cargado correctamente'
+  '[V7.8.0] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -3338,7 +4211,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.6.6] searchFixtures ejecutado'
+    '[V7.8.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -3414,7 +4287,7 @@ async function searchFixtures(){
       await fetch(
         '/api/fixtures?date=' +
         encodeURIComponent(date) +
-        '&v=766',
+        '&v=780',
         {
           cache:'no-store',
 
@@ -3429,7 +4302,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.6.6] fixtures:',
+      '[V7.8.0] fixtures:',
       data
     );
 
@@ -3495,7 +4368,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.6.6] ERROR:',
+      '[V7.8.0] ERROR:',
       errorObject
     );
 
@@ -3595,6 +4468,7 @@ function fixtureHtml(
         id="\${esc(panelId)}"
         class="analysis-panel"
       >
+       <div class="analysis-inner">
 
         <button
           class="analysis-close"
@@ -3622,6 +4496,7 @@ function fixtureHtml(
           class="analysis-content"
         ></div>
 
+       </div>
       </div>
 
     </article>
@@ -3696,7 +4571,7 @@ async function openAnalysis(
       await fetch(
         '/api/analyze?' +
         params.toString() +
-        '&v=766',
+        '&v=780',
         {
           cache:'no-store',
 
@@ -3711,7 +4586,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.6.6] análisis:',
+      '[V7.8.0] análisis:',
       data
     );
 
@@ -3738,7 +4613,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.6.6] ANALYZE ERROR:',
+      '[V7.8.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -3962,6 +4837,24 @@ function analysisHtml(
             </b>
 
           </div>
+
+          <button
+            class="simulate-bet-btn"
+            type="button"
+            data-home="\${esc(data.match?.home)}"
+            data-away="\${esc(data.match?.away)}"
+            data-date="\${esc(data.match?.date)}"
+            data-competition="\${esc(data.match?.competition)}"
+            data-market="\${esc(data.bestValue.type)}"
+            data-outcome="\${esc(data.bestValue.outcome)}"
+            data-market-name="\${esc(data.bestValue.name)}"
+            data-odds="\${esc(data.bestValue.bestOdds)}"
+            data-probability="\${esc(data.bestValue.probability)}"
+          >
+            🎯 Simular apuesta (\${esc(data.stakeEur)}€)
+          </button>
+
+          <div class="simulate-result muted" style="display:none"></div>
 
         </div>
 
@@ -4324,10 +5217,363 @@ function analysisHtml(
    EVENTOS
 ========================================================= */
 
+let currentHistoryPeriod = 'week';
+
+function showSearchView(){
+
+  document.getElementById('historyCard').style.display = 'none';
+  document.getElementById('fixturesCard').style.display =
+    document.getElementById('fixtureList').innerHTML
+      ? 'block'
+      : 'none';
+
+  document.getElementById('navAnalyst').classList.add('active-nav');
+  document.getElementById('navHistory').classList.remove('active-nav');
+}
+
+function showHistoryView(){
+
+  document.getElementById('fixturesCard').style.display = 'none';
+  document.getElementById('error').style.display = 'none';
+  document.getElementById('historyCard').style.display = 'block';
+
+  document.getElementById('navHistory').classList.add('active-nav');
+  document.getElementById('navAnalyst').classList.remove('active-nav');
+
+  loadHistory(currentHistoryPeriod);
+}
+
+function betStatusLabel(status){
+
+  if(status === 'won'){ return '✅ Ganó'; }
+  if(status === 'lost'){ return '❌ Perdió'; }
+  if(status === 'void'){ return '➖ Anulada'; }
+  return '⏳ Pendiente';
+}
+
+function renderBetRow(bet){
+
+  const profit =
+    bet.profit_eur == null
+      ? null
+      : Number(bet.profit_eur);
+
+  const actions =
+    bet.status === 'pending'
+      ? \`
+        <div class="bet-row-actions">
+          <button class="btn-won" type="button" data-settle="\${esc(bet.id)}" data-result="won">✅ Ganó</button>
+          <button class="btn-lost" type="button" data-settle="\${esc(bet.id)}" data-result="lost">❌ Perdió</button>
+        </div>
+      \`
+      : '';
+
+  return \`
+    <div class="bet-row">
+      <div class="bet-row-head">
+        <strong>\${esc(bet.home)} vs \${esc(bet.away)}</strong>
+        <span class="status-\${esc(bet.status)}">\${betStatusLabel(bet.status)}</span>
+      </div>
+      <div class="bet-row-meta">
+        \${esc(bet.market_name)} · cuota \${Number(bet.odds).toFixed(2)} · stake \${Number(bet.stake_eur).toFixed(2)}€
+        \${profit != null ? (' · ' + (profit >= 0 ? '+' : '') + profit.toFixed(2) + '€') : ''}
+      </div>
+      \${actions}
+    </div>
+  \`;
+}
+
+async function loadHistory(period){
+
+  currentHistoryPeriod = period;
+
+  document.getElementById('periodWeekBtn').classList.toggle('active', period === 'week');
+  document.getElementById('periodMonthBtn').classList.toggle('active', period === 'month');
+
+  const loading = document.getElementById('historyLoading');
+  const error = document.getElementById('historyError');
+  const summaryEl = document.getElementById('historySummary');
+  const listEl = document.getElementById('historyList');
+
+  loading.style.display = 'block';
+  error.style.display = 'none';
+
+  try{
+
+    const [summaryRes, betsRes] = await Promise.all([
+      fetch('/api/bets/summary?period=' + period, { cache:'no-store' }),
+      fetch('/api/bets?period=' + period, { cache:'no-store' })
+    ]);
+
+    const summary = await summaryRes.json();
+    const betsData = await betsRes.json();
+
+    if(!summaryRes.ok || !summary.ok){
+      throw new Error(summary.error || 'No se pudo cargar el resumen.');
+    }
+
+    if(!betsRes.ok || !betsData.ok){
+      throw new Error(betsData.error || 'No se pudieron cargar las apuestas.');
+    }
+
+    summaryEl.innerHTML = \`
+      <div class="prob">
+        <span>ACIERTO</span>
+        <b>\${summary.accuracyPct != null ? summary.accuracyPct + '%' : '-'}</b>
+      </div>
+      <div class="prob">
+        <span>GANANCIA</span>
+        <b>\${(summary.totalProfitEur >= 0 ? '+' : '') + summary.totalProfitEur.toFixed(2)}€</b>
+      </div>
+      <div class="prob">
+        <span>PENDIENTES</span>
+        <b>\${summary.pending}</b>
+      </div>
+    \`;
+
+    const bets = Array.isArray(betsData.bets) ? betsData.bets : [];
+
+    listEl.innerHTML =
+      bets.length
+        ? bets.map(renderBetRow).join('')
+        : '<div class="empty">Todavía no simulas apuestas en este periodo.</div>';
+
+  }catch(errorObject){
+
+    error.style.display = 'block';
+    error.textContent = errorObject.message || 'Error al cargar el historial.';
+
+  }finally{
+
+    loading.style.display = 'none';
+  }
+}
+
+async function settleBet(id, result){
+
+  try{
+
+    const response = await fetch('/api/bets/' + id + '/settle', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ result })
+    });
+
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      throw new Error(data.error || 'No se pudo liquidar la apuesta.');
+    }
+
+    loadHistory(currentHistoryPeriod);
+
+  }catch(errorObject){
+
+    alert(errorObject.message || 'Error al liquidar la apuesta.');
+  }
+}
+
+async function simulateBet(button){
+
+  const payload = {
+    home: button.dataset.home,
+    away: button.dataset.away,
+    date: button.dataset.date,
+    competition: button.dataset.competition,
+    market: button.dataset.market,
+    outcome: button.dataset.outcome,
+    marketName: button.dataset.marketName,
+    odds: button.dataset.odds,
+    probability: button.dataset.probability
+  };
+
+  const resultEl = button.parentElement.querySelector('.simulate-result');
+
+  button.disabled = true;
+  button.textContent = 'Guardando...';
+
+  try{
+
+    const response = await fetch('/api/bets', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      throw new Error(data.error || 'No se pudo simular la apuesta.');
+    }
+
+    button.textContent = '✅ Apuesta simulada';
+
+    if(resultEl){
+      resultEl.style.display = 'block';
+      resultEl.textContent = 'Guardada en tu historial. Márcala como ganada o perdida cuando termine el partido.';
+    }
+
+  }catch(errorObject){
+
+    button.disabled = false;
+    button.textContent = '🎯 Simular apuesta';
+
+    if(resultEl){
+      resultEl.style.display = 'block';
+      resultEl.textContent = errorObject.message || 'Error al simular la apuesta.';
+    }
+  }
+}
+
+function parlayLegHtml(leg){
+
+  return \`
+    <div class="parlay-leg">
+      <strong>\${esc(leg.home)} vs \${esc(leg.away)}</strong>
+      <span class="tag">\${esc(leg.tag)}</span>
+      <div class="muted">
+        \${esc(leg.marketName)} · cuota \${Number(leg.odds).toFixed(2)} · \${pct(leg.probability)}
+      </div>
+    </div>
+  \`;
+}
+
+function parlayCardHtml(parlay, stakeEur){
+
+  const legsHtml = parlay.legs.map(parlayLegHtml).join('');
+
+  return \`
+    <div class="parlay-card">
+      <div class="parlay-head">
+        <b>\${parlay.legsCount} combinaciones</b>
+        <b>cuota \${parlay.combinedOdds.toFixed(2)}</b>
+      </div>
+      \${legsHtml}
+      <div class="parlay-summary">
+        <span>Prob. combinada: \${parlay.combinedProbabilityPct}%</span>
+        <span>EV: \${(parlay.combinedEvPct >= 0 ? '+' : '') + parlay.combinedEvPct}%</span>
+      </div>
+      <button
+        class="simulate-bet-btn"
+        type="button"
+        data-parlay-legs='\${esc(JSON.stringify(parlay.legs))}'
+        data-parlay-odds="\${esc(parlay.combinedOdds)}"
+        data-parlay-count="\${esc(parlay.legsCount)}"
+      >
+        🎯 Simular este parlay (\${esc(stakeEur)}€)
+      </button>
+      <div class="simulate-result muted" style="display:none"></div>
+    </div>
+  \`;
+}
+
+async function loadParlay(){
+
+  const date = document.getElementById('date').value || localDateValue();
+
+  const loading = document.getElementById('parlayLoading');
+  const error = document.getElementById('parlayError');
+  const result = document.getElementById('parlayResult');
+  const button = document.getElementById('parlayBtn');
+
+  loading.style.display = 'block';
+  error.style.display = 'none';
+  result.innerHTML = '';
+  button.disabled = true;
+
+  try{
+
+    const response = await fetch('/api/parlay?date=' + encodeURIComponent(date) + '&legs=4', { cache:'no-store' });
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      throw new Error(data.error || 'No se pudo generar el parlay.');
+    }
+
+    if(!data.parlays || !data.parlays.length){
+      result.innerHTML = '<div class="empty">' + (data.message || 'No hay picks fuertes ni errores de cuota para esta fecha.') + '</div>';
+      return;
+    }
+
+    result.innerHTML = data.parlays.map(p => parlayCardHtml(p, data.stakeEur)).join('');
+
+  }catch(errorObject){
+
+    error.style.display = 'block';
+    error.textContent = errorObject.message || 'Error al generar el parlay.';
+
+  }finally{
+
+    loading.style.display = 'none';
+    button.disabled = false;
+  }
+}
+
+async function simulateParlay(button){
+
+  let legs = [];
+
+  try{
+    legs = JSON.parse(button.dataset.parlayLegs || '[]');
+  }catch(e){
+    legs = [];
+  }
+
+  const payload = {
+    home: 'PARLAY',
+    away: legs.map(l => l.home + ' vs ' + l.away).join(' | '),
+    date: legs[0]?.date || null,
+    competition: 'Combinada',
+    market: 'parlay',
+    outcome: 'combo',
+    marketName: button.dataset.parlayCount + ' combinaciones',
+    odds: button.dataset.parlayOdds,
+    probability: null,
+    legs
+  };
+
+  const resultEl = button.parentElement.querySelector('.simulate-result');
+
+  button.disabled = true;
+  button.textContent = 'Guardando...';
+
+  try{
+
+    const response = await fetch('/api/bets', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      throw new Error(data.error || 'No se pudo simular el parlay.');
+    }
+
+    button.textContent = '✅ Parlay simulado';
+
+    if(resultEl){
+      resultEl.style.display = 'block';
+      resultEl.textContent = 'Guardado en tu historial.';
+    }
+
+  }catch(errorObject){
+
+    button.disabled = false;
+    button.textContent = '🎯 Simular este parlay';
+
+    if(resultEl){
+      resultEl.style.display = 'block';
+      resultEl.textContent = errorObject.message || 'Error al simular el parlay.';
+    }
+  }
+}
+
 function initializeApp(){
 
   console.log(
-    '[V7.6.6] inicializando interfaz'
+    '[V7.8.0] inicializando interfaz'
   );
 
   const date =
@@ -4349,7 +5595,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.6.6] searchBtn no encontrado'
+      '[V7.8.0] searchBtn no encontrado'
     );
 
     return;
@@ -4359,6 +5605,38 @@ function initializeApp(){
     'click',
     searchFixtures
   );
+
+  const navHistory = document.getElementById('navHistory');
+  const navAnalyst = document.getElementById('navAnalyst');
+  const navHome = document.getElementById('navHome');
+  const periodWeekBtn = document.getElementById('periodWeekBtn');
+  const periodMonthBtn = document.getElementById('periodMonthBtn');
+
+  if(navHistory){
+    navHistory.addEventListener('click', showHistoryView);
+  }
+
+  if(navAnalyst){
+    navAnalyst.addEventListener('click', showSearchView);
+  }
+
+  if(navHome){
+    navHome.addEventListener('click', showSearchView);
+  }
+
+  if(periodWeekBtn){
+    periodWeekBtn.addEventListener('click', () => loadHistory('week'));
+  }
+
+  if(periodMonthBtn){
+    periodMonthBtn.addEventListener('click', () => loadHistory('month'));
+  }
+
+  const parlayBtn = document.getElementById('parlayBtn');
+
+  if(parlayBtn){
+    parlayBtn.addEventListener('click', loadParlay);
+  }
 
   document.addEventListener(
     'click',
@@ -4379,140 +5657,4 @@ function initializeApp(){
         );
 
         return;
-      }
-
-      const close =
-        event.target.closest(
-          '[data-close-panel]'
-        );
-
-      if(close){
-
-        closeAnalysis(
-          close.dataset.closePanel
-        );
-      }
-
-    }
-  );
-
-  console.log(
-    '[V7.6.6] interfaz inicializada correctamente'
-  );
-}
-
-window.searchFixtures =
-  searchFixtures;
-
-window.openAnalysis =
-  openAnalysis;
-
-window.closeAnalysis =
-  closeAnalysis;
-
-if(
-  document.readyState ===
-  'loading'
-){
-
-  document.addEventListener(
-    'DOMContentLoaded',
-    initializeApp
-  );
-
-}else{
-
-  initializeApp();
-}
-
-})();
-
-</script>
-
-</body>
-</html>`;
-}
-
-/* =========================================================
-   HOME
-========================================================= */
-
-app.get(
-  '/',
-  (req, res) => {
-
-    res.set(
-      'Cache-Control',
-      'no-store,no-cache,must-revalidate,proxy-revalidate'
-    );
-
-    res.set(
-      'Pragma',
-      'no-cache'
-    );
-
-    res.set(
-      'Expires',
-      '0'
-    );
-
-    res.type('html')
-      .send(
-        renderPage()
-      );
-  }
-);
-
-/* =========================================================
-   HEALTH
-========================================================= */
-
-app.get(
-  '/health',
-  (req, res) => {
-
-    res.set(
-      'Cache-Control',
-      'no-store'
-    );
-
-    res.json({
-
-      ok: true,
-
-      modelVersion:
-        MODEL_VERSION,
-
-      uptime:
-        process.uptime()
-    });
-
-  }
-);
-
-/* =========================================================
-   START
-========================================================= */
-
-app.listen(
-  PORT,
-  () => {
-
-    console.log(
-      `V7.6.6 ANALYST running on port ${PORT}`
-    );
-
-    console.log(
-      `Football-Data configurado: ${Boolean(
-        FOOTBALL_DATA_TOKEN
-      )}`
-    );
-
-    console.log(
-      `Odds API configurado: ${Boolean(
-        ODDS_API_KEY
-      )}`
-    );
-
-  }
-);
+    
