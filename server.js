@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const MODEL_VERSION = 'V7.8.0';
+const MODEL_VERSION = 'V7.9.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -150,35 +150,85 @@ function normalizeName(value) {
     .replace(/[^a-z0-9]/g, '');
 }
 
-function namesMatch(a, b) {
-  const x = normalizeName(a);
-  const y = normalizeName(b);
+const TEAM_NAME_STOPWORDS = new Set([
+  'fc', 'cf', 'afc', 'ac', 'cd', 'sc', 'ec', 'ud', 'rc', 'ca',
+  'club', 'the', 'de', 'of', 'sad', 'sa', 'cfr', 'if'
+]);
 
-  if (
-    !x ||
-    !y ||
-    x.length < 4 ||
-    y.length < 4
-  ) {
-    return false;
-  }
+/*
+ * Convierte un nombre en su lista de palabras significativas
+ * (sin acentos, sin siglas genéricas tipo "FC"/"CF"/"Club").
+ * Esto es lo que compara namesMatch(), en vez de la cadena completa.
+ */
+function nameTokens(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(token => !TEAM_NAME_STOPWORDS.has(token));
+}
 
-  if (x === y) {
-    return true;
-  }
+function tokenFoundIn(word, tokenList) {
+  for (const token of tokenList) {
+    if (token === word) {
+      return true;
+    }
 
-  if (
-    x.length >= 7 &&
-    y.length >= 7 &&
-    (
-      x.includes(y) ||
-      y.includes(x)
-    )
-  ) {
-    return true;
+    if (
+      word.length >= 4 &&
+      token.length >= 4 &&
+      (token.includes(word) || word.includes(token))
+    ) {
+      return true;
+    }
   }
 
   return false;
+}
+
+/*
+ * The Odds API entrega nombres cortos ("Nice", "Metz", "Lyon")
+ * mientras que Football-Data usa nombres oficiales largos
+ * ("OGC Nice", "FC Metz", "Olympique Lyonnais"). La versión anterior
+ * de esta función exigía que AMBOS nombres tuvieran 7+ caracteres
+ * para permitir coincidencia parcial, lo que hacía fallar
+ * sistemáticamente cualquier nombre corto de club real.
+ *
+ * Ahora: se toma el lado con menos palabras significativas como la
+ * "forma corta", y se exige que TODAS sus palabras aparezcan en el
+ * otro lado (exactas o como subcadena de al menos 4 letras). Esto
+ * evita falsos positivos como "Real Madrid" vs "Real Sociedad"
+ * (que antes NO ocurrían, pero un enfoque más simple sí los genera).
+ */
+function namesMatch(a, b) {
+  const fullA = normalizeName(a);
+  const fullB = normalizeName(b);
+
+  if (!fullA || !fullB || fullA.length < 3 || fullB.length < 3) {
+    return false;
+  }
+
+  if (fullA === fullB) {
+    return true;
+  }
+
+  const tokensA = nameTokens(a);
+  const tokensB = nameTokens(b);
+
+  if (!tokensA.length || !tokensB.length) {
+    return false;
+  }
+
+  const [shortSide, longSide] =
+    tokensA.length <= tokensB.length
+      ? [tokensA, tokensB]
+      : [tokensB, tokensA];
+
+  return shortSide.every(word => tokenFoundIn(word, longSide));
 }
 
 function median(values) {
@@ -746,7 +796,7 @@ async function getOddsEvents(
 
     const url =
       `${ODDS_BASE}/sports/${sport}/odds` +
-      `?regions=us,uk` +
+      `?regions=us,uk,eu` +
       `&markets=h2h,totals` +
       `&oddsFormat=decimal` +
       `&apiKey=${encodeURIComponent(
@@ -1927,8 +1977,11 @@ app.get(
         .toISOString()
         .slice(0, 10);
 
+    const competitionFilter =
+      String(req.query.competition || '').trim().toUpperCase();
+
     console.log(
-      `[API /api/fixtures] solicitud recibida date=${date}`
+      `[API /api/fixtures] solicitud recibida date=${date} competition=${competitionFilter || 'TODAS'}`
     );
 
     try {
@@ -1943,6 +1996,11 @@ app.get(
             match =>
               match?.homeTeam?.name &&
               match?.awayTeam?.name
+          )
+          .filter(
+            match =>
+              !competitionFilter ||
+              (match.competitionCode || match.competition?.code) === competitionFilter
           )
           .sort(
             (a, b) =>
@@ -2164,14 +2222,14 @@ function pickParlayCandidate(analysis) {
 
     const isStrong =
       market.valueEligible &&
-      Number(market.referenceEvPct) >= 5 &&
-      analysis.confidence >= 65;
+      Number(market.referenceEvPct) >= 3 &&
+      analysis.confidence >= 55;
 
     const isOddsError =
       market.isOutlier &&
       market.referenceOdds &&
-      market.bestOdds > market.referenceOdds * 1.20 &&
-      Number(market.probability) >= 50;
+      market.bestOdds > market.referenceOdds * 1.15 &&
+      Number(market.probability) >= 45;
 
     if (isStrong || isOddsError) {
       candidates.push({
@@ -2222,12 +2280,21 @@ app.get(
       const maxLegs =
         Math.min(6, Math.max(2, Number(req.query.legs) || 4));
 
+      const competitionFilter =
+        String(req.query.competition || '').trim().toUpperCase();
+
       const fixtures = await getFixture(date);
 
       const withNames =
-        fixtures.filter(
-          match => match?.homeTeam?.name && match?.awayTeam?.name
-        );
+        fixtures
+          .filter(
+            match => match?.homeTeam?.name && match?.awayTeam?.name
+          )
+          .filter(
+            match =>
+              !competitionFilter ||
+              (match.competitionCode || match.competition?.code) === competitionFilter
+          );
 
       const candidates = [];
 
@@ -3372,7 +3439,7 @@ function renderPage() {
 >
 
 <title>
-Mi Pronóstico Deportivo V7.8.0
+Mi Pronóstico Deportivo V7.9.0
 </title>
 
 <style>
@@ -3437,6 +3504,57 @@ h1{
   border-radius:999px;
   padding:8px 10px;
   font-size:12px;
+}
+
+.league-chips{
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px;
+  margin-bottom:12px;
+}
+
+.league-chip{
+  background:#151a22;
+  border:1px solid #303846;
+  border-radius:999px;
+  padding:8px 12px;
+  font-size:12px;
+  font-weight:700;
+  color:#c7ccd4;
+  cursor:pointer;
+}
+
+.league-chip.active{
+  background:#f4f5f7;
+  color:#080b10;
+  border-color:#f4f5f7;
+}
+
+.league-chip-priority{
+  border-color:#ffb45d;
+  color:#ffb45d;
+}
+
+.league-chip-priority.active{
+  background:#ffb45d;
+  color:#080b10;
+  border-color:#ffb45d;
+}
+
+.team-highlight{
+  border-color:#ffb45d !important;
+  background:#1a140a !important;
+}
+
+.team-highlight-badge{
+  display:inline-block;
+  margin-left:6px;
+  padding:2px 7px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:800;
+  background:#ffb45d;
+  color:#080b10;
 }
 
 .card{
@@ -3908,7 +4026,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.8.0 ANALYST
+● V7.9.0 ANALYST
 </span>
 
 <h1>
@@ -3936,6 +4054,17 @@ Modelo estadístico + xG + forma + cuotas reales + filtro de valor.
 
 <div class="card-title">
 Buscar partidos por fecha
+</div>
+
+<div class="league-chips" id="leagueChips">
+  <button type="button" class="league-chip active" data-competition="">Todas</button>
+  <button type="button" class="league-chip league-chip-priority" data-competition="PD">🇪🇸 LaLiga</button>
+  <button type="button" class="league-chip" data-competition="PL">🏴 Premier League</button>
+  <button type="button" class="league-chip" data-competition="FL1">🇫🇷 Ligue 1</button>
+  <button type="button" class="league-chip" data-competition="SA">🇮🇹 Serie A</button>
+  <button type="button" class="league-chip" data-competition="BL1">🇩🇪 Bundesliga</button>
+  <button type="button" class="league-chip" data-competition="CL">⭐ Champions</button>
+  <button type="button" class="league-chip" data-competition="EL">🥈 Europa League</button>
 </div>
 
 <input
@@ -4062,8 +4191,10 @@ Historial
 
 'use strict';
 
+let selectedCompetition = '';
+
 console.log(
-  '[V7.8.0] JavaScript cargado correctamente'
+  '[V7.9.0] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -4211,7 +4342,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.8.0] searchFixtures ejecutado'
+    '[V7.9.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -4287,7 +4418,8 @@ async function searchFixtures(){
       await fetch(
         '/api/fixtures?date=' +
         encodeURIComponent(date) +
-        '&v=780',
+        (selectedCompetition ? '&competition=' + encodeURIComponent(selectedCompetition) : '') +
+        '&v=790',
         {
           cache:'no-store',
 
@@ -4302,7 +4434,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.8.0] fixtures:',
+      '[V7.9.0] fixtures:',
       data
     );
 
@@ -4368,7 +4500,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.8.0] ERROR:',
+      '[V7.9.0] ERROR:',
       errorObject
     );
 
@@ -4407,9 +4539,13 @@ function fixtureHtml(
       index
     );
 
+  const isFavoriteTeam =
+    /real madrid/i.test(fixture.home || '') ||
+    /real madrid/i.test(fixture.away || '');
+
   return \`
 
-    <article class="fixture">
+    <article class="fixture \${isFavoriteTeam ? 'team-highlight' : ''}">
 
       <div class="fixture-head">
 
@@ -4423,6 +4559,7 @@ function fixtureHtml(
             \${esc(
               fixture.away
             )}
+            \${isFavoriteTeam ? '<span class="team-highlight-badge">⭐ Real Madrid</span>' : ''}
           </div>
 
           <div class="fixture-meta">
@@ -4571,7 +4708,7 @@ async function openAnalysis(
       await fetch(
         '/api/analyze?' +
         params.toString() +
-        '&v=780',
+        '&v=790',
         {
           cache:'no-store',
 
@@ -4586,7 +4723,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.8.0] análisis:',
+      '[V7.9.0] análisis:',
       data
     );
 
@@ -4613,7 +4750,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.8.0] ANALYZE ERROR:',
+      '[V7.9.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -5483,7 +5620,7 @@ async function loadParlay(){
 
   try{
 
-    const response = await fetch('/api/parlay?date=' + encodeURIComponent(date) + '&legs=4', { cache:'no-store' });
+    const response = await fetch('/api/parlay?date=' + encodeURIComponent(date) + '&legs=4' + (selectedCompetition ? '&competition=' + encodeURIComponent(selectedCompetition) : ''), { cache:'no-store' });
     const data = await response.json();
 
     if(!response.ok || !data.ok){
@@ -5573,7 +5710,7 @@ async function simulateParlay(button){
 function initializeApp(){
 
   console.log(
-    '[V7.8.0] inicializando interfaz'
+    '[V7.9.0] inicializando interfaz'
   );
 
   const date =
@@ -5595,7 +5732,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.8.0] searchBtn no encontrado'
+      '[V7.9.0] searchBtn no encontrado'
     );
 
     return;
@@ -5605,6 +5742,22 @@ function initializeApp(){
     'click',
     searchFixtures
   );
+
+  const leagueChips = document.querySelectorAll('.league-chip');
+
+  leagueChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+
+      leagueChips.forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+
+      selectedCompetition = chip.dataset.competition || '';
+
+      if(document.getElementById('date').value){
+        searchFixtures();
+      }
+    });
+  });
 
   const navHistory = document.getElementById('navHistory');
   const navAnalyst = document.getElementById('navAnalyst');
@@ -5706,7 +5859,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.8.0] interfaz inicializada correctamente'
+    '[V7.9.0] interfaz inicializada correctamente'
   );
 }
 
@@ -5808,7 +5961,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.8.0 ANALYST running on port ${PORT}`
+      `V7.9.0 ANALYST running on port ${PORT}`
     );
 
     console.log(
