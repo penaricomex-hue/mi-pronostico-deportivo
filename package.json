@@ -8,3 +8,4 @@
  "engines":{"node":">=18"},
   "dependencies":{"express":"^5.1.0"}
 }
+"pg": "^8.11.3"
