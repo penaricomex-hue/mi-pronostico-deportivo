@@ -5657,4 +5657,177 @@ function initializeApp(){
         );
 
         return;
-    
+      }
+
+      const close =
+        event.target.closest(
+          '[data-close-panel]'
+        );
+
+      if(close){
+
+        closeAnalysis(
+          close.dataset.closePanel
+        );
+
+        return;
+      }
+
+      const simulate =
+        event.target.closest(
+          '.simulate-bet-btn'
+        );
+
+      if(simulate){
+
+        if(simulate.dataset.parlayLegs){
+          simulateParlay(simulate);
+        }else{
+          simulateBet(simulate);
+        }
+
+        return;
+      }
+
+      const settle =
+        event.target.closest(
+          '[data-settle]'
+        );
+
+      if(settle){
+
+        settleBet(
+          settle.dataset.settle,
+          settle.dataset.result
+        );
+      }
+
+    }
+  );
+
+  console.log(
+    '[V7.8.0] interfaz inicializada correctamente'
+  );
+}
+
+window.searchFixtures =
+  searchFixtures;
+
+window.openAnalysis =
+  openAnalysis;
+
+window.closeAnalysis =
+  closeAnalysis;
+
+if(
+  document.readyState ===
+  'loading'
+){
+
+  document.addEventListener(
+    'DOMContentLoaded',
+    initializeApp
+  );
+
+}else{
+
+  initializeApp();
+}
+
+})();
+
+</script>
+
+</body>
+</html>`;
+}
+
+/* =========================================================
+   HOME
+========================================================= */
+
+app.get(
+  '/',
+  (req, res) => {
+
+    res.set(
+      'Cache-Control',
+      'no-store,no-cache,must-revalidate,proxy-revalidate'
+    );
+
+    res.set(
+      'Pragma',
+      'no-cache'
+    );
+
+    res.set(
+      'Expires',
+      '0'
+    );
+
+    res.type('html')
+      .send(
+        renderPage()
+      );
+  }
+);
+
+/* =========================================================
+   HEALTH
+========================================================= */
+
+app.get(
+  '/health',
+  (req, res) => {
+
+    res.set(
+      'Cache-Control',
+      'no-store'
+    );
+
+    res.json({
+
+      ok: true,
+
+      modelVersion:
+        MODEL_VERSION,
+
+      uptime:
+        process.uptime()
+    });
+
+  }
+);
+
+/* =========================================================
+   START
+========================================================= */
+
+app.listen(
+  PORT,
+  async () => {
+
+    console.log(
+      `V7.8.0 ANALYST running on port ${PORT}`
+    );
+
+    console.log(
+      `Football-Data configurado: ${Boolean(
+        FOOTBALL_DATA_TOKEN
+      )}`
+    );
+
+    console.log(
+      `Odds API configurado: ${Boolean(
+        ODDS_API_KEY
+      )}`
+    );
+
+    console.log(
+      `Base de datos configurada: ${Boolean(DATABASE_URL)}`
+    );
+
+    await ensureSchema();
+
+  }
+);
