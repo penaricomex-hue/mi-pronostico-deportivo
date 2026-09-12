@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const {
@@ -16,7 +17,64 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const MODEL_VERSION = 'V7.9.0';
+/* =========================================================
+   ACCESO PRIVADO (usuario/contraseña)
+   Se activa solo si defines APP_USERNAME y APP_PASSWORD en
+   las variables de entorno de Render. Sin esas variables,
+   la app queda igual que antes (sin login) para no romper
+   nada si aún no las configuras.
+========================================================= */
+
+const APP_USERNAME = process.env.APP_USERNAME || '';
+const APP_PASSWORD = process.env.APP_PASSWORD || '';
+
+function timingSafeEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+
+  if (bufA.length !== bufB.length) {
+    // igual se compara para no filtrar la longitud por tiempo de respuesta
+    crypto.timingSafeEqual(bufA, bufA);
+    return false;
+  }
+
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+if (APP_USERNAME && APP_PASSWORD) {
+
+  app.use((req, res, next) => {
+
+    const header = req.headers.authorization || '';
+    const [scheme, encoded] = header.split(' ');
+
+    if (scheme === 'Basic' && encoded) {
+
+      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+      const separatorIndex = decoded.indexOf(':');
+
+      const user = separatorIndex >= 0 ? decoded.slice(0, separatorIndex) : decoded;
+      const pass = separatorIndex >= 0 ? decoded.slice(separatorIndex + 1) : '';
+
+      if (
+        timingSafeEqual(user, APP_USERNAME) &&
+        timingSafeEqual(pass, APP_PASSWORD)
+      ) {
+        return next();
+      }
+    }
+
+    res.set('WWW-Authenticate', 'Basic realm="Mi Pronostico Deportivo"');
+    return res.status(401).send('Acceso restringido.');
+  });
+
+  console.log('[AUTH] Acceso protegido con usuario/contraseña activado.');
+
+} else {
+  console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
+}
+
+const MODEL_VERSION = 'V7.10.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -1623,7 +1681,7 @@ function buildMarket(
       ),
 
     probability:
-      modelProbability,
+      Number((modelProbability * 100).toFixed(1)),
 
     bestOdds:
       info.bestOdds,
@@ -1747,10 +1805,10 @@ function bestValue(
         ) >= 55 &&
         Number(
           market.referenceEvPct
-        ) >= 2 &&
+        ) >= 1.5 &&
         Number(
           modelConfidence
-        ) >= 60
+        ) >= 55
     )
     .sort(
       (a, b) =>
@@ -3439,7 +3497,7 @@ function renderPage() {
 >
 
 <title>
-Mi Pronóstico Deportivo V7.9.0
+Mi Pronóstico Deportivo V7.10.0
 </title>
 
 <style>
@@ -4026,7 +4084,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.9.0 ANALYST
+● V7.10.0 ANALYST
 </span>
 
 <h1>
@@ -4194,7 +4252,7 @@ Historial
 let selectedCompetition = '';
 
 console.log(
-  '[V7.9.0] JavaScript cargado correctamente'
+  '[V7.10.0] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -4342,7 +4400,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.9.0] searchFixtures ejecutado'
+    '[V7.10.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -4434,7 +4492,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.9.0] fixtures:',
+      '[V7.10.0] fixtures:',
       data
     );
 
@@ -4500,7 +4558,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.9.0] ERROR:',
+      '[V7.10.0] ERROR:',
       errorObject
     );
 
@@ -4723,7 +4781,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.9.0] análisis:',
+      '[V7.10.0] análisis:',
       data
     );
 
@@ -4750,7 +4808,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.9.0] ANALYZE ERROR:',
+      '[V7.10.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -4785,8 +4843,21 @@ function closeAnalysis(
 }
 
 function marketHtml(
-  market
+  market,
+  match
 ){
+
+  const isRecommended =
+    !market.isOutlier &&
+    market.valueEligible &&
+    Number(market.referenceEvPct) >= 1.5;
+
+  const badge =
+    market.isOutlier
+      ? '<span class="tag">⚠️ Precio atípico</span>'
+      : isRecommended
+        ? '<span class="team-highlight-badge">✅ Sí</span>'
+        : '<span class="tag">❌ No</span>';
 
   return \`
 
@@ -4798,6 +4869,7 @@ function marketHtml(
           \${esc(
             market.name
           )}
+          \${badge}
         </strong>
 
         <span>
@@ -4873,6 +4945,29 @@ function marketHtml(
           : ''
       }
 
+      \${
+        market.bestOdds && match
+          ? \`
+            <button
+              class="simulate-bet-btn"
+              type="button"
+              data-home="\${esc(match.match?.home)}"
+              data-away="\${esc(match.match?.away)}"
+              data-date="\${esc(match.match?.date)}"
+              data-competition="\${esc(match.match?.competition)}"
+              data-market="\${esc(market.type)}"
+              data-outcome="\${esc(market.outcome)}"
+              data-market-name="\${esc(market.name)}"
+              data-odds="\${esc(market.bestOdds)}"
+              data-probability="\${esc(market.probability)}"
+            >
+              🎯 Simular esta apuesta (\${esc(match.stakeEur)}€)
+            </button>
+            <div class="simulate-result muted" style="display:none"></div>
+          \`
+          : ''
+      }
+
     </div>
 
   \`;
@@ -4900,7 +4995,7 @@ function analysisHtml(
           []
         )
         .map(
-          marketHtml
+          market => marketHtml(market, data)
         )
         .join('')
       : \`
@@ -5710,7 +5805,7 @@ async function simulateParlay(button){
 function initializeApp(){
 
   console.log(
-    '[V7.9.0] inicializando interfaz'
+    '[V7.10.0] inicializando interfaz'
   );
 
   const date =
@@ -5732,7 +5827,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.9.0] searchBtn no encontrado'
+      '[V7.10.0] searchBtn no encontrado'
     );
 
     return;
@@ -5859,7 +5954,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.9.0] interfaz inicializada correctamente'
+    '[V7.10.0] interfaz inicializada correctamente'
   );
 }
 
@@ -5961,7 +6056,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.9.0 ANALYST running on port ${PORT}`
+      `V7.10.0 ANALYST running on port ${PORT}`
     );
 
     console.log(
