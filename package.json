@@ -1,11 +1,17 @@
 {
-  "name":"mi-pronostico-deportivo",
-  "version":"6.0.0",
-  "private":true,
-  "description":"Aplicación móvil/web de pronósticos deportivos con football-data.org, The Odds API y modelo Poisson",
-  "main":"server.js",
-"scripts":{"start":"node stability.js"},
- "engines":{"node":">=18"},
-  "dependencies":{"express":"^5.1.0"}
+  "name": "mi-pronostico-deportivo",
+  "version": "6.0.0",
+  "private": true,
+  "description": "Aplicación móvil/web de pronósticos deportivos con football-data.org, The Odds API y modelo Poisson",
+  "main": "server.js",
+  "scripts": {
+    "start": "node stability.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pg": "^8.11.3"
+  }
 }
-"pg": "^8.11.3"
