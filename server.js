@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.10.2';
+const MODEL_VERSION = 'V7.10.3';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -3497,7 +3497,7 @@ function renderPage() {
 >
 
 <title>
-Mi Pronóstico Deportivo V7.10.2
+Mi Pronóstico Deportivo V7.10.3
 </title>
 
 <style>
@@ -4084,7 +4084,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.10.2 ANALYST
+● V7.10.3 ANALYST
 </span>
 
 <h1>
@@ -4252,7 +4252,7 @@ Historial
 let selectedCompetition = '';
 
 console.log(
-  '[V7.10.2] JavaScript cargado correctamente'
+  '[V7.10.3] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -4400,7 +4400,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.10.2] searchFixtures ejecutado'
+    '[V7.10.3] searchFixtures ejecutado'
   );
 
   const date =
@@ -4492,7 +4492,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.10.2] fixtures:',
+      '[V7.10.3] fixtures:',
       data
     );
 
@@ -4558,7 +4558,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.10.2] ERROR:',
+      '[V7.10.3] ERROR:',
       errorObject
     );
 
@@ -4781,7 +4781,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.10.2] análisis:',
+      '[V7.10.3] análisis:',
       data
     );
 
@@ -4808,7 +4808,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.10.2] ANALYZE ERROR:',
+      '[V7.10.3] ANALYZE ERROR:',
       errorObject
     );
 
@@ -5805,7 +5805,7 @@ async function simulateParlay(button){
 function initializeApp(){
 
   console.log(
-    '[V7.10.2] inicializando interfaz'
+    '[V7.10.3] inicializando interfaz'
   );
 
   const date =
@@ -5827,7 +5827,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.10.2] searchBtn no encontrado'
+      '[V7.10.3] searchBtn no encontrado'
     );
 
     return;
@@ -5954,7 +5954,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.10.2] interfaz inicializada correctamente'
+    '[V7.10.3] interfaz inicializada correctamente'
   );
 }
 
@@ -6078,18 +6078,26 @@ app.get(
       results.matchesLaligaTry1 = await callBigBalls('/v1/matches?league=laliga&sport=football');
       results.matchesLaligaTry2 = await callBigBalls('/v1/matches?league=la-liga&sport=football');
 
-      const sampleMatch =
-        results.matchesLaligaTry1.sample?.[0] ||
-        results.matchesLaligaTry2.sample?.[0] ||
+      const allMatches = results.matchesLaligaTry1.sample || [];
+
+      const scheduledMatch =
+        allMatches.find(m => m?.status === 'scheduled' && m?.has_odds) ||
+        allMatches.find(m => m?.status === 'scheduled') ||
         null;
+
+      const sampleMatch = scheduledMatch || allMatches[0] || null;
 
       const matchId = sampleMatch?.id || sampleMatch?.match_id || null;
 
       if (matchId) {
+        // La prueba más importante: ¿las cuotas de verdad son gratis?
+        results.oddsTry = await callBigBalls(`/v1/matches/${matchId}/odds`);
+
         results.lineupsTry1 = await callBigBalls(`/v1/matches/${matchId}/lineups`);
+        results.lineupsStoredTry = await callBigBalls(`/v1/stored/matches/${matchId}/lineups`);
         results.statsTry1 = await callBigBalls(`/v1/stored/matches/${matchId}/stats`);
       } else {
-        results.note = 'No se encontró un partido de muestra para probar lineups/stats.';
+        results.note = 'No se encontró un partido de muestra para probar odds/lineups/stats.';
       }
 
       results.injuriesTry1 = await callBigBalls('/v1/injuries?sport=football&league=laliga');
@@ -6241,7 +6249,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.10.2 ANALYST running on port ${PORT}`
+      `V7.10.3 ANALYST running on port ${PORT}`
     );
 
     console.log(
