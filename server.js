@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.10.3';
+const MODEL_VERSION = 'V7.11.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -88,7 +88,19 @@ const FOOTBALL_DATA_TOKEN =
 const ODDS_API_KEY =
   process.env.ODDS_API_KEY;
 
-const CACHE_MINUTES = 5;
+const BIGBALLS_KEY =
+  process.env.BIGBALLS_KEY || '';
+
+const BIGBALLS_LEAGUE_MAP = {
+  PD: 'laliga',
+  PL: 'epl',
+  FL1: 'ligue1',
+  SA: 'serie_a',
+  BL1: 'bundesliga',
+  CL: 'cl'
+};
+
+const CACHE_MINUTES = 1440; // 24 horas — conserva la cuota de The Odds API
 
 const STAKE_EUR = Number(process.env.STAKE_EUR) || 10;
 
@@ -287,6 +299,133 @@ function namesMatch(a, b) {
       : [tokensB, tokensA];
 
   return shortSide.every(word => tokenFoundIn(word, longSide));
+}
+
+/* =========================================================
+   LESIONADOS (Big Balls Sports Data)
+   Ajusta la fuerza de ataque/defensa de un equipo según
+   cuántos jugadores tiene reportados como lesionados.
+   Gratis en su plan free; si falla o no hay key, simplemente
+   no se aplica ningún ajuste (no rompe el análisis).
+========================================================= */
+
+async function bigBallsRequest(path) {
+  if (!BIGBALLS_KEY) {
+    return null;
+  }
+
+  const key = `bigballs:${path}`;
+
+  const cached = cacheGet(key);
+
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.bigballsdata.com${path}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${BIGBALLS_KEY}`
+        }
+      }
+    );
+
+    if (!response.ok) {
+      console.warn(`[BIGBALLS] ${path} -> HTTP ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+
+    return cacheSetIfNotEmpty(key, data);
+
+  } catch (error) {
+    console.warn('[BIGBALLS] error:', path, error.message);
+    return null;
+  }
+}
+
+async function getBigBallsTeams(bbLeagueKey) {
+  const data = await bigBallsRequest(`/v1/teams?sport=football&league=${bbLeagueKey}`);
+  return Array.isArray(data?.data) ? data.data : [];
+}
+
+async function getBigBallsInjuries(bbLeagueKey) {
+  const data = await bigBallsRequest(`/v1/injuries?sport=football&league=${bbLeagueKey}`);
+  return Array.isArray(data?.data?.injuries?.value) ? data.data.injuries.value : [];
+}
+
+async function getInjuryCountForTeam(teamName, competitionCode) {
+  const bbLeagueKey = BIGBALLS_LEAGUE_MAP[competitionCode];
+
+  if (!bbLeagueKey || !BIGBALLS_KEY) {
+    return 0;
+  }
+
+  try {
+    const [teams, injuries] = await Promise.all([
+      getBigBallsTeams(bbLeagueKey),
+      getBigBallsInjuries(bbLeagueKey)
+    ]);
+
+    const matchedTeam = teams.find(t => namesMatch(t?.name, teamName));
+
+    if (!matchedTeam?.id) {
+      return 0;
+    }
+
+    return injuries.filter(
+      inj => inj?.current_team_id === matchedTeam.id
+    ).length;
+
+  } catch (error) {
+    console.warn('[BIGBALLS INJURIES]', teamName, error.message);
+    return 0;
+  }
+}
+
+/*
+ * Descuento moderado: -3% de fuerza (ataque y defensa) por cada
+ * jugador lesionado reportado, con un tope de -15% para no
+ * castigar de más a equipos con plantillas largas.
+ */
+async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, competitionCode) {
+  try {
+    const [homeInjuries, awayInjuries] = await Promise.all([
+      getInjuryCountForTeam(homeName, competitionCode),
+      getInjuryCountForTeam(awayName, competitionCode)
+    ]);
+
+    const homeFactor = clamp(1 - homeInjuries * 0.03, 0.85, 1);
+    const awayFactor = clamp(1 - awayInjuries * 0.03, 0.85, 1);
+
+    if (homeInjuries || awayInjuries) {
+      console.log(
+        `[INJURIES] ${homeName}: ${homeInjuries} lesionados (factor ${homeFactor.toFixed(2)}) | ${awayName}: ${awayInjuries} lesionados (factor ${awayFactor.toFixed(2)})`
+      );
+    }
+
+    return {
+      homeStats: {
+        ...homeStats,
+        attackStrength: homeStats.attackStrength * homeFactor,
+        defenseStrength: homeStats.defenseStrength * homeFactor
+      },
+      awayStats: {
+        ...awayStats,
+        attackStrength: awayStats.attackStrength * awayFactor,
+        defenseStrength: awayStats.defenseStrength * awayFactor
+      },
+      homeInjuries,
+      awayInjuries
+    };
+
+  } catch (error) {
+    console.warn('[INJURIES] ajuste fallback (sin cambios):', error.message);
+    return { homeStats, awayStats, homeInjuries: 0, awayInjuries: 0 };
+  }
 }
 
 function median(values) {
@@ -891,7 +1030,8 @@ async function getOddsEvents(
 }
 
 async function getFixturesOdds(
-  date
+  date,
+  competitionFilter
 ) {
   if (!ODDS_API_KEY) {
     console.log(
@@ -902,14 +1042,19 @@ async function getFixturesOdds(
   }
 
   console.log(
-    `[FIXTURES ODDS] buscando ${date}`
+    `[FIXTURES ODDS] buscando ${date} (liga=${competitionFilter || 'TODAS'})`
   );
 
   const all = [];
 
+  const competitionsToQuery =
+    competitionFilter && COMPETITIONS.includes(competitionFilter)
+      ? [competitionFilter]
+      : COMPETITIONS;
+
   for (
     const competitionCode of
-    COMPETITIONS
+    competitionsToQuery
   ) {
     const events =
       await getOddsEvents(
@@ -1021,30 +1166,37 @@ function competitionName(
 ========================================================= */
 
 async function getFixture(
-  date
+  date,
+  competitionFilter
 ) {
   const key =
-    `fixtures:${date}`;
+    `fixtures:${date}:${competitionFilter || 'ALL'}`;
 
   const cached =
     cacheGet(key);
 
   if (cached) {
     console.log(
-      `[FIXTURES] cache ${date}: ${cached.length}`
+      `[FIXTURES] cache ${date} (${competitionFilter || 'TODAS'}): ${cached.length}`
     );
 
     return cached;
   }
 
   console.log(
-    `[FIXTURES] buscando ${date}`
+    `[FIXTURES] buscando ${date} (liga=${competitionFilter || 'TODAS'})`
   );
 
   let matches =
     await getFixturesFootballData(
       date
     );
+
+  if (competitionFilter) {
+    matches = matches.filter(
+      match => (match.competitionCode || match.competition?.code) === competitionFilter
+    );
+  }
 
   if (!matches.length) {
     console.log(
@@ -1053,7 +1205,8 @@ async function getFixture(
 
     matches =
       await getFixturesOdds(
-        date
+        date,
+        competitionFilter
       );
   }
 
@@ -2004,6 +2157,9 @@ app.get(
       databaseConfigured:
         Boolean(DATABASE_URL),
 
+      bigBallsConfigured:
+        Boolean(BIGBALLS_KEY),
+
       stakeEur:
         STAKE_EUR,
 
@@ -2045,7 +2201,8 @@ app.get(
     try {
       const matches =
         await getFixture(
-          date
+          date,
+          competitionFilter
         );
 
       const fixtures =
@@ -2217,6 +2374,17 @@ async function analyzeOneFixture(fixture) {
     console.warn('[PARLAY] estabilización fallback:', error.message);
   }
 
+  const injuryAdjusted = await applyInjuryAdjustment(
+    homeStats,
+    awayStats,
+    actualHomeName,
+    actualAwayName,
+    competitionCode
+  );
+
+  homeStats = injuryAdjusted.homeStats;
+  awayStats = injuryAdjusted.awayStats;
+
   const modelInput = createModelInput(homeStats, awayStats);
   const model = matchModel(modelInput.homeXg, modelInput.awayXg);
 
@@ -2341,7 +2509,7 @@ app.get(
       const competitionFilter =
         String(req.query.competition || '').trim().toUpperCase();
 
-      const fixtures = await getFixture(date);
+      const fixtures = await getFixture(date, competitionFilter);
 
       const withNames =
         fixtures
@@ -2744,6 +2912,20 @@ app.get(
       }
 
       /*
+       * LESIONADOS (Big Balls Sports Data, si hay BIGBALLS_KEY)
+       */
+      const injuryAdjusted = await applyInjuryAdjustment(
+        homeStats,
+        awayStats,
+        actualHomeName,
+        actualAwayName,
+        competitionCode
+      );
+
+      homeStats = injuryAdjusted.homeStats;
+      awayStats = injuryAdjusted.awayStats;
+
+      /*
        * MODELO
        */
       const modelInput =
@@ -3109,6 +3291,12 @@ app.get(
 
           recentAwayMatches:
             awayMatches.length,
+
+          homeInjuries:
+            injuryAdjusted.homeInjuries,
+
+          awayInjuries:
+            injuryAdjusted.awayInjuries,
 
           valueFilters: {
 
@@ -3497,7 +3685,7 @@ function renderPage() {
 >
 
 <title>
-Mi Pronóstico Deportivo V7.10.3
+Mi Pronóstico Deportivo V7.11.0
 </title>
 
 <style>
@@ -4084,7 +4272,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.10.3 ANALYST
+● V7.11.0 ANALYST
 </span>
 
 <h1>
@@ -4252,7 +4440,7 @@ Historial
 let selectedCompetition = '';
 
 console.log(
-  '[V7.10.3] JavaScript cargado correctamente'
+  '[V7.11.0] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -4400,7 +4588,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.10.3] searchFixtures ejecutado'
+    '[V7.11.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -4492,7 +4680,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.10.3] fixtures:',
+      '[V7.11.0] fixtures:',
       data
     );
 
@@ -4558,7 +4746,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.10.3] ERROR:',
+      '[V7.11.0] ERROR:',
       errorObject
     );
 
@@ -4781,7 +4969,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.10.3] análisis:',
+      '[V7.11.0] análisis:',
       data
     );
 
@@ -4808,7 +4996,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.10.3] ANALYZE ERROR:',
+      '[V7.11.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -5805,7 +5993,7 @@ async function simulateParlay(button){
 function initializeApp(){
 
   console.log(
-    '[V7.10.3] inicializando interfaz'
+    '[V7.11.0] inicializando interfaz'
   );
 
   const date =
@@ -5827,7 +6015,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.10.3] searchBtn no encontrado'
+      '[V7.11.0] searchBtn no encontrado'
     );
 
     return;
@@ -5954,7 +6142,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.10.3] interfaz inicializada correctamente'
+    '[V7.11.0] interfaz inicializada correctamente'
   );
 }
 
@@ -6249,7 +6437,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.10.3 ANALYST running on port ${PORT}`
+      `V7.11.0 ANALYST running on port ${PORT}`
     );
 
     console.log(
