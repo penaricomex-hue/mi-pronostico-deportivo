@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.10.0';
+const MODEL_VERSION = 'V7.10.1';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -3497,7 +3497,7 @@ function renderPage() {
 >
 
 <title>
-Mi Pronóstico Deportivo V7.10.0
+Mi Pronóstico Deportivo V7.10.1
 </title>
 
 <style>
@@ -4084,7 +4084,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.10.0 ANALYST
+● V7.10.1 ANALYST
 </span>
 
 <h1>
@@ -4252,7 +4252,7 @@ Historial
 let selectedCompetition = '';
 
 console.log(
-  '[V7.10.0] JavaScript cargado correctamente'
+  '[V7.10.1] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -4400,7 +4400,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.10.0] searchFixtures ejecutado'
+    '[V7.10.1] searchFixtures ejecutado'
   );
 
   const date =
@@ -4492,7 +4492,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.10.0] fixtures:',
+      '[V7.10.1] fixtures:',
       data
     );
 
@@ -4558,7 +4558,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.10.0] ERROR:',
+      '[V7.10.1] ERROR:',
       errorObject
     );
 
@@ -4781,7 +4781,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.10.0] análisis:',
+      '[V7.10.1] análisis:',
       data
     );
 
@@ -4808,7 +4808,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.10.0] ANALYZE ERROR:',
+      '[V7.10.1] ANALYZE ERROR:',
       errorObject
     );
 
@@ -5805,7 +5805,7 @@ async function simulateParlay(button){
 function initializeApp(){
 
   console.log(
-    '[V7.10.0] inicializando interfaz'
+    '[V7.10.1] inicializando interfaz'
   );
 
   const date =
@@ -5827,7 +5827,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.10.0] searchBtn no encontrado'
+      '[V7.10.1] searchBtn no encontrado'
     );
 
     return;
@@ -5954,7 +5954,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.10.0] interfaz inicializada correctamente'
+    '[V7.10.1] interfaz inicializada correctamente'
   );
 }
 
@@ -6021,6 +6021,103 @@ app.get(
 );
 
 /* =========================================================
+   DEBUG TEMPORAL — API-FOOTBALL
+   (Quitar esta ruta una vez confirmada la cobertura;
+   solo sirve para diagnosticar sin exponer la API key)
+========================================================= */
+
+app.get(
+  '/api/debug/apifootball',
+  async (req, res) => {
+
+    const API_FOOTBALL_KEY = process.env.API_FOOTBALL || '';
+
+    if (!API_FOOTBALL_KEY) {
+      return res.status(400).json({
+        ok: false,
+        error: 'API_FOOTBALL no configurada en las variables de entorno.'
+      });
+    }
+
+    const LEAGUES = {
+      laliga: 140,
+      premier: 39,
+      ligue1: 61,
+      seriea: 135,
+      bundesliga: 78
+    };
+
+    const SEASON = Number(req.query.season) || 2026;
+
+    async function callApiFootball(path) {
+      const url = `https://v3.football.api-sports.io${path}`;
+
+      const response = await fetch(url, {
+        headers: { 'x-apisports-key': API_FOOTBALL_KEY }
+      });
+
+      const data = await response.json().catch(() => null);
+
+      return {
+        status: response.status,
+        remaining: response.headers.get('x-ratelimit-requests-remaining'),
+        limit: response.headers.get('x-ratelimit-requests-limit'),
+        errors: data?.errors || null,
+        resultsCount: Array.isArray(data?.response) ? data.response.length : null,
+        sample: Array.isArray(data?.response) ? data.response.slice(0, 1) : data?.response || null
+      };
+    }
+
+    try {
+      const results = {};
+
+      // 1) Confirmar que la key funciona y ver estado de cuota
+      results.status = await callApiFootball('/status');
+
+      // 2) Ver si LaLiga temporada actual está disponible en el plan free
+      results.laligaSeasonCheck = await callApiFootball(
+        `/leagues?id=${LEAGUES.laliga}&season=${SEASON}`
+      );
+
+      // 3) Próximos partidos de LaLiga
+      results.laligaFixtures = await callApiFootball(
+        `/fixtures?league=${LEAGUES.laliga}&season=${SEASON}&next=5`
+      );
+
+      // 4) Cuotas disponibles para esos partidos (si hay alguno)
+      const firstFixtureId = results.laligaFixtures.sample?.[0]?.fixture?.id;
+
+      if (firstFixtureId) {
+        results.oddsCheck = await callApiFootball(
+          `/odds?fixture=${firstFixtureId}`
+        );
+
+        results.lineupsCheck = await callApiFootball(
+          `/fixtures/lineups?fixture=${firstFixtureId}`
+        );
+
+        results.injuriesCheck = await callApiFootball(
+          `/injuries?fixture=${firstFixtureId}`
+        );
+      } else {
+        results.note = 'No se encontró un fixture próximo de LaLiga para probar odds/lineups/injuries.';
+      }
+
+      return res.json({ ok: true, season: SEASON, results });
+
+    } catch (error) {
+
+      console.error('APIFOOTBALL DEBUG ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error probando API-Football.'
+      });
+    }
+  }
+);
+
+/* =========================================================
    HEALTH
 ========================================================= */
 
@@ -6056,7 +6153,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.10.0 ANALYST running on port ${PORT}`
+      `V7.10.1 ANALYST running on port ${PORT}`
     );
 
     console.log(
