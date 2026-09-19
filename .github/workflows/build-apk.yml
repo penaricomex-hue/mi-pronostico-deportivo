@@ -21,18 +21,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # NOTA: quitamos "android-actions/setup-android@v3" â€” tiene un bug
+      # conocido: descarga una versiÃ³n de cmdline-tools que no coincide
+      # con la preinstalada en el runner, y su propio paso interno de
+      # licencias falla de forma no interactiva ("6 of 7 SDK package
+      # licenses not accepted"). En su lugar usamos el SDK que Ubuntu
+      # ya trae preinstalado (en $ANDROID_HOME) y aceptamos las
+      # licencias nosotros mismos.
 
       - name: Accept Android SDK licenses
         run: |
-          yes | sdkmanager --licenses || true
+          yes | sdkmanager --licenses --sdk_root="${ANDROID_HOME}"
 
       - name: Install Android SDK
         run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-35"
-          sdkmanager "build-tools;35.0.0"
+          sdkmanager --sdk_root="${ANDROID_HOME}" "platform-tools"
+          sdkmanager --sdk_root="${ANDROID_HOME}" "platforms;android-35"
+          sdkmanager --sdk_root="${ANDROID_HOME}" "build-tools;35.0.0"
 
       - name: Install Gradle 8.9
         run: |
