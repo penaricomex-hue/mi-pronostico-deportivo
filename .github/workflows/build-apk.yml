@@ -29,6 +29,13 @@ jobs:
       # ya trae preinstalado (en $ANDROID_HOME) y aceptamos las
       # licencias nosotros mismos.
 
+      - name: Add Android cmdline-tools to PATH
+        run: |
+          CMDLINE_TOOLS_BIN=$(dirname "$(find "$ANDROID_HOME/cmdline-tools" -maxdepth 2 -name sdkmanager | head -n1)")
+          echo "Usando cmdline-tools en: $CMDLINE_TOOLS_BIN"
+          echo "$CMDLINE_TOOLS_BIN" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
       - name: Accept Android SDK licenses
         run: |
           yes | sdkmanager --licenses --sdk_root="${ANDROID_HOME}"
