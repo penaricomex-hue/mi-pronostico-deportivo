@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.12.0';
+const MODEL_VERSION = 'V7.12.1';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -3947,7 +3947,7 @@ function renderPage() {
 >
 
 <title>
-MK Bets V7.12.0
+MK Bets V7.12.1
 </title>
 
 <style>
@@ -4636,7 +4636,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.12.0 ANALYST
+● V7.12.1 ANALYST
 </span>
 
 <div class="logo-row">
@@ -4874,7 +4874,7 @@ let selectedCompetition = '';
 let sbSelectedCompetition = '';
 
 console.log(
-  '[V7.12.0] JavaScript cargado correctamente'
+  '[V7.12.1] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -5022,7 +5022,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.12.0] searchFixtures ejecutado'
+    '[V7.12.1] searchFixtures ejecutado'
   );
 
   const date =
@@ -5114,7 +5114,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.12.0] fixtures:',
+      '[V7.12.1] fixtures:',
       data
     );
 
@@ -5180,7 +5180,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.12.0] ERROR:',
+      '[V7.12.1] ERROR:',
       errorObject
     );
 
@@ -5403,7 +5403,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.12.0] análisis:',
+      '[V7.12.1] análisis:',
       data
     );
 
@@ -5430,7 +5430,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.12.0] ANALYZE ERROR:',
+      '[V7.12.1] ANALYZE ERROR:',
       errorObject
     );
 
@@ -6792,7 +6792,7 @@ async function simulateSlipBets(){
 function initializeApp(){
 
   console.log(
-    '[V7.12.0] inicializando interfaz'
+    '[V7.12.1] inicializando interfaz'
   );
 
   fetch('/api/status', { cache:'no-store' })
@@ -6819,7 +6819,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.12.0] searchBtn no encontrado'
+      '[V7.12.1] searchBtn no encontrado'
     );
 
     return;
@@ -7010,23 +7010,6 @@ function initializeApp(){
         return;
       }
 
-      const sbOpen =
-        event.target.closest(
-          '[data-sb-panel]'
-        );
-
-      if(sbOpen){
-
-        openSportsbookMarkets(
-          sbOpen.dataset.sbPanel,
-          sbOpen.dataset.home,
-          sbOpen.dataset.away,
-          sbOpen.dataset.date
-        );
-
-        return;
-      }
-
       const sbAdd =
         event.target.closest(
           '.sb-add-btn'
@@ -7055,7 +7038,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.12.0] interfaz inicializada correctamente'
+    '[V7.12.1] interfaz inicializada correctamente'
   );
 }
 
@@ -7350,7 +7333,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.12.0 ANALYST running on port ${PORT}`
+      `V7.12.1 ANALYST running on port ${PORT}`
     );
 
     console.log(
