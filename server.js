@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.12.1';
+const MODEL_VERSION = 'V7.13.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -2153,13 +2153,13 @@ function bestValue(
         !market.isOutlier &&
         Number(
           market.probability
-        ) >= 55 &&
+        ) >= 45 &&
         Number(
           market.referenceEvPct
-        ) >= 1.5 &&
+        ) >= 1 &&
         Number(
           modelConfidence
-        ) >= 55
+        ) >= 45
     )
     .sort(
       (a, b) =>
@@ -2664,14 +2664,14 @@ function pickParlayCandidate(analysis) {
 
     const isStrong =
       market.valueEligible &&
-      Number(market.referenceEvPct) >= 3 &&
-      analysis.confidence >= 55;
+      Number(market.referenceEvPct) >= 1.5 &&
+      analysis.confidence >= 45;
 
     const isOddsError =
       market.isOutlier &&
       market.referenceOdds &&
-      market.bestOdds > market.referenceOdds * 1.15 &&
-      Number(market.probability) >= 45;
+      market.bestOdds > market.referenceOdds * 1.10 &&
+      Number(market.probability) >= 35;
 
     if (isStrong || isOddsError) {
       candidates.push({
@@ -3947,7 +3947,7 @@ function renderPage() {
 >
 
 <title>
-MK Bets V7.12.1
+MK Bets V7.13.0
 </title>
 
 <style>
@@ -3971,7 +3971,7 @@ input{
 .app{
   max-width:760px;
   margin:auto;
-  padding:18px 14px 90px;
+  padding:64px 14px 100px;
 }
 
 .header{
@@ -4500,7 +4500,7 @@ input{
   position:fixed;
   left:0;
   right:0;
-  bottom:64px;
+  bottom:0;
   max-width:760px;
   margin:auto;
   background:#151a22;
@@ -4598,18 +4598,19 @@ input{
 
 .nav{
   position:fixed;
-  bottom:0;
+  top:0;
   left:0;
   right:0;
   max-width:760px;
   margin:auto;
   background:rgba(10,13,18,.96);
-  border-top:1px solid #252c37;
+  border-bottom:1px solid #252c37;
   display:flex;
   justify-content:space-around;
   padding:11px 5px;
   font-size:11px;
   color:#929ba9;
+  z-index:30;
 }
 
 .nav strong{
@@ -4636,7 +4637,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.12.1 ANALYST
+● V7.13.0 ANALYST
 </span>
 
 <div class="logo-row">
@@ -4782,6 +4783,51 @@ Cargando historial...
 </section>
 
 <section
+  id="homeCard"
+  class="card"
+>
+
+<div class="card-title">
+Bienvenido a MK Bets
+</div>
+
+<div class="muted">
+Modelo estadístico propio (xG + forma reciente ponderada + lesionados + descanso + historial H2H) sobre partidos reales, con filtro de valor frente a cuotas de mercado.
+</div>
+
+<div class="history-summary" style="margin-top:14px">
+  <div class="prob">
+    <span>ACIERTO (MES)</span>
+    <b id="homeAccuracy">—</b>
+  </div>
+  <div class="prob">
+    <span>GANANCIA (MES)</span>
+    <b id="homeProfit">—</b>
+  </div>
+  <div class="prob">
+    <span>APUESTAS</span>
+    <b id="homeCount">—</b>
+  </div>
+</div>
+
+<div class="market" style="margin-top:14px">
+  <b>🧠 Analyst</b>
+  <div class="muted">Busca partidos por liga y fecha, analiza uno y mira el modelo completo.</div>
+</div>
+
+<div class="market">
+  <b>🎫 Apuestas</b>
+  <div class="muted">Arma tu propio boleto eligiendo cualquier mercado, veas o no una recomendación.</div>
+</div>
+
+<div class="market">
+  <b>📁 Historial</b>
+  <div class="muted">Revisa qué tan acertadas han sido tus apuestas simuladas, por semana o mes.</div>
+</div>
+
+</section>
+
+<section
   id="sportsbookCard"
   class="card"
   style="display:none"
@@ -4840,12 +4886,12 @@ Buscando partidos...
 
 <nav class="nav">
 
-<span id="navHome">
+<span id="navHome" class="active-nav">
 ⌂<br>
 Inicio
 </span>
 
-<span id="navAnalyst" class="active-nav">
+<span id="navAnalyst">
 <strong>
 🧠<br>
 Analyst
@@ -4874,7 +4920,7 @@ let selectedCompetition = '';
 let sbSelectedCompetition = '';
 
 console.log(
-  '[V7.12.1] JavaScript cargado correctamente'
+  '[V7.13.0] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -5022,7 +5068,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.12.1] searchFixtures ejecutado'
+    '[V7.13.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -5114,7 +5160,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.12.1] fixtures:',
+      '[V7.13.0] fixtures:',
       data
     );
 
@@ -5180,7 +5226,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.12.1] ERROR:',
+      '[V7.13.0] ERROR:',
       errorObject
     );
 
@@ -5403,7 +5449,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.12.1] análisis:',
+      '[V7.13.0] análisis:',
       data
     );
 
@@ -5430,7 +5476,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.12.1] ANALYZE ERROR:',
+      '[V7.13.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -5472,7 +5518,7 @@ function marketHtml(
   const isRecommended =
     !market.isOutlier &&
     market.valueEligible &&
-    Number(market.referenceEvPct) >= 1.5;
+    Number(market.referenceEvPct) >= 1;
 
   const badge =
     market.isOutlier
@@ -6085,16 +6131,43 @@ let currentHistoryPeriod = 'week';
 let betSlip = [];
 
 function setActiveNav(id){
-  ['navAnalyst','navHistory','navSportsbook'].forEach(navId => {
+  ['navHome','navAnalyst','navHistory','navSportsbook'].forEach(navId => {
     const el = document.getElementById(navId);
     if(el){ el.classList.toggle('active-nav', navId === id); }
   });
 }
 
+function hideAllCards(){
+  ['homeCard','fixturesCard','historyCard','sportsbookCard'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el){ el.style.display = 'none'; }
+  });
+  document.getElementById('error').style.display = 'none';
+}
+
+async function showHomeView(){
+
+  hideAllCards();
+  document.getElementById('homeCard').style.display = 'block';
+  setActiveNav('navHome');
+
+  try{
+    const response = await fetch('/api/bets/summary?period=month', { cache:'no-store' });
+    const data = await response.json();
+
+    if(response.ok && data.ok){
+      document.getElementById('homeAccuracy').textContent = data.accuracyPct != null ? data.accuracyPct + '%' : '—';
+      document.getElementById('homeProfit').textContent = data.totalProfitEur != null ? (data.totalProfitEur >= 0 ? '+' : '') + data.totalProfitEur.toFixed(2) + '€' : '—';
+      document.getElementById('homeCount').textContent = (data.won || 0) + (data.lost || 0) + (data.pending || 0);
+    }
+  }catch(e){
+    // sin datos todavía, se deja el guion
+  }
+}
+
 function showSearchView(){
 
-  document.getElementById('historyCard').style.display = 'none';
-  document.getElementById('sportsbookCard').style.display = 'none';
+  hideAllCards();
   document.getElementById('fixturesCard').style.display =
     document.getElementById('fixtureList').innerHTML
       ? 'block'
@@ -6105,9 +6178,7 @@ function showSearchView(){
 
 function showHistoryView(){
 
-  document.getElementById('fixturesCard').style.display = 'none';
-  document.getElementById('sportsbookCard').style.display = 'none';
-  document.getElementById('error').style.display = 'none';
+  hideAllCards();
   document.getElementById('historyCard').style.display = 'block';
 
   setActiveNav('navHistory');
@@ -6117,9 +6188,7 @@ function showHistoryView(){
 
 function showSportsbookView(){
 
-  document.getElementById('fixturesCard').style.display = 'none';
-  document.getElementById('historyCard').style.display = 'none';
-  document.getElementById('error').style.display = 'none';
+  hideAllCards();
   document.getElementById('sportsbookCard').style.display = 'block';
 
   setActiveNav('navSportsbook');
@@ -6792,13 +6861,15 @@ async function simulateSlipBets(){
 function initializeApp(){
 
   console.log(
-    '[V7.12.1] inicializando interfaz'
+    '[V7.13.0] inicializando interfaz'
   );
 
   fetch('/api/status', { cache:'no-store' })
     .then(r => r.json())
     .then(d => { window.appStakeEur = d.stakeEur || 10; })
     .catch(() => { window.appStakeEur = 10; });
+
+  showHomeView();
 
   const date =
     document.getElementById(
@@ -6819,7 +6890,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.12.1] searchBtn no encontrado'
+      '[V7.13.0] searchBtn no encontrado'
     );
 
     return;
@@ -6861,7 +6932,7 @@ function initializeApp(){
   }
 
   if(navHome){
-    navHome.addEventListener('click', showSearchView);
+    navHome.addEventListener('click', showHomeView);
   }
 
   if(periodWeekBtn){
@@ -7038,7 +7109,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.12.1] interfaz inicializada correctamente'
+    '[V7.13.0] interfaz inicializada correctamente'
   );
 }
 
@@ -7333,7 +7404,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.12.1 ANALYST running on port ${PORT}`
+      `V7.13.0 ANALYST running on port ${PORT}`
     );
 
     console.log(
