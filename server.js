@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.11.0';
+const MODEL_VERSION = 'V7.12.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -426,6 +426,172 @@ async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, c
     console.warn('[INJURIES] ajuste fallback (sin cambios):', error.message);
     return { homeStats, awayStats, homeInjuries: 0, awayInjuries: 0 };
   }
+}
+
+async function getBigBallsTeamId(teamName, competitionCode) {
+  const bbLeagueKey = BIGBALLS_LEAGUE_MAP[competitionCode];
+
+  if (!bbLeagueKey || !BIGBALLS_KEY) {
+    return null;
+  }
+
+  try {
+    const teams = await getBigBallsTeams(bbLeagueKey);
+    const matchedTeam = teams.find(t => namesMatch(t?.name, teamName));
+    return matchedTeam?.id || null;
+  } catch (error) {
+    console.warn('[BIGBALLS TEAM ID]', teamName, error.message);
+    return null;
+  }
+}
+
+/*
+ * DESCANSO / CALENDARIO CONGESTIONADO
+ * Si un equipo jugó hace muy poco (ej. partido europeo entre
+ * semana), suele rendir algo peor. Ajuste pequeño y con tope,
+ * y si la respuesta de la API no trae el campo esperado,
+ * simplemente no se aplica nada (nunca rompe el análisis).
+ */
+async function getRestDays(teamId) {
+  if (!teamId || !BIGBALLS_KEY) {
+    return null;
+  }
+
+  try {
+    const data = await bigBallsRequest(`/v1/teams/${teamId}/schedule-context`);
+
+    const context = data?.data || data;
+
+    const restDays =
+      Number(
+        context?.rest_days ??
+        context?.restDays ??
+        context?.days_since_last_match ??
+        context?.daysSinceLastMatch
+      );
+
+    return Number.isFinite(restDays) ? restDays : null;
+
+  } catch (error) {
+    console.warn('[BIGBALLS SCHEDULE]', teamId, error.message);
+    return null;
+  }
+}
+
+async function applyRestAdjustment(homeStats, awayStats, homeTeamId, awayTeamId) {
+  try {
+    const [homeRest, awayRest] = await Promise.all([
+      getRestDays(homeTeamId),
+      getRestDays(awayTeamId)
+    ]);
+
+    // Menos de 4 días de descanso -> pequeña penalización (tope 8%)
+    const restFactor = (rest) => {
+      if (rest == null) return 1;
+      if (rest >= 4) return 1;
+      return clamp(1 - (4 - rest) * 0.025, 0.92, 1);
+    };
+
+    const homeFactor = restFactor(homeRest);
+    const awayFactor = restFactor(awayRest);
+
+    if (homeFactor < 1 || awayFactor < 1) {
+      console.log(
+        `[REST] local descanso=${homeRest}d (factor ${homeFactor.toFixed(2)}) | visitante descanso=${awayRest}d (factor ${awayFactor.toFixed(2)})`
+      );
+    }
+
+    return {
+      homeStats: {
+        ...homeStats,
+        attackStrength: homeStats.attackStrength * homeFactor,
+        defenseStrength: homeStats.defenseStrength * homeFactor
+      },
+      awayStats: {
+        ...awayStats,
+        attackStrength: awayStats.attackStrength * awayFactor,
+        defenseStrength: awayStats.defenseStrength * awayFactor
+      }
+    };
+
+  } catch (error) {
+    console.warn('[REST] ajuste fallback (sin cambios):', error.message);
+    return { homeStats, awayStats };
+  }
+}
+
+/*
+ * HISTORIAL CARA A CARA (H2H)
+ * Si dos equipos históricamente empatan mucho entre sí, se
+ * sube un poco la probabilidad de empate del modelo (tope
+ * pequeño, 3 puntos porcentuales) y se reparte esa resta
+ * proporcionalmente entre local/visitante. Si la API no trae
+ * lo esperado, no se aplica ningún ajuste.
+ */
+async function getH2HDrawRate(homeTeamId, awayTeamId) {
+  if (!homeTeamId || !awayTeamId || !BIGBALLS_KEY) {
+    return null;
+  }
+
+  try {
+    const data = await bigBallsRequest(
+      `/v1/teams/${homeTeamId}/h2h-intelligence?opponent=${awayTeamId}`
+    );
+
+    const context = data?.data || data;
+
+    const draws =
+      Number(context?.draws ?? context?.draw_count);
+
+    const totalMatches =
+      Number(context?.matches ?? context?.total_matches ?? context?.games_played);
+
+    if (
+      Number.isFinite(draws) &&
+      Number.isFinite(totalMatches) &&
+      totalMatches >= 3
+    ) {
+      return draws / totalMatches;
+    }
+
+    return null;
+
+  } catch (error) {
+    console.warn('[BIGBALLS H2H]', homeTeamId, awayTeamId, error.message);
+    return null;
+  }
+}
+
+function applyH2HAdjustment(model, h2hDrawRate) {
+  if (h2hDrawRate == null || !Number.isFinite(h2hDrawRate)) {
+    return model;
+  }
+
+  // Solo actúa si el histórico empata claramente más que el modelo,
+  // y con un tope de 3 puntos porcentuales para no distorsionar el modelo.
+  const bump = clamp((h2hDrawRate - model.draw) * 0.3, 0, 0.03);
+
+  if (bump <= 0) {
+    return model;
+  }
+
+  console.log(`[H2H] empates históricos ${(h2hDrawRate * 100).toFixed(0)}% -> ajuste +${(bump * 100).toFixed(1)}pp a empate`);
+
+  const totalOthers = model.homeWin + model.awayWin;
+
+  if (totalOthers <= 0) {
+    return model;
+  }
+
+  const homeShare = model.homeWin / totalOthers;
+  const awayShare = model.awayWin / totalOthers;
+
+  return {
+    ...model,
+    draw: model.draw + bump,
+    homeWin: model.homeWin - bump * homeShare,
+    awayWin: model.awayWin - bump * awayShare
+  };
 }
 
 function median(values) {
@@ -800,9 +966,24 @@ function calculateRecentTeamStats(
   let goalsAgainst = 0;
   let points = 0;
 
-  for (
-    const match of relevant
-  ) {
+  /*
+   * PONDERACIÓN POR ANTIGÜEDAD:
+   * el partido más reciente (índice 0, ya viene ordenado
+   * descendente por fecha) pesa más que el más viejo.
+   * Con 10 partidos: pesos 10,9,8...1. El promedio ponderado
+   * reacciona más rápido a la forma actual que un promedio plano.
+   */
+  const n = relevant.length;
+  let weightedGoalsFor = 0;
+  let weightedGoalsAgainst = 0;
+  let weightedPoints = 0;
+  let totalWeight = 0;
+
+  relevant.forEach((match, index) => {
+
+    const weight = n - index;
+    totalWeight += weight;
+
     const home =
       Number(
         match?.score?.fullTime?.home ?? 0
@@ -829,20 +1010,25 @@ function calculateRecentTeamStats(
     goalsFor += gf;
     goalsAgainst += ga;
 
+    weightedGoalsFor += gf * weight;
+    weightedGoalsAgainst += ga * weight;
+
     if (gf > ga) {
       points += 3;
+      weightedPoints += 3 * weight;
     } else if (gf === ga) {
       points += 1;
+      weightedPoints += 1 * weight;
     }
-  }
+  });
 
   const avgGoalsFor =
-    goalsFor /
-    relevant.length;
+    weightedGoalsFor /
+    totalWeight;
 
   const avgGoalsAgainst =
-    goalsAgainst /
-    relevant.length;
+    weightedGoalsAgainst /
+    totalWeight;
 
   return {
     matches:
@@ -883,9 +1069,9 @@ function calculateRecentTeamStats(
 
     formPct:
       (
-        points /
+        weightedPoints /
         (
-          relevant.length *
+          totalWeight *
           3
         )
       ) * 100
@@ -1822,6 +2008,15 @@ function buildMarket(
     )?.bookmaker ||
     null;
 
+  // Casa de apuestas preferida del usuario (Caliente MX), si
+  // llegara a aparecer entre las cuotas consultadas. The Odds API
+  // (regiones us/uk/eu/au) normalmente no la incluye, así que esto
+  // casi siempre quedará en null — se deja preparado por si acaso.
+  const preferredBookmakerPrice =
+    info.prices.find(
+      item => /caliente/i.test(item.bookmaker || '')
+    ) || null;
+
   return {
     type,
 
@@ -1861,6 +2056,9 @@ function buildMarket(
 
     bookmaker:
       bestBookmaker,
+
+    preferredBookmakerOdds:
+      preferredBookmakerPrice?.odds || null,
 
     bookmakerCount:
       info.bookmakerCount,
@@ -2385,8 +2583,26 @@ async function analyzeOneFixture(fixture) {
   homeStats = injuryAdjusted.homeStats;
   awayStats = injuryAdjusted.awayStats;
 
+  const [bbHomeTeamId, bbAwayTeamId] = await Promise.all([
+    getBigBallsTeamId(actualHomeName, competitionCode),
+    getBigBallsTeamId(actualAwayName, competitionCode)
+  ]);
+
+  const restAdjusted = await applyRestAdjustment(
+    homeStats,
+    awayStats,
+    bbHomeTeamId,
+    bbAwayTeamId
+  );
+
+  homeStats = restAdjusted.homeStats;
+  awayStats = restAdjusted.awayStats;
+
   const modelInput = createModelInput(homeStats, awayStats);
-  const model = matchModel(modelInput.homeXg, modelInput.awayXg);
+  let model = matchModel(modelInput.homeXg, modelInput.awayXg);
+
+  const h2hDrawRate = await getH2HDrawRate(bbHomeTeamId, bbAwayTeamId);
+  model = applyH2HAdjustment(model, h2hDrawRate);
 
   let modelConfidence = 50;
 
@@ -2926,6 +3142,24 @@ app.get(
       awayStats = injuryAdjusted.awayStats;
 
       /*
+       * DESCANSO / CALENDARIO (Big Balls Sports Data)
+       */
+      const [bbHomeTeamId, bbAwayTeamId] = await Promise.all([
+        getBigBallsTeamId(actualHomeName, competitionCode),
+        getBigBallsTeamId(actualAwayName, competitionCode)
+      ]);
+
+      const restAdjusted = await applyRestAdjustment(
+        homeStats,
+        awayStats,
+        bbHomeTeamId,
+        bbAwayTeamId
+      );
+
+      homeStats = restAdjusted.homeStats;
+      awayStats = restAdjusted.awayStats;
+
+      /*
        * MODELO
        */
       const modelInput =
@@ -2934,11 +3168,17 @@ app.get(
           awayStats
         );
 
-      const model =
+      let model =
         matchModel(
           modelInput.homeXg,
           modelInput.awayXg
         );
+
+      /*
+       * HISTORIAL CARA A CARA (Big Balls Sports Data)
+       */
+      const h2hDrawRate = await getH2HDrawRate(bbHomeTeamId, bbAwayTeamId);
+      model = applyH2HAdjustment(model, h2hDrawRate);
 
       /*
        * CONFIANZA
@@ -3595,6 +3835,27 @@ app.get(
          GROUP BY status`
       );
 
+      // Desglose por tipo de mercado, para ver en cuáles el modelo
+      // acierta más (útil para decidir qué ajustar).
+      const byMarketResult = await pool.query(
+        `SELECT market,
+                COUNT(*) FILTER (WHERE status = 'won')::int AS won,
+                COUNT(*) FILTER (WHERE status = 'lost')::int AS lost
+         FROM simulated_bets
+         WHERE created_at >= now() - interval '${interval}'
+           AND status IN ('won','lost')
+         GROUP BY market`
+      );
+
+      const byMarket = byMarketResult.rows.map(row => ({
+        market: row.market,
+        won: row.won,
+        lost: row.lost,
+        accuracyPct: (row.won + row.lost) > 0
+          ? Number(((row.won / (row.won + row.lost)) * 100).toFixed(1))
+          : null
+      }));
+
       const summary = {
         pending: 0,
         won: 0,
@@ -3636,7 +3897,8 @@ app.get(
         accuracyPct,
         totalProfitEur: Number(summary.totalProfitEur.toFixed(2)),
         totalStakedEur: Number(summary.totalStakedEur.toFixed(2)),
-        roiPct
+        roiPct,
+        byMarket
       });
 
     } catch (error) {
@@ -3685,7 +3947,7 @@ function renderPage() {
 >
 
 <title>
-Mi Pronóstico Deportivo V7.11.0
+MK Bets V7.12.0
 </title>
 
 <style>
@@ -3723,6 +3985,20 @@ input{
   background:#171c25;
   font-size:12px;
   font-weight:800;
+}
+
+.logo-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-top:14px;
+}
+
+.logo-text{
+  font-size:34px;
+  font-weight:900;
+  letter-spacing:2px;
+  color:#fff;
 }
 
 h1{
@@ -4220,6 +4496,94 @@ input{
   margin:8px 0 10px;
 }
 
+.bet-slip-bar{
+  position:fixed;
+  left:0;
+  right:0;
+  bottom:64px;
+  max-width:760px;
+  margin:auto;
+  background:#151a22;
+  border-top:1px solid #303846;
+  border-left:1px solid #303846;
+  border-right:1px solid #303846;
+  border-radius:14px 14px 0 0;
+  padding:10px 14px;
+  z-index:20;
+}
+
+.bet-slip-summary{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-weight:800;
+  cursor:pointer;
+}
+
+.bet-slip-panel{
+  margin-top:12px;
+  border-top:1px solid #303846;
+  padding-top:12px;
+}
+
+.sb-market-row{
+  background:#090d13;
+  border:1px solid #252c37;
+  border-radius:12px;
+  padding:11px;
+  margin-bottom:8px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:10px;
+}
+
+.sb-market-row .info{
+  font-size:13px;
+}
+
+.sb-market-row .info b{
+  display:block;
+  font-size:15px;
+}
+
+.sb-add-btn{
+  border:0;
+  border-radius:10px;
+  padding:9px 12px;
+  background:#7ee787;
+  color:#080b10;
+  font-weight:900;
+  white-space:nowrap;
+  cursor:pointer;
+}
+
+.sb-add-btn.added{
+  background:#303846;
+  color:#9da5b2;
+}
+
+.slip-leg-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  background:#090d13;
+  border-radius:10px;
+  padding:9px 11px;
+  margin-bottom:7px;
+  font-size:13px;
+}
+
+.slip-leg-remove{
+  border:0;
+  background:none;
+  color:#ff7b72;
+  font-weight:900;
+  font-size:16px;
+  cursor:pointer;
+  padding:0 6px;
+}
+
 .empty{
   text-align:center;
   color:#9da5b2;
@@ -4272,8 +4636,17 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.11.0 ANALYST
+● V7.12.0 ANALYST
 </span>
+
+<div class="logo-row">
+<svg width="96" height="40" viewBox="0 0 130 90" xmlns="http://www.w3.org/2000/svg">
+<polyline points="10,80 10,10 45,55 80,10 80,80" fill="none" stroke="#ffb45d" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"></polyline>
+<line x1="80" y1="45" x2="118" y2="8" stroke="#ffb45d" stroke-width="11" stroke-linecap="round"></line>
+<line x1="80" y1="45" x2="118" y2="82" stroke="#ffb45d" stroke-width="11" stroke-linecap="round"></line>
+</svg>
+<span class="logo-text">BETS</span>
+</div>
 
 <h1>
 Analiza antes de apostar.
@@ -4305,11 +4678,11 @@ Buscar partidos por fecha
 <div class="league-chips" id="leagueChips">
   <button type="button" class="league-chip active" data-competition="">Todas</button>
   <button type="button" class="league-chip league-chip-priority" data-competition="PD">🇪🇸 LaLiga</button>
+  <button type="button" class="league-chip league-chip-priority" data-competition="CL">⭐ Champions</button>
   <button type="button" class="league-chip" data-competition="PL">🏴 Premier League</button>
   <button type="button" class="league-chip" data-competition="FL1">🇫🇷 Ligue 1</button>
   <button type="button" class="league-chip" data-competition="SA">🇮🇹 Serie A</button>
   <button type="button" class="league-chip" data-competition="BL1">🇩🇪 Bundesliga</button>
-  <button type="button" class="league-chip" data-competition="CL">⭐ Champions</button>
   <button type="button" class="league-chip" data-competition="EL">🥈 Europa League</button>
 </div>
 
@@ -4408,6 +4781,61 @@ Cargando historial...
 
 </section>
 
+<section
+  id="sportsbookCard"
+  class="card"
+  style="display:none"
+>
+
+<div class="card-title">
+🎫 Casa de apuestas — elige un partido
+</div>
+
+<div class="league-chips" id="sbLeagueChips">
+  <button type="button" class="league-chip active" data-competition="">Todas</button>
+  <button type="button" class="league-chip league-chip-priority" data-competition="PD">🇪🇸 LaLiga</button>
+  <button type="button" class="league-chip league-chip-priority" data-competition="CL">⭐ Champions</button>
+  <button type="button" class="league-chip" data-competition="PL">🏴 Premier League</button>
+  <button type="button" class="league-chip" data-competition="FL1">🇫🇷 Ligue 1</button>
+  <button type="button" class="league-chip" data-competition="SA">🇮🇹 Serie A</button>
+  <button type="button" class="league-chip" data-competition="BL1">🇩🇪 Bundesliga</button>
+  <button type="button" class="league-chip" data-competition="EL">🥈 Europa League</button>
+</div>
+
+<input id="sbDate" type="date">
+
+<button class="primary" id="sbSearchBtn" type="button">
+🔎 BUSCAR PARTIDOS
+</button>
+
+<div id="sbLoading" class="loading" style="display:none">
+Buscando partidos...
+</div>
+
+<div id="sbError" class="analysis-error" style="display:none"></div>
+
+<div id="sbSummary" class="search-summary"></div>
+
+<div id="sbFixtureList" class="fixture-list"></div>
+
+</section>
+
+</div>
+
+<div id="betSlipBar" class="bet-slip-bar" style="display:none">
+  <div class="bet-slip-summary" id="betSlipToggle">
+    <span id="betSlipCount">🎫 0 selecciones</span>
+    <span id="betSlipOdds">cuota —</span>
+  </div>
+  <div class="bet-slip-panel" id="betSlipPanel" style="display:none">
+    <div id="betSlipLegs"></div>
+    <button class="primary" id="betSlipSimulateBtn" type="button">
+      🎯 Simular boleto
+    </button>
+    <button class="analysis-close" id="betSlipClearBtn" type="button">
+      Vaciar boleto
+    </button>
+  </div>
 </div>
 
 <nav class="nav">
@@ -4429,6 +4857,11 @@ Analyst
 Historial
 </span>
 
+<span id="navSportsbook">
+🎫<br>
+Apuestas
+</span>
+
 </nav>
 
 <script>
@@ -4438,9 +4871,10 @@ Historial
 'use strict';
 
 let selectedCompetition = '';
+let sbSelectedCompetition = '';
 
 console.log(
-  '[V7.11.0] JavaScript cargado correctamente'
+  '[V7.12.0] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -4588,7 +5022,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.11.0] searchFixtures ejecutado'
+    '[V7.12.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -4680,7 +5114,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.11.0] fixtures:',
+      '[V7.12.0] fixtures:',
       data
     );
 
@@ -4746,7 +5180,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.11.0] ERROR:',
+      '[V7.12.0] ERROR:',
       errorObject
     );
 
@@ -4969,7 +5403,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.11.0] análisis:',
+      '[V7.12.0] análisis:',
       data
     );
 
@@ -4996,7 +5430,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.11.0] ANALYZE ERROR:',
+      '[V7.12.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -5116,6 +5550,16 @@ function marketHtml(
         </span>
 
       </div>
+
+      \${
+        market.preferredBookmakerOdds
+          ? \`
+            <div class="value-box">
+              🔥 Caliente MX: <b>\${Number(market.preferredBookmakerOdds).toFixed(2)}</b>
+            </div>
+          \`
+          : ''
+      }
 
       \${
         market.isOutlier
@@ -5638,29 +6082,47 @@ function analysisHtml(
 ========================================================= */
 
 let currentHistoryPeriod = 'week';
+let betSlip = [];
+
+function setActiveNav(id){
+  ['navAnalyst','navHistory','navSportsbook'].forEach(navId => {
+    const el = document.getElementById(navId);
+    if(el){ el.classList.toggle('active-nav', navId === id); }
+  });
+}
 
 function showSearchView(){
 
   document.getElementById('historyCard').style.display = 'none';
+  document.getElementById('sportsbookCard').style.display = 'none';
   document.getElementById('fixturesCard').style.display =
     document.getElementById('fixtureList').innerHTML
       ? 'block'
       : 'none';
 
-  document.getElementById('navAnalyst').classList.add('active-nav');
-  document.getElementById('navHistory').classList.remove('active-nav');
+  setActiveNav('navAnalyst');
 }
 
 function showHistoryView(){
 
   document.getElementById('fixturesCard').style.display = 'none';
+  document.getElementById('sportsbookCard').style.display = 'none';
   document.getElementById('error').style.display = 'none';
   document.getElementById('historyCard').style.display = 'block';
 
-  document.getElementById('navHistory').classList.add('active-nav');
-  document.getElementById('navAnalyst').classList.remove('active-nav');
+  setActiveNav('navHistory');
 
   loadHistory(currentHistoryPeriod);
+}
+
+function showSportsbookView(){
+
+  document.getElementById('fixturesCard').style.display = 'none';
+  document.getElementById('historyCard').style.display = 'none';
+  document.getElementById('error').style.display = 'none';
+  document.getElementById('sportsbookCard').style.display = 'block';
+
+  setActiveNav('navSportsbook');
 }
 
 function betStatusLabel(status){
@@ -5750,6 +6212,21 @@ async function loadHistory(period){
         <b>\${summary.pending}</b>
       </div>
     \`;
+
+    const marketLabels = { h2h: '1X2', totals: 'Over/Under', parlay: 'Boletos combinados' };
+
+    if(Array.isArray(summary.byMarket) && summary.byMarket.length){
+      summaryEl.innerHTML += \`
+        <div class="market" style="grid-column:1 / -1">
+          <b>Acierto por tipo de mercado</b>
+          \${summary.byMarket.map(m => \`
+            <div class="bet-row-meta">
+              \${esc(marketLabels[m.market] || m.market)}: \${m.accuracyPct != null ? m.accuracyPct + '%' : '-'} (\${m.won}G / \${m.lost}P)
+            </div>
+          \`).join('')}
+        </div>
+      \`;
+    }
 
     const bets = Array.isArray(betsData.bets) ? betsData.bets : [];
 
@@ -5990,11 +6467,338 @@ async function simulateParlay(button){
   }
 }
 
+/* =========================================================
+   CASA DE APUESTAS (boleto propio, tipo bookmaker)
+========================================================= */
+
+function sbFixtureHtml(fixture, index, date){
+
+  const panelId = 'sb-analysis-' + index + '-' + String(fixture.id || index);
+
+  const isFavoriteTeam =
+    /real madrid/i.test(fixture.home || '') ||
+    /real madrid/i.test(fixture.away || '');
+
+  return \`
+    <article class="fixture \${isFavoriteTeam ? 'team-highlight' : ''}">
+      <div class="fixture-head">
+        <div>
+          <div class="fixture-teams">
+            ⚽ \${esc(fixture.home)} vs \${esc(fixture.away)}
+            \${isFavoriteTeam ? '<span class="team-highlight-badge">⭐ Real Madrid</span>' : ''}
+          </div>
+          <div class="fixture-meta">
+            🕐 \${formatTime(fixture.kickoff)} · 🏆 \${esc(fixture.competition || 'Competición')}
+          </div>
+        </div>
+        <button
+          class="analyze-small"
+          type="button"
+          data-sb-panel="\${esc(panelId)}"
+          data-home="\${esc(fixture.home)}"
+          data-away="\${esc(fixture.away)}"
+          data-date="\${esc(date)}"
+        >
+          🎫 VER CUOTAS
+        </button>
+      </div>
+      <div id="\${esc(panelId)}" class="analysis-panel">
+       <div class="analysis-inner">
+        <button class="analysis-close" type="button" data-close-panel="\${esc(panelId)}">▲ CERRAR</button>
+        <div id="\${esc(panelId)}-loading" class="analysis-loading">Cargando mercados...</div>
+        <div id="\${esc(panelId)}-error" class="analysis-error" style="display:none"></div>
+        <div id="\${esc(panelId)}-content" class="analysis-content"></div>
+       </div>
+      </div>
+    </article>
+  \`;
+}
+
+async function sbSearchFixtures(){
+
+  const date = document.getElementById('sbDate').value;
+  const loading = document.getElementById('sbLoading');
+  const error = document.getElementById('sbError');
+  const list = document.getElementById('sbFixtureList');
+  const summary = document.getElementById('sbSummary');
+  const button = document.getElementById('sbSearchBtn');
+
+  if(!date){
+    error.style.display = 'block';
+    error.textContent = 'Selecciona una fecha.';
+    return;
+  }
+
+  error.style.display = 'none';
+  loading.style.display = 'block';
+  list.innerHTML = '';
+  summary.textContent = '';
+  button.disabled = true;
+
+  try{
+
+    const response = await fetch(
+      '/api/fixtures?date=' + encodeURIComponent(date) +
+      (sbSelectedCompetition ? '&competition=' + encodeURIComponent(sbSelectedCompetition) : '') +
+      '&v=7110',
+      { cache:'no-store' }
+    );
+
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      throw new Error(data.error || 'No se pudieron cargar los partidos.');
+    }
+
+    const fixtures = Array.isArray(data.fixtures) ? data.fixtures : [];
+
+    if(!fixtures.length){
+      summary.textContent = 'No se encontraron partidos para ' + formatDate(date) + '.';
+      list.innerHTML = '<div class="empty">No hay partidos disponibles para esta fecha.</div>';
+      return;
+    }
+
+    summary.textContent = fixtures.length + (fixtures.length === 1 ? ' partido encontrado.' : ' partidos encontrados.');
+
+    list.innerHTML = fixtures.map((fixture, index) => sbFixtureHtml(fixture, index, date)).join('');
+
+  }catch(errorObject){
+
+    error.style.display = 'block';
+    error.textContent = errorObject.message || 'Error al buscar partidos.';
+
+  }finally{
+
+    loading.style.display = 'none';
+    button.disabled = false;
+  }
+}
+
+function sportsbookMarketRowHtml(market, matchCtx){
+
+  if(!market.bestOdds){ return ''; }
+
+  const legKey = matchCtx.home + '|' + matchCtx.away + '|' + market.type + '|' + market.outcome;
+  const alreadyAdded = betSlip.some(l => l.key === legKey);
+
+  return \`
+    <div class="sb-market-row">
+      <div class="info">
+        <span>\${esc(market.name)}</span>
+        <b>\${Number(market.bestOdds).toFixed(2)}</b>
+      </div>
+      <button
+        class="sb-add-btn \${alreadyAdded ? 'added' : ''}"
+        type="button"
+        data-leg-key="\${esc(legKey)}"
+        data-home="\${esc(matchCtx.home)}"
+        data-away="\${esc(matchCtx.away)}"
+        data-date="\${esc(matchCtx.date)}"
+        data-competition="\${esc(matchCtx.competition)}"
+        data-market="\${esc(market.type)}"
+        data-outcome="\${esc(market.outcome)}"
+        data-market-name="\${esc(market.name)}"
+        data-odds="\${esc(market.bestOdds)}"
+        data-probability="\${esc(market.probability)}"
+        \${alreadyAdded ? 'disabled' : ''}
+      >
+        \${alreadyAdded ? '✅ En boleto' : '+ Agregar'}
+      </button>
+    </div>
+  \`;
+}
+
+async function openSportsbookMarkets(panelId, home, away, date){
+
+  closeAllPanels(panelId);
+
+  const panel = document.getElementById(panelId);
+  if(!panel){ return; }
+  panel.classList.add('open');
+
+  const loading = document.getElementById(panelId + '-loading');
+  const error = document.getElementById(panelId + '-error');
+  const content = document.getElementById(panelId + '-content');
+
+  loading.style.display = 'block';
+  error.style.display = 'none';
+  content.classList.remove('show');
+  content.innerHTML = '';
+
+  try{
+
+    const params = new URLSearchParams({ home, away, date });
+    const response = await fetch('/api/analyze?' + params.toString() + '&v=7110', { cache:'no-store' });
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      throw new Error(data.error || 'No se pudo cargar el partido.');
+    }
+
+    if(!data.oddsAvailable){
+      content.innerHTML = '<div class="empty">Cuotas reales no disponibles para este partido.</div>';
+    }else{
+      const matchCtx = {
+        home: data.match?.home,
+        away: data.match?.away,
+        date: data.match?.date,
+        competition: data.match?.competition
+      };
+
+      content.innerHTML = (data.markets || []).map(m => sportsbookMarketRowHtml(m, matchCtx)).join('');
+    }
+
+    content.classList.add('show');
+
+  }catch(errorObject){
+
+    error.style.display = 'block';
+    error.textContent = errorObject.message || 'Error al cargar el partido.';
+
+  }finally{
+
+    loading.style.display = 'none';
+  }
+}
+
+function addLegToSlip(button){
+
+  const leg = {
+    key: button.dataset.legKey,
+    home: button.dataset.home,
+    away: button.dataset.away,
+    date: button.dataset.date,
+    competition: button.dataset.competition,
+    market: button.dataset.market,
+    outcome: button.dataset.outcome,
+    marketName: button.dataset.marketName,
+    odds: Number(button.dataset.odds),
+    probability: Number(button.dataset.probability)
+  };
+
+  if(betSlip.some(l => l.key === leg.key)){ return; }
+
+  betSlip.push(leg);
+
+  button.classList.add('added');
+  button.disabled = true;
+  button.textContent = '✅ En boleto';
+
+  renderBetSlip();
+}
+
+function removeLegFromSlip(index){
+  betSlip.splice(index, 1);
+  renderBetSlip();
+}
+
+function renderBetSlip(){
+
+  const bar = document.getElementById('betSlipBar');
+  const countEl = document.getElementById('betSlipCount');
+  const oddsEl = document.getElementById('betSlipOdds');
+  const legsEl = document.getElementById('betSlipLegs');
+
+  if(!betSlip.length){
+    bar.style.display = 'none';
+    return;
+  }
+
+  bar.style.display = 'block';
+
+  const combinedOdds = betSlip.reduce((acc, leg) => acc * Number(leg.odds || 1), 1);
+  const stake = window.appStakeEur || 10;
+  const potentialPayout = stake * combinedOdds;
+
+  countEl.textContent = '🎫 ' + betSlip.length + (betSlip.length === 1 ? ' selección' : ' selecciones');
+  oddsEl.textContent = 'cuota ' + combinedOdds.toFixed(2);
+
+  legsEl.innerHTML = betSlip.map((leg, index) => \`
+    <div class="slip-leg-row">
+      <span>\${esc(leg.home)} vs \${esc(leg.away)} · \${esc(leg.marketName)} (\${Number(leg.odds).toFixed(2)})</span>
+      <button class="slip-leg-remove" type="button" data-remove-leg="\${index}">✕</button>
+    </div>
+  \`).join('') + \`
+    <div class="slip-leg-row" style="font-weight:900">
+      <span>Apuestas \${stake.toFixed(2)}€ → si acierta ganas</span>
+      <span>\${potentialPayout.toFixed(2)}€</span>
+    </div>
+  \`;
+}
+
+async function simulateSlipBets(){
+
+  if(!betSlip.length){ return; }
+
+  const button = document.getElementById('betSlipSimulateBtn');
+  button.disabled = true;
+  button.textContent = 'Guardando...';
+
+  try{
+
+    const payload = betSlip.length === 1
+      ? {
+          home: betSlip[0].home,
+          away: betSlip[0].away,
+          date: betSlip[0].date,
+          competition: betSlip[0].competition,
+          market: betSlip[0].market,
+          outcome: betSlip[0].outcome,
+          marketName: betSlip[0].marketName,
+          odds: betSlip[0].odds,
+          probability: betSlip[0].probability
+        }
+      : {
+          home: 'BOLETO',
+          away: betSlip.map(l => l.home + ' vs ' + l.away).join(' | '),
+          date: betSlip[0].date,
+          competition: 'Combinada',
+          market: 'parlay',
+          outcome: 'combo',
+          marketName: betSlip.length + ' selecciones',
+          odds: betSlip.reduce((acc, leg) => acc * Number(leg.odds || 1), 1),
+          probability: null,
+          legs: betSlip
+        };
+
+    const response = await fetch('/api/bets', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      throw new Error(data.error || 'No se pudo simular el boleto.');
+    }
+
+    betSlip = [];
+    renderBetSlip();
+    document.getElementById('betSlipPanel').style.display = 'none';
+    alert('Boleto guardado en tu Historial.');
+
+  }catch(errorObject){
+
+    alert(errorObject.message || 'Error al simular el boleto.');
+
+  }finally{
+
+    button.disabled = false;
+    button.textContent = '🎯 Simular boleto';
+  }
+}
+
 function initializeApp(){
 
   console.log(
-    '[V7.11.0] inicializando interfaz'
+    '[V7.12.0] inicializando interfaz'
   );
+
+  fetch('/api/status', { cache:'no-store' })
+    .then(r => r.json())
+    .then(d => { window.appStakeEur = d.stakeEur || 10; })
+    .catch(() => { window.appStakeEur = 10; });
 
   const date =
     document.getElementById(
@@ -6015,7 +6819,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.11.0] searchBtn no encontrado'
+      '[V7.12.0] searchBtn no encontrado'
     );
 
     return;
@@ -6074,9 +6878,75 @@ function initializeApp(){
     parlayBtn.addEventListener('click', loadParlay);
   }
 
+  const navSportsbook = document.getElementById('navSportsbook');
+
+  if(navSportsbook){
+    navSportsbook.addEventListener('click', showSportsbookView);
+  }
+
+  const sbSearchBtn = document.getElementById('sbSearchBtn');
+
+  if(sbSearchBtn){
+    sbSearchBtn.addEventListener('click', sbSearchFixtures);
+  }
+
+  const sbLeagueChips = document.querySelectorAll('#sbLeagueChips .league-chip');
+
+  sbLeagueChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      sbLeagueChips.forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      sbSelectedCompetition = chip.dataset.competition || '';
+      if(document.getElementById('sbDate').value){
+        sbSearchFixtures();
+      }
+    });
+  });
+
+  const betSlipToggle = document.getElementById('betSlipToggle');
+
+  if(betSlipToggle){
+    betSlipToggle.addEventListener('click', () => {
+      const panel = document.getElementById('betSlipPanel');
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    });
+  }
+
+  const betSlipSimulateBtn = document.getElementById('betSlipSimulateBtn');
+
+  if(betSlipSimulateBtn){
+    betSlipSimulateBtn.addEventListener('click', simulateSlipBets);
+  }
+
+  const betSlipClearBtn = document.getElementById('betSlipClearBtn');
+
+  if(betSlipClearBtn){
+    betSlipClearBtn.addEventListener('click', () => {
+      betSlip = [];
+      renderBetSlip();
+    });
+  }
+
   document.addEventListener(
     'click',
     event => {
+
+      const sbOpen =
+        event.target.closest(
+          '[data-sb-panel]'
+        );
+
+      if(sbOpen){
+
+        openSportsbookMarkets(
+          sbOpen.dataset.sbPanel,
+          sbOpen.dataset.home,
+          sbOpen.dataset.away,
+          sbOpen.dataset.date
+        );
+
+        return;
+      }
 
       const analyze =
         event.target.closest(
@@ -6136,13 +7006,56 @@ function initializeApp(){
           settle.dataset.settle,
           settle.dataset.result
         );
+
+        return;
+      }
+
+      const sbOpen =
+        event.target.closest(
+          '[data-sb-panel]'
+        );
+
+      if(sbOpen){
+
+        openSportsbookMarkets(
+          sbOpen.dataset.sbPanel,
+          sbOpen.dataset.home,
+          sbOpen.dataset.away,
+          sbOpen.dataset.date
+        );
+
+        return;
+      }
+
+      const sbAdd =
+        event.target.closest(
+          '.sb-add-btn'
+        );
+
+      if(sbAdd && !sbAdd.disabled){
+
+        addLegToSlip(sbAdd);
+
+        return;
+      }
+
+      const slipRemove =
+        event.target.closest(
+          '[data-remove-leg]'
+        );
+
+      if(slipRemove){
+
+        removeLegFromSlip(
+          Number(slipRemove.dataset.removeLeg)
+        );
       }
 
     }
   );
 
   console.log(
-    '[V7.11.0] interfaz inicializada correctamente'
+    '[V7.12.0] interfaz inicializada correctamente'
   );
 }
 
@@ -6437,7 +7350,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.11.0 ANALYST running on port ${PORT}`
+      `V7.12.0 ANALYST running on port ${PORT}`
     );
 
     console.log(
