@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.14.0';
+const MODEL_VERSION = 'V7.15.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -3669,6 +3669,187 @@ function computeProfit(status, stakeEur, oddsValue) {
   return 0;
 }
 
+/* =========================================================
+   LIQUIDACIÓN AUTOMÁTICA
+   Revisa apuestas pendientes cuyo partido ya haya terminado
+   (según Football-Data) y las marca ganó/perdió solas.
+   Se dispara cada vez que el usuario abre Historial.
+========================================================= */
+
+async function getMatchResult(home, away, dateStr) {
+  if (!dateStr) {
+    return null;
+  }
+
+  try {
+    const matches = await getFixturesFootballData(dateStr);
+
+    const found = matches.find(
+      m =>
+        namesMatch(m?.homeTeam?.name, home) &&
+        namesMatch(m?.awayTeam?.name, away)
+    );
+
+    if (!found || found.status !== 'FINISHED') {
+      return null;
+    }
+
+    const homeGoals = Number(found?.score?.fullTime?.home);
+    const awayGoals = Number(found?.score?.fullTime?.away);
+
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) {
+      return null;
+    }
+
+    return { finished: true, homeGoals, awayGoals };
+
+  } catch (error) {
+    console.warn('[AUTO-SETTLE] no se pudo revisar', home, 'vs', away, error.message);
+    return null;
+  }
+}
+
+function evaluateMarketResult(market, outcome, homeGoals, awayGoals) {
+  if (market === 'h2h') {
+    if (outcome === 'home') return homeGoals > awayGoals ? 'won' : 'lost';
+    if (outcome === 'draw') return homeGoals === awayGoals ? 'won' : 'lost';
+    if (outcome === 'away') return awayGoals > homeGoals ? 'won' : 'lost';
+  }
+
+  if (market === 'totals') {
+    const total = homeGoals + awayGoals;
+    if (outcome === 'over') return total >= 3 ? 'won' : 'lost';
+    if (outcome === 'under') return total < 3 ? 'won' : 'lost';
+  }
+
+  return null;
+}
+
+async function autoSettlePendingBets() {
+  if (!pool) {
+    return { settled: 0 };
+  }
+
+  let settledCount = 0;
+
+  try {
+    // 1) Apuestas sencillas pendientes (no boletos combinados)
+    const pendingResult = await pool.query(
+      `SELECT * FROM simulated_bets
+       WHERE status = 'pending' AND market != 'parlay' AND match_date IS NOT NULL
+       ORDER BY match_date ASC
+       LIMIT 200`
+    );
+
+    for (const bet of pendingResult.rows) {
+      const matchDate =
+        bet.match_date instanceof Date
+          ? bet.match_date.toISOString().slice(0, 10)
+          : String(bet.match_date).slice(0, 10);
+
+      const matchResult = await getMatchResult(bet.home, bet.away, matchDate);
+
+      if (!matchResult) {
+        continue;
+      }
+
+      const status = evaluateMarketResult(bet.market, bet.outcome, matchResult.homeGoals, matchResult.awayGoals);
+
+      if (!status) {
+        continue;
+      }
+
+      const profitEur = computeProfit(status, bet.stake_eur, bet.odds);
+
+      await pool.query(
+        `UPDATE simulated_bets SET status = $1, profit_eur = $2, settled_at = now() WHERE id = $3`,
+        [status, profitEur, bet.id]
+      );
+
+      console.log(`[AUTO-SETTLE] #${bet.id} ${bet.home} vs ${bet.away} -> ${status}`);
+      settledCount++;
+    }
+
+    // 2) Boletos combinados pendientes
+    const pendingParlays = await pool.query(
+      `SELECT * FROM simulated_bets
+       WHERE status = 'pending' AND market = 'parlay' AND legs_json IS NOT NULL
+       LIMIT 100`
+    );
+
+    for (const bet of pendingParlays.rows) {
+      let legs = [];
+
+      try {
+        legs = typeof bet.legs_json === 'string' ? JSON.parse(bet.legs_json) : bet.legs_json;
+      } catch (e) {
+        continue;
+      }
+
+      if (!Array.isArray(legs) || !legs.length) {
+        continue;
+      }
+
+      let anyLost = false;
+      let allResolved = true;
+
+      for (const leg of legs) {
+        const matchResult = await getMatchResult(leg.home, leg.away, leg.date);
+
+        if (!matchResult) {
+          allResolved = false;
+          continue;
+        }
+
+        const legStatus = evaluateMarketResult(leg.market, leg.outcome, matchResult.homeGoals, matchResult.awayGoals);
+
+        if (legStatus === 'lost') {
+          anyLost = true;
+        } else if (!legStatus) {
+          allResolved = false;
+        }
+      }
+
+      // Si alguna pata perdió, el boleto entero pierde ya (sin
+      // esperar a que terminen los demás partidos).
+      if (anyLost || allResolved) {
+        const status = anyLost ? 'lost' : 'won';
+        const profitEur = computeProfit(status, bet.stake_eur, bet.odds);
+
+        await pool.query(
+          `UPDATE simulated_bets SET status = $1, profit_eur = $2, settled_at = now() WHERE id = $3`,
+          [status, profitEur, bet.id]
+        );
+
+        console.log(`[AUTO-SETTLE] boleto #${bet.id} -> ${status}`);
+        settledCount++;
+      }
+    }
+
+  } catch (error) {
+    console.error('[AUTO-SETTLE] error general:', error.message);
+  }
+
+  return { settled: settledCount };
+}
+
+app.post(
+  '/api/bets/auto-settle',
+  async (req, res) => {
+
+    if (!requireDb(res)) {
+      return;
+    }
+
+    try {
+      const result = await autoSettlePendingBets();
+      return res.json({ ok: true, ...result });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: error.message || 'Error al auto-liquidar.' });
+    }
+  }
+);
+
 app.post(
   '/api/bets',
   async (req, res) => {
@@ -3921,6 +4102,33 @@ app.get(
           : null
       }));
 
+      // Calibración: cuando el modelo dice "X% de probabilidad",
+      // ¿de verdad acierta X% de las veces? Todo el histórico,
+      // no solo el periodo, para tener suficientes datos.
+      const calibrationResult = await pool.query(
+        `SELECT
+           CASE
+             WHEN model_probability < 55 THEN '45-55%'
+             WHEN model_probability < 65 THEN '55-65%'
+             WHEN model_probability < 75 THEN '65-75%'
+             ELSE '75%+'
+           END AS bucket,
+           COUNT(*) FILTER (WHERE status = 'won')::int AS won,
+           COUNT(*) FILTER (WHERE status = 'lost')::int AS lost
+         FROM simulated_bets
+         WHERE status IN ('won','lost') AND model_probability IS NOT NULL AND market != 'parlay'
+         GROUP BY bucket`
+      );
+
+      const calibration = calibrationResult.rows.map(row => ({
+        bucket: row.bucket,
+        won: row.won,
+        lost: row.lost,
+        actualPct: (row.won + row.lost) > 0
+          ? Number(((row.won / (row.won + row.lost)) * 100).toFixed(1))
+          : null
+      }));
+
       // Racha actual (histórico completo, no solo el periodo elegido)
       const streakResult = await pool.query(
         `SELECT status FROM simulated_bets
@@ -4003,6 +4211,7 @@ app.get(
         roiPct,
         byMarket,
         streak: streakType ? { type: streakType, count: streakCount } : null,
+        calibration,
         timeline
       });
 
@@ -4103,7 +4312,7 @@ function renderPage() {
 >
 
 <title>
-MK Bets V7.14.0
+MK Bets V7.15.0
 </title>
 
 <style>
@@ -4844,7 +5053,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.14.0 ANALYST
+● V7.15.0 ANALYST
 </span>
 
 <div class="logo-row">
@@ -5171,7 +5380,7 @@ let selectedCompetition = '';
 let sbSelectedCompetition = '';
 
 console.log(
-  '[V7.14.0] JavaScript cargado correctamente'
+  '[V7.15.0] JavaScript cargado correctamente'
 );
 
 /* =========================================================
@@ -5418,7 +5627,7 @@ async function loadWeekView(){
 async function searchFixtures(){
 
   console.log(
-    '[V7.14.0] searchFixtures ejecutado'
+    '[V7.15.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -5510,7 +5719,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.14.0] fixtures:',
+      '[V7.15.0] fixtures:',
       data
     );
 
@@ -5580,7 +5789,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.14.0] ERROR:',
+      '[V7.15.0] ERROR:',
       errorObject
     );
 
@@ -5810,7 +6019,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.14.0] análisis:',
+      '[V7.15.0] análisis:',
       data
     );
 
@@ -5837,7 +6046,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.14.0] ANALYZE ERROR:',
+      '[V7.15.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -6640,6 +6849,14 @@ async function loadHistory(period){
 
   try{
 
+    // Antes de mostrar el historial, intenta liquidar solas las
+    // apuestas cuyo partido ya terminó.
+    try{
+      await fetch('/api/bets/auto-settle', { method:'POST' });
+    }catch(e){
+      // si falla, seguimos igual con lo que ya haya
+    }
+
     const [summaryRes, betsRes] = await Promise.all([
       fetch('/api/bets/summary?period=' + period, { cache:'no-store' }),
       fetch('/api/bets?period=' + period, { cache:'no-store' })
@@ -6680,6 +6897,20 @@ async function loadHistory(period){
           \${summary.byMarket.map(m => \`
             <div class="bet-row-meta">
               \${esc(marketLabels[m.market] || m.market)}: \${m.accuracyPct != null ? m.accuracyPct + '%' : '-'} (\${m.won}G / \${m.lost}P)
+            </div>
+          \`).join('')}
+        </div>
+      \`;
+    }
+
+    if(Array.isArray(summary.calibration) && summary.calibration.length){
+      summaryEl.innerHTML += \`
+        <div class="market" style="grid-column:1 / -1">
+          <b>Calibración: ¿el modelo acierta lo que dice?</b>
+          <div class="muted" style="margin:4px 0 8px">Compara la probabilidad que dio el modelo contra lo que pasó de verdad (todo el histórico).</div>
+          \${summary.calibration.map(c => \`
+            <div class="bet-row-meta">
+              Modelo dijo \${esc(c.bucket)} → en la práctica: \${c.actualPct != null ? c.actualPct + '%' : '- (pocos datos)'} (\${c.won}G / \${c.lost}P)
             </div>
           \`).join('')}
         </div>
@@ -7249,7 +7480,7 @@ async function simulateSlipBets(){
 function initializeApp(){
 
   console.log(
-    '[V7.14.0] inicializando interfaz'
+    '[V7.15.0] inicializando interfaz'
   );
 
   fetch('/api/status', { cache:'no-store' })
@@ -7278,7 +7509,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.14.0] searchBtn no encontrado'
+      '[V7.15.0] searchBtn no encontrado'
     );
 
     return;
@@ -7550,7 +7781,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.14.0] interfaz inicializada correctamente'
+    '[V7.15.0] interfaz inicializada correctamente'
   );
 }
 
@@ -7652,7 +7883,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.14.0 ANALYST running on port ${PORT}`
+      `V7.15.0 ANALYST running on port ${PORT}`
     );
 
     console.log(
