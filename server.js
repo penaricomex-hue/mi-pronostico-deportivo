@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.13.1';
+const MODEL_VERSION = 'V7.14.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -186,6 +186,25 @@ function cacheGet(key) {
   }
 
   return item.data;
+}
+
+// Igual que cacheGet, pero también dice hace cuánto se guardó
+// (para mostrar "actualizado hace X min" en la interfaz).
+function cacheGetTimestamp(key) {
+  const item = cache.get(key);
+
+  if (!item) {
+    return null;
+  }
+
+  if (
+    Date.now() - item.time >
+    CACHE_MINUTES * 60 * 1000
+  ) {
+    return null;
+  }
+
+  return item.time;
 }
 
 function cacheSet(key, data) {
@@ -2017,6 +2036,30 @@ function buildMarket(
       item => /caliente/i.test(item.bookmaker || '')
     ) || null;
 
+  /*
+   * SUGERENCIA DE STAKE ESTILO KELLY (fracción conservadora, 25%
+   * del Kelly completo, para no sugerir apuestas agresivas). Si no
+   * hay valor (Kelly <= 0), la sugerencia es igual al stake base.
+   */
+  let suggestedStakeEur = STAKE_EUR;
+
+  if (info.bestOdds && info.bestOdds > 1) {
+    const b = info.bestOdds - 1;
+    const p = modelProbability;
+    const q = 1 - p;
+    const kellyFraction = (b * p - q) / b;
+    const usedFraction = Math.max(0, kellyFraction) * 0.25;
+
+    suggestedStakeEur =
+      Number(
+        clamp(
+          STAKE_EUR * (1 + usedFraction * 10),
+          STAKE_EUR * 0.5,
+          STAKE_EUR * 3
+        ).toFixed(2)
+      );
+  }
+
   return {
     type,
 
@@ -2059,6 +2102,8 @@ function buildMarket(
 
     preferredBookmakerOdds:
       preferredBookmakerPrice?.odds || null,
+
+    suggestedStakeEur,
 
     bookmakerCount:
       info.bookmakerCount,
@@ -2433,8 +2478,14 @@ app.get(
               home:
                 match.homeTeam.name,
 
+              homeCrest:
+                match.homeTeam?.crest || null,
+
               away:
                 match.awayTeam.name,
+
+              awayCrest:
+                match.awayTeam?.crest || null,
 
               kickoff:
                 match.utcDate ||
@@ -2465,6 +2516,9 @@ app.get(
         `[API /api/fixtures] respuesta ${fixtures.length} partidos`
       );
 
+      const cacheTimestamp =
+        cacheGetTimestamp(`fixtures:${date}:${competitionFilter || 'ALL'}`);
+
       return res.json({
         ok: true,
 
@@ -2475,6 +2529,9 @@ app.get(
 
         count:
           fixtures.length,
+
+        fetchedAt:
+          cacheTimestamp || Date.now(),
 
         fixtures
       });
@@ -3631,7 +3688,8 @@ app.post(
         marketName,
         odds,
         probability,
-        legs
+        legs,
+        stakeEur
       } = req.body || {};
 
       if (!home || !away || !market || !outcome || !odds) {
@@ -3645,6 +3703,13 @@ app.post(
         Array.isArray(legs) && legs.length
           ? JSON.stringify(legs)
           : null;
+
+      // El cliente puede sugerir un stake (ej. sugerencia estilo Kelly),
+      // pero se acota entre 0.5x y 3x el stake base para evitar abuso.
+      const finalStake =
+        Number.isFinite(Number(stakeEur))
+          ? clamp(Number(stakeEur), STAKE_EUR * 0.5, STAKE_EUR * 3)
+          : STAKE_EUR;
 
       const result = await pool.query(
         `INSERT INTO simulated_bets
@@ -3661,7 +3726,7 @@ app.post(
           marketName || market,
           Number(odds),
           probability != null ? Number(probability) : null,
-          STAKE_EUR,
+          finalStake,
           legsJson
         ]
       );
@@ -3856,6 +3921,44 @@ app.get(
           : null
       }));
 
+      // Racha actual (histórico completo, no solo el periodo elegido)
+      const streakResult = await pool.query(
+        `SELECT status FROM simulated_bets
+         WHERE status IN ('won','lost')
+         ORDER BY settled_at DESC
+         LIMIT 20`
+      );
+
+      let streakCount = 0;
+      let streakType = null;
+
+      for (const row of streakResult.rows) {
+        if (streakType === null) {
+          streakType = row.status;
+          streakCount = 1;
+        } else if (row.status === streakType) {
+          streakCount++;
+        } else {
+          break;
+        }
+      }
+
+      // Balance acumulado día a día, para la gráfica simple del Inicio
+      const timelineResult = await pool.query(
+        `SELECT date_trunc('day', settled_at) AS day, COALESCE(SUM(profit_eur), 0)::float AS profit
+         FROM simulated_bets
+         WHERE settled_at >= now() - interval '${interval}'
+           AND status IN ('won','lost')
+         GROUP BY day
+         ORDER BY day ASC`
+      );
+
+      let running = 0;
+      const timeline = timelineResult.rows.map(row => {
+        running += row.profit;
+        return { date: row.day, profit: Number(row.profit.toFixed(2)), cumulative: Number(running.toFixed(2)) };
+      });
+
       const summary = {
         pending: 0,
         won: 0,
@@ -3898,7 +4001,9 @@ app.get(
         totalProfitEur: Number(summary.totalProfitEur.toFixed(2)),
         totalStakedEur: Number(summary.totalStakedEur.toFixed(2)),
         roiPct,
-        byMarket
+        byMarket,
+        streak: streakType ? { type: streakType, count: streakCount } : null,
+        timeline
       });
 
     } catch (error) {
@@ -3908,6 +4013,57 @@ app.get(
       return res.status(500).json({
         ok: false,
         error: error.message || 'Error al calcular el resumen.'
+      });
+    }
+  }
+);
+
+app.get(
+  '/api/bets/export',
+  async (req, res) => {
+
+    if (!requireDb(res)) {
+      return;
+    }
+
+    try {
+      const result = await pool.query(
+        `SELECT created_at, match_date, home, away, competition, market_name, odds, stake_eur, status, profit_eur, settled_at
+         FROM simulated_bets
+         ORDER BY created_at DESC`
+      );
+
+      const header = 'Fecha creada,Partido,Fecha del partido,Competicion,Mercado,Cuota,Stake (EUR),Estado,Ganancia (EUR),Liquidada\n';
+
+      const csvEscape = (value) => {
+        const str = value == null ? '' : String(value);
+        return /[",\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+      };
+
+      const rows = result.rows.map(row => [
+        row.created_at?.toISOString() || '',
+        csvEscape(`${row.home} vs ${row.away}`),
+        row.match_date || '',
+        csvEscape(row.competition || ''),
+        csvEscape(row.market_name),
+        row.odds,
+        row.stake_eur,
+        row.status,
+        row.profit_eur ?? '',
+        row.settled_at?.toISOString() || ''
+      ].join(',')).join('\n');
+
+      res.set('Content-Type', 'text/csv; charset=utf-8');
+      res.set('Content-Disposition', 'attachment; filename="mkbets-historial.csv"');
+      return res.send(header + rows);
+
+    } catch (error) {
+
+      console.error('BETS EXPORT ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error al exportar el historial.'
       });
     }
   }
@@ -3947,7 +4103,7 @@ function renderPage() {
 >
 
 <title>
-MK Bets V7.13.1
+MK Bets V7.14.0
 </title>
 
 <style>
@@ -4018,6 +4174,36 @@ input{
   font-size:16px;
   font-style:italic;
   color:#c7ccd4;
+}
+
+.team-crest{
+  width:20px;
+  height:20px;
+  vertical-align:middle;
+  object-fit:contain;
+  margin:0 3px;
+}
+
+.balance-bars{
+  display:flex;
+  align-items:flex-end;
+  gap:4px;
+  height:80px;
+  padding:8px 0;
+}
+
+.balance-bar{
+  flex:1;
+  border-radius:4px 4px 0 0;
+  min-height:2px;
+}
+
+.balance-bar.pos{ background:#7ee787; }
+.balance-bar.neg{ background:#ff7b72; }
+
+.freshness{
+  color:#6b7280;
+  font-size:11px;
 }
 
 h1{
@@ -4658,7 +4844,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.13.1 ANALYST
+● V7.14.0 ANALYST
 </span>
 
 <div class="logo-row">
@@ -4720,6 +4906,17 @@ Buscar partidos por fecha
 >
 🔎 BUSCAR PARTIDOS
 </button>
+
+<button
+  class="analysis-close"
+  id="weekViewBtn"
+  type="button"
+  style="margin-top:8px"
+>
+📅 Ver semana completa
+</button>
+
+<div id="weekView" style="display:none;margin-top:12px"></div>
 
 <div
   id="searchSummary"
@@ -4789,7 +4986,10 @@ Historial de apuestas simuladas
 <div class="history-period-toggle">
   <button type="button" id="periodWeekBtn" class="active" data-period="week">Semana</button>
   <button type="button" id="periodMonthBtn" data-period="month">Mes</button>
+  <button type="button" id="historyRefreshBtn" title="Actualizar">🔄</button>
 </div>
+
+<a href="/api/bets/export" class="analysis-close" style="display:block;text-align:center;text-decoration:none;margin-bottom:12px">⬇️ Descargar historial (CSV)</a>
 
 <div id="historyLoading" class="loading" style="display:none">
 Cargando historial...
@@ -4834,6 +5034,31 @@ Modelo estadístico propio (xG + forma reciente ponderada + lesionados + descans
     <span>APUESTAS</span>
     <b id="homeCount">—</b>
   </div>
+</div>
+
+<div id="homeStreak" class="value-box" style="text-align:center;margin-top:10px;display:none"></div>
+
+<div id="homeBalanceChart" style="margin-top:14px"></div>
+
+<div class="card-title" style="margin-top:18px">
+⭐ Equipos favoritos
+</div>
+
+<div class="muted">Se resaltan en las listas de partidos, en este navegador.</div>
+
+<div id="favoritesList" style="margin:10px 0"></div>
+
+<div style="display:flex;gap:8px">
+  <input id="favoriteInput" type="text" placeholder="Nombre del equipo" style="flex:1">
+  <button class="sb-add-btn" type="button" id="addFavoriteBtn">+ Agregar</button>
+</div>
+
+<div class="card-title" style="margin-top:18px">
+❓ ¿Cómo funciona?
+</div>
+
+<div class="muted">
+MK Bets calcula goles esperados (xG) de cada equipo a partir de su forma reciente (ponderada — lo último pesa más), y lo ajusta por lesionados, descanso entre partidos e historial cara a cara. Con eso arma probabilidades y las compara contra las cuotas reales del mercado: si tu probabilidad implica más valor que lo que paga la cuota, aparece como recomendación. El ✅/❌ de cada mercado y el filtro de "Value Pick" salen de esa comparación — nunca es una garantía, es una guía basada en datos.
 </div>
 
 <div class="market" style="margin-top:14px">
@@ -4946,8 +5171,52 @@ let selectedCompetition = '';
 let sbSelectedCompetition = '';
 
 console.log(
-  '[V7.13.1] JavaScript cargado correctamente'
+  '[V7.14.0] JavaScript cargado correctamente'
 );
+
+/* =========================================================
+   EQUIPOS FAVORITOS (guardado en este navegador/teléfono)
+========================================================= */
+
+function getFavoriteTeams(){
+  try{
+    const raw = localStorage.getItem('mkbets_favorites');
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(Array.isArray(parsed)){ return parsed; }
+    }
+  }catch(e){}
+  return ['Real Madrid'];
+}
+
+function saveFavoriteTeams(list){
+  try{
+    localStorage.setItem('mkbets_favorites', JSON.stringify(list));
+  }catch(e){}
+}
+
+function isFavoriteTeamName(name){
+  if(!name){ return false; }
+  const favorites = getFavoriteTeams();
+  const normalized = name.toLowerCase();
+  return favorites.some(fav => normalized.includes(fav.toLowerCase()) || fav.toLowerCase().includes(normalized));
+}
+
+function renderFavoritesList(){
+  const el = document.getElementById('favoritesList');
+  if(!el){ return; }
+
+  const favorites = getFavoriteTeams();
+
+  el.innerHTML = favorites.length
+    ? favorites.map((team, index) => \`
+        <span class="league-chip active" style="margin:3px">
+          ⭐ \${esc(team)}
+          <button type="button" data-remove-fav="\${index}" style="background:none;border:0;color:#080b10;font-weight:900;margin-left:6px;cursor:pointer">✕</button>
+        </span>
+      \`).join('')
+    : '<span class="muted">Sin favoritos todavía</span>';
+}
 
 function esc(value){
 
@@ -5068,6 +5337,17 @@ function formatDate(value){
     : value;
 }
 
+function minutesAgoLabel(timestamp){
+  const diffMs = Date.now() - Number(timestamp);
+  const minutes = Math.floor(diffMs / 60000);
+
+  if(minutes < 1){ return 'hace un momento'; }
+  if(minutes < 60){ return 'hace ' + minutes + ' min'; }
+
+  const hours = Math.floor(minutes / 60);
+  return 'hace ' + hours + (hours === 1 ? ' hora' : ' horas');
+}
+
 function closeAllPanels(
   exceptId
 ){
@@ -5091,10 +5371,54 @@ function closeAllPanels(
     );
 }
 
+async function loadWeekView(){
+
+  const container = document.getElementById('weekView');
+  const baseDateStr = document.getElementById('date').value || localDateValue();
+  const baseDate = new Date(baseDateStr + 'T12:00:00');
+
+  container.style.display = 'block';
+  container.innerHTML = '<div class="loading">Cargando la semana...</div>';
+
+  const days = [];
+  for(let i = 0; i < 7; i++){
+    const d = new Date(baseDate);
+    d.setDate(d.getDate() + i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+
+  try{
+
+    const results = await Promise.all(days.map(day =>
+      fetch('/api/fixtures?date=' + encodeURIComponent(day) +
+        (selectedCompetition ? '&competition=' + encodeURIComponent(selectedCompetition) : '') +
+        '&v=7131', { cache:'no-store' })
+        .then(r => r.json())
+        .catch(() => ({ ok:false, fixtures:[] }))
+    ));
+
+    let html = '';
+
+    results.forEach((data, index) => {
+      const fixtures = Array.isArray(data.fixtures) ? data.fixtures : [];
+      if(!fixtures.length){ return; }
+
+      html += '<div class="card-title" style="margin-top:14px">' + formatDate(days[index]) + '</div>';
+      html += fixtures.map((f, i) => fixtureHtml(f, 'w' + index + '-' + i, days[index])).join('');
+    });
+
+    container.innerHTML = html || '<div class="empty">No hay partidos esta semana para este filtro.</div>';
+
+  }catch(errorObject){
+
+    container.innerHTML = '<div class="analysis-error">Error al cargar la semana.</div>';
+  }
+}
+
 async function searchFixtures(){
 
   console.log(
-    '[V7.13.1] searchFixtures ejecutado'
+    '[V7.14.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -5186,7 +5510,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.13.1] fixtures:',
+      '[V7.14.0] fixtures:',
       data
     );
 
@@ -5234,6 +5558,10 @@ async function searchFixtures(){
           : ' partidos encontrados.'
       );
 
+    if(data.fetchedAt){
+      summary.innerHTML += ' <span class="freshness">· actualizado ' + minutesAgoLabel(data.fetchedAt) + '</span>';
+    }
+
     list.innerHTML =
       fixtures
         .map(
@@ -5252,7 +5580,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.13.1] ERROR:',
+      '[V7.14.0] ERROR:',
       errorObject
     );
 
@@ -5276,6 +5604,13 @@ async function searchFixtures(){
   }
 }
 
+function teamCrestHtml(crestUrl, teamName){
+  if(crestUrl){
+    return \`<img src="\${esc(crestUrl)}" alt="" class="team-crest" onerror="this.style.display='none'">\`;
+  }
+  return '';
+}
+
 function fixtureHtml(
   fixture,
   index,
@@ -5291,9 +5626,7 @@ function fixtureHtml(
       index
     );
 
-  const isFavoriteTeam =
-    /real madrid/i.test(fixture.home || '') ||
-    /real madrid/i.test(fixture.away || '');
+  const isFavoriteTeam = isFavoriteTeamName(fixture.home) || isFavoriteTeamName(fixture.away);
 
   return \`
 
@@ -5304,14 +5637,16 @@ function fixtureHtml(
         <div>
 
           <div class="fixture-teams">
-            ⚽ \${esc(
+            \${teamCrestHtml(fixture.homeCrest, fixture.home)}
+            \${esc(
               fixture.home
             )}
             vs
+            \${teamCrestHtml(fixture.awayCrest, fixture.away)}
             \${esc(
               fixture.away
             )}
-            \${isFavoriteTeam ? '<span class="team-highlight-badge">⭐ Real Madrid</span>' : ''}
+            \${isFavoriteTeam ? '<span class="team-highlight-badge">⭐ Favorito</span>' : ''}
           </div>
 
           <div class="fixture-meta">
@@ -5475,7 +5810,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.13.1] análisis:',
+      '[V7.14.0] análisis:',
       data
     );
 
@@ -5502,7 +5837,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.13.1] ANALYZE ERROR:',
+      '[V7.14.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -5664,8 +5999,9 @@ function marketHtml(
               data-market-name="\${esc(market.name)}"
               data-odds="\${esc(market.bestOdds)}"
               data-probability="\${esc(market.probability)}"
+              data-stake="\${esc(market.suggestedStakeEur || match.stakeEur)}"
             >
-              🎯 Simular esta apuesta (\${esc(match.stakeEur)}€)
+              🎯 Simular (\${esc(market.suggestedStakeEur || match.stakeEur)}€\${market.suggestedStakeEur && market.suggestedStakeEur !== match.stakeEur ? ' · sugerido' : ''})
             </button>
             <div class="simulate-result muted" style="display:none"></div>
           \`
@@ -6177,6 +6513,8 @@ async function showHomeView(){
   document.getElementById('homeCard').style.display = 'block';
   setActiveNav('navHome');
 
+  renderFavoritesList();
+
   try{
     const response = await fetch('/api/bets/summary?period=month', { cache:'no-store' });
     const data = await response.json();
@@ -6185,6 +6523,31 @@ async function showHomeView(){
       document.getElementById('homeAccuracy').textContent = data.accuracyPct != null ? data.accuracyPct + '%' : '—';
       document.getElementById('homeProfit').textContent = data.totalProfitEur != null ? (data.totalProfitEur >= 0 ? '+' : '') + data.totalProfitEur.toFixed(2) + '€' : '—';
       document.getElementById('homeCount').textContent = (data.won || 0) + (data.lost || 0) + (data.pending || 0);
+
+      const streakEl = document.getElementById('homeStreak');
+      if(data.streak && data.streak.count >= 2){
+        streakEl.style.display = 'block';
+        streakEl.innerHTML = data.streak.type === 'won'
+          ? '🔥 ' + data.streak.count + ' aciertos seguidos'
+          : '❄️ ' + data.streak.count + ' fallos seguidos';
+      }else{
+        streakEl.style.display = 'none';
+      }
+
+      const chartEl = document.getElementById('homeBalanceChart');
+      if(Array.isArray(data.timeline) && data.timeline.length){
+        const maxAbs = Math.max(1, ...data.timeline.map(t => Math.abs(t.cumulative)));
+        chartEl.innerHTML = \`
+          <div class="card-title">Balance acumulado (mes)</div>
+          <div class="balance-bars">
+            \${data.timeline.map(t => \`
+              <div class="balance-bar \${t.cumulative >= 0 ? 'pos' : 'neg'}" style="height:\${Math.max(4, Math.abs(t.cumulative) / maxAbs * 76)}px" title="\${t.cumulative.toFixed(2)}€"></div>
+            \`).join('')}
+          </div>
+        \`;
+      }else{
+        chartEl.innerHTML = '';
+      }
     }
   }catch(e){
     // sin datos todavía, se deja el guion
@@ -6376,7 +6739,8 @@ async function simulateBet(button){
     outcome: button.dataset.outcome,
     marketName: button.dataset.marketName,
     odds: button.dataset.odds,
-    probability: button.dataset.probability
+    probability: button.dataset.probability,
+    stakeEur: button.dataset.stake
   };
 
   const resultEl = button.parentElement.querySelector('.simulate-result');
@@ -6570,17 +6934,15 @@ function sbFixtureHtml(fixture, index, date){
 
   const panelId = 'sb-analysis-' + index + '-' + String(fixture.id || index);
 
-  const isFavoriteTeam =
-    /real madrid/i.test(fixture.home || '') ||
-    /real madrid/i.test(fixture.away || '');
+  const isFavoriteTeam = isFavoriteTeamName(fixture.home) || isFavoriteTeamName(fixture.away);
 
   return \`
     <article class="fixture \${isFavoriteTeam ? 'team-highlight' : ''}">
       <div class="fixture-head">
         <div>
           <div class="fixture-teams">
-            ⚽ \${esc(fixture.home)} vs \${esc(fixture.away)}
-            \${isFavoriteTeam ? '<span class="team-highlight-badge">⭐ Real Madrid</span>' : ''}
+            \${teamCrestHtml(fixture.homeCrest, fixture.home)} \${esc(fixture.home)} vs \${teamCrestHtml(fixture.awayCrest, fixture.away)} \${esc(fixture.away)}
+            \${isFavoriteTeam ? '<span class="team-highlight-badge">⭐ Favorito</span>' : ''}
           </div>
           <div class="fixture-meta">
             🕐 \${formatTime(fixture.kickoff)} · 🏆 \${esc(fixture.competition || 'Competición')}
@@ -6887,7 +7249,7 @@ async function simulateSlipBets(){
 function initializeApp(){
 
   console.log(
-    '[V7.13.1] inicializando interfaz'
+    '[V7.14.0] inicializando interfaz'
   );
 
   fetch('/api/status', { cache:'no-store' })
@@ -6916,7 +7278,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.13.1] searchBtn no encontrado'
+      '[V7.14.0] searchBtn no encontrado'
     );
 
     return;
@@ -6926,6 +7288,12 @@ function initializeApp(){
     'click',
     searchFixtures
   );
+
+  const weekViewBtn = document.getElementById('weekViewBtn');
+
+  if(weekViewBtn){
+    weekViewBtn.addEventListener('click', loadWeekView);
+  }
 
   const leagueChips = document.querySelectorAll('.league-chip');
 
@@ -6969,6 +7337,12 @@ function initializeApp(){
     periodMonthBtn.addEventListener('click', () => loadHistory('month'));
   }
 
+  const historyRefreshBtn = document.getElementById('historyRefreshBtn');
+
+  if(historyRefreshBtn){
+    historyRefreshBtn.addEventListener('click', () => loadHistory(currentHistoryPeriod));
+  }
+
   const parlayBtn = document.getElementById('parlayBtn');
 
   if(parlayBtn){
@@ -6976,6 +7350,32 @@ function initializeApp(){
   }
 
   const navSportsbook = document.getElementById('navSportsbook');
+
+  const addFavoriteBtn = document.getElementById('addFavoriteBtn');
+
+  if(addFavoriteBtn){
+    addFavoriteBtn.addEventListener('click', () => {
+      const input = document.getElementById('favoriteInput');
+      const name = (input.value || '').trim();
+
+      if(!name){ return; }
+
+      const favorites = getFavoriteTeams();
+
+      if(favorites.length >= 3){
+        alert('Máximo 3 favoritos. Quita uno para agregar otro.');
+        return;
+      }
+
+      if(!favorites.some(f => f.toLowerCase() === name.toLowerCase())){
+        favorites.push(name);
+        saveFavoriteTeams(favorites);
+        renderFavoritesList();
+      }
+
+      input.value = '';
+    });
+  }
 
   if(navSportsbook){
     navSportsbook.addEventListener('click', showSportsbookView);
@@ -7129,13 +7529,28 @@ function initializeApp(){
         removeLegFromSlip(
           Number(slipRemove.dataset.removeLeg)
         );
+
+        return;
+      }
+
+      const favRemove =
+        event.target.closest(
+          '[data-remove-fav]'
+        );
+
+      if(favRemove){
+
+        const favorites = getFavoriteTeams();
+        favorites.splice(Number(favRemove.dataset.removeFav), 1);
+        saveFavoriteTeams(favorites);
+        renderFavoritesList();
       }
 
     }
   );
 
   console.log(
-    '[V7.13.1] interfaz inicializada correctamente'
+    '[V7.14.0] interfaz inicializada correctamente'
   );
 }
 
@@ -7202,199 +7617,6 @@ app.get(
 );
 
 /* =========================================================
-   DEBUG TEMPORAL — BIG BALLS SPORTS DATA
-   (Quitar esta ruta una vez confirmada la cobertura)
-========================================================= */
-
-app.get(
-  '/api/debug/bigballs',
-  async (req, res) => {
-
-    const BIGBALLS_KEY = process.env.BIGBALLS_KEY || '';
-
-    if (!BIGBALLS_KEY) {
-      return res.status(400).json({
-        ok: false,
-        error: 'BIGBALLS_KEY no configurada en las variables de entorno.'
-      });
-    }
-
-    async function callBigBalls(path) {
-      const url = `https://api.bigballsdata.com${path}`;
-
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${BIGBALLS_KEY}`,
-          'x-api-key': BIGBALLS_KEY
-        }
-      });
-
-      let data = null;
-
-      try {
-        data = await response.json();
-      } catch (_) {
-        data = null;
-      }
-
-      return {
-        path,
-        status: response.status,
-        ok: response.ok,
-        keysFound: data && typeof data === 'object' ? Object.keys(data) : null,
-        sample:
-          Array.isArray(data?.data)
-            ? data.data.slice(0, 2)
-            : (data?.data || data)
-      };
-    }
-
-    try {
-      const results = {};
-
-      // 1) Descubrir las ligas disponibles y sus claves
-      results.leagues = await callBigBalls('/v1/leagues?sport=football');
-
-      // 2) Lista de partidos de LaLiga (probamos un par de claves posibles)
-      results.matchesLaligaTry1 = await callBigBalls('/v1/matches?league=laliga&sport=football');
-      results.matchesLaligaTry2 = await callBigBalls('/v1/matches?league=la-liga&sport=football');
-
-      const allMatches = results.matchesLaligaTry1.sample || [];
-
-      const scheduledMatch =
-        allMatches.find(m => m?.status === 'scheduled' && m?.has_odds) ||
-        allMatches.find(m => m?.status === 'scheduled') ||
-        null;
-
-      const sampleMatch = scheduledMatch || allMatches[0] || null;
-
-      const matchId = sampleMatch?.id || sampleMatch?.match_id || null;
-
-      if (matchId) {
-        // La prueba más importante: ¿las cuotas de verdad son gratis?
-        results.oddsTry = await callBigBalls(`/v1/matches/${matchId}/odds`);
-
-        results.lineupsTry1 = await callBigBalls(`/v1/matches/${matchId}/lineups`);
-        results.lineupsStoredTry = await callBigBalls(`/v1/stored/matches/${matchId}/lineups`);
-        results.statsTry1 = await callBigBalls(`/v1/stored/matches/${matchId}/stats`);
-      } else {
-        results.note = 'No se encontró un partido de muestra para probar odds/lineups/stats.';
-      }
-
-      results.injuriesTry1 = await callBigBalls('/v1/injuries?sport=football&league=laliga');
-
-      return res.json({ ok: true, results });
-
-    } catch (error) {
-
-      console.error('BIGBALLS DEBUG ERROR:', error);
-
-      return res.status(500).json({
-        ok: false,
-        error: error.message || 'Error probando Big Balls Sports Data.'
-      });
-    }
-  }
-);
-
-/* =========================================================
-   DEBUG TEMPORAL — API-FOOTBALL
-   (Quitar esta ruta una vez confirmada la cobertura;
-   solo sirve para diagnosticar sin exponer la API key)
-========================================================= */
-
-app.get(
-  '/api/debug/apifootball',
-  async (req, res) => {
-
-    const API_FOOTBALL_KEY = process.env.API_FOOTBALL || '';
-
-    if (!API_FOOTBALL_KEY) {
-      return res.status(400).json({
-        ok: false,
-        error: 'API_FOOTBALL no configurada en las variables de entorno.'
-      });
-    }
-
-    const LEAGUES = {
-      laliga: 140,
-      premier: 39,
-      ligue1: 61,
-      seriea: 135,
-      bundesliga: 78
-    };
-
-    const SEASON = Number(req.query.season) || 2026;
-
-    async function callApiFootball(path) {
-      const url = `https://v3.football.api-sports.io${path}`;
-
-      const response = await fetch(url, {
-        headers: { 'x-apisports-key': API_FOOTBALL_KEY }
-      });
-
-      const data = await response.json().catch(() => null);
-
-      return {
-        status: response.status,
-        remaining: response.headers.get('x-ratelimit-requests-remaining'),
-        limit: response.headers.get('x-ratelimit-requests-limit'),
-        errors: data?.errors || null,
-        resultsCount: Array.isArray(data?.response) ? data.response.length : null,
-        sample: Array.isArray(data?.response) ? data.response.slice(0, 1) : data?.response || null
-      };
-    }
-
-    try {
-      const results = {};
-
-      // 1) Confirmar que la key funciona y ver estado de cuota
-      results.status = await callApiFootball('/status');
-
-      // 2) Ver si LaLiga temporada actual está disponible en el plan free
-      results.laligaSeasonCheck = await callApiFootball(
-        `/leagues?id=${LEAGUES.laliga}&season=${SEASON}`
-      );
-
-      // 3) Próximos partidos de LaLiga
-      results.laligaFixtures = await callApiFootball(
-        `/fixtures?league=${LEAGUES.laliga}&season=${SEASON}&next=5`
-      );
-
-      // 4) Cuotas disponibles para esos partidos (si hay alguno)
-      const firstFixtureId = results.laligaFixtures.sample?.[0]?.fixture?.id;
-
-      if (firstFixtureId) {
-        results.oddsCheck = await callApiFootball(
-          `/odds?fixture=${firstFixtureId}`
-        );
-
-        results.lineupsCheck = await callApiFootball(
-          `/fixtures/lineups?fixture=${firstFixtureId}`
-        );
-
-        results.injuriesCheck = await callApiFootball(
-          `/injuries?fixture=${firstFixtureId}`
-        );
-      } else {
-        results.note = 'No se encontró un fixture próximo de LaLiga para probar odds/lineups/injuries.';
-      }
-
-      return res.json({ ok: true, season: SEASON, results });
-
-    } catch (error) {
-
-      console.error('APIFOOTBALL DEBUG ERROR:', error);
-
-      return res.status(500).json({
-        ok: false,
-        error: error.message || 'Error probando API-Football.'
-      });
-    }
-  }
-);
-
-/* =========================================================
    HEALTH
 ========================================================= */
 
@@ -7430,7 +7652,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.13.1 ANALYST running on port ${PORT}`
+      `V7.14.0 ANALYST running on port ${PORT}`
     );
 
     console.log(
