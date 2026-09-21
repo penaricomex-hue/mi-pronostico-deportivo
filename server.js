@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.13.0';
+const MODEL_VERSION = 'V7.13.1';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -3928,7 +3928,7 @@ function renderPage() {
 
 <meta
   name="viewport"
-  content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"
+  content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover"
 >
 
 <meta
@@ -3947,7 +3947,7 @@ function renderPage() {
 >
 
 <title>
-MK Bets V7.13.0
+MK Bets V7.13.1
 </title>
 
 <style>
@@ -3971,7 +3971,7 @@ input{
 .app{
   max-width:760px;
   margin:auto;
-  padding:64px 14px 100px;
+  padding:calc(90px + env(safe-area-inset-top, 0px)) 14px 100px;
 }
 
 .header{
@@ -3999,6 +3999,25 @@ input{
   font-weight:900;
   letter-spacing:2px;
   color:#fff;
+}
+
+.home-hero{
+  text-align:center;
+  padding:24px 10px;
+  margin-bottom:6px;
+  border-bottom:1px solid #242b36;
+}
+
+.home-hero-ball{
+  font-size:64px;
+  line-height:1;
+  margin-bottom:12px;
+}
+
+.home-hero-phrase{
+  font-size:16px;
+  font-style:italic;
+  color:#c7ccd4;
 }
 
 h1{
@@ -4603,12 +4622,12 @@ input{
   right:0;
   max-width:760px;
   margin:auto;
-  background:rgba(10,13,18,.96);
+  background:rgba(10,13,18,.98);
   border-bottom:1px solid #252c37;
   display:flex;
   justify-content:space-around;
-  padding:11px 5px;
-  font-size:11px;
+  padding:calc(18px + env(safe-area-inset-top, 0px)) 8px 16px;
+  font-size:14px;
   color:#929ba9;
   z-index:30;
 }
@@ -4619,6 +4638,8 @@ input{
 
 .nav span{
   cursor:pointer;
+  padding:6px 4px;
+  line-height:1.5;
 }
 
 .nav span.active-nav{
@@ -4637,7 +4658,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.13.0 ANALYST
+● V7.13.1 ANALYST
 </span>
 
 <div class="logo-row">
@@ -4787,6 +4808,11 @@ Cargando historial...
   class="card"
 >
 
+<div class="home-hero">
+  <div class="home-hero-ball">⚽</div>
+  <div class="home-hero-phrase">"El balón no miente. Los números tampoco."</div>
+</div>
+
 <div class="card-title">
 Bienvenido a MK Bets
 </div>
@@ -4920,7 +4946,7 @@ let selectedCompetition = '';
 let sbSelectedCompetition = '';
 
 console.log(
-  '[V7.13.0] JavaScript cargado correctamente'
+  '[V7.13.1] JavaScript cargado correctamente'
 );
 
 function esc(value){
@@ -5068,7 +5094,7 @@ function closeAllPanels(
 async function searchFixtures(){
 
   console.log(
-    '[V7.13.0] searchFixtures ejecutado'
+    '[V7.13.1] searchFixtures ejecutado'
   );
 
   const date =
@@ -5160,7 +5186,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.13.0] fixtures:',
+      '[V7.13.1] fixtures:',
       data
     );
 
@@ -5226,7 +5252,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.13.0] ERROR:',
+      '[V7.13.1] ERROR:',
       errorObject
     );
 
@@ -5449,7 +5475,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.13.0] análisis:',
+      '[V7.13.1] análisis:',
       data
     );
 
@@ -5476,7 +5502,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.13.0] ANALYZE ERROR:',
+      '[V7.13.1] ANALYZE ERROR:',
       errorObject
     );
 
@@ -6861,7 +6887,7 @@ async function simulateSlipBets(){
 function initializeApp(){
 
   console.log(
-    '[V7.13.0] inicializando interfaz'
+    '[V7.13.1] inicializando interfaz'
   );
 
   fetch('/api/status', { cache:'no-store' })
@@ -6890,7 +6916,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.13.0] searchBtn no encontrado'
+      '[V7.13.1] searchBtn no encontrado'
     );
 
     return;
@@ -7109,7 +7135,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.13.0] interfaz inicializada correctamente'
+    '[V7.13.1] interfaz inicializada correctamente'
   );
 }
 
@@ -7404,7 +7430,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.13.0 ANALYST running on port ${PORT}`
+      `V7.13.1 ANALYST running on port ${PORT}`
     );
 
     console.log(
