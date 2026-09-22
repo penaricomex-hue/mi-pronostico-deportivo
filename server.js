@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.15.0';
+const MODEL_VERSION = 'V7.16.0';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -2419,6 +2419,156 @@ app.get(
 );
 
 /* =========================================================
+   API PRÓXIMO PARTIDO DISPONIBLE
+   Para cuando la liga elegida está en parón (FIFA, descanso
+   invernal, etc.) y buscar fecha por fecha sería un fastidio.
+========================================================= */
+
+function addDaysToDateStr(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/* =========================================================
+   API PRÓXIMOS PARTIDOS DE EQUIPOS FAVORITOS
+   (para el widget de Inicio)
+========================================================= */
+
+app.get(
+  '/api/fixtures/favorites',
+  async (req, res) => {
+
+    const teams =
+      String(req.query.teams || '')
+        .split(',')
+        .map(t => t.trim())
+        .filter(Boolean)
+        .slice(0, 5);
+
+    if (!teams.length) {
+      return res.json({ ok: true, fixtures: [] });
+    }
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const toStr = addDaysToDateStr(todayStr, 14);
+
+    const cacheKey = `favorites-fixtures:${teams.join('|')}:${todayStr}`;
+    const cached = cacheGet(cacheKey);
+
+    if (cached) {
+      return res.json(cached);
+    }
+
+    try {
+      const data = await footballData(`/matches?dateFrom=${todayStr}&dateTo=${toStr}`);
+      const matches = Array.isArray(data?.matches) ? data.matches : [];
+
+      const filtered = matches.filter(
+        m => teams.some(t => namesMatch(m?.homeTeam?.name, t) || namesMatch(m?.awayTeam?.name, t))
+      );
+
+      const fixtures = filtered
+        .map(m => ({
+          home: m.homeTeam?.name || null,
+          away: m.awayTeam?.name || null,
+          homeCrest: m.homeTeam?.crest || null,
+          awayCrest: m.awayTeam?.crest || null,
+          kickoff: m.utcDate || null,
+          competition: m.competition?.name || m.competition?.code || null
+        }))
+        .sort((a, b) => new Date(a.kickoff) - new Date(b.kickoff));
+
+      const result = { ok: true, fixtures };
+
+      cacheSet(cacheKey, result);
+
+      return res.json(result);
+
+    } catch (error) {
+
+      console.error('FAVORITES FIXTURES ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error al buscar partidos de favoritos.'
+      });
+    }
+  }
+);
+
+app.get(
+  '/api/fixtures/next',
+  async (req, res) => {
+
+    const competitionFilter =
+      String(req.query.competition || '').trim().toUpperCase();
+
+    if (!competitionFilter) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Debes indicar una liga específica (no "Todas").'
+      });
+    }
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const cacheKey = `next-fixture:${competitionFilter}:${todayStr}`;
+
+    const cached = cacheGet(cacheKey);
+
+    if (cached) {
+      return res.json(cached);
+    }
+
+    try {
+
+      let foundDate = null;
+      let foundCount = 0;
+
+      // Bloques de 10 días (límite típico del plan gratis de
+      // Football-Data), hasta 45 días adelante — cubre un parón
+      // FIFA completo (~3 semanas) con margen.
+      for (let offset = 0; offset < 45 && !foundDate; offset += 10) {
+
+        const from = addDaysToDateStr(todayStr, offset);
+        const to = addDaysToDateStr(todayStr, Math.min(offset + 9, 44));
+
+        console.log(`[NEXT FIXTURE] ${competitionFilter} bloque ${from} a ${to}`);
+
+        const data = await footballData(
+          `/matches?competitions=${competitionFilter}&dateFrom=${from}&dateTo=${to}`
+        );
+
+        const matches = Array.isArray(data?.matches) ? data.matches : [];
+
+        if (matches.length) {
+          matches.sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate));
+          foundDate = matches[0].utcDate.slice(0, 10);
+          foundCount = matches.filter(m => m.utcDate.slice(0, 10) === foundDate).length;
+        }
+      }
+
+      const result = foundDate
+        ? { ok: true, found: true, date: foundDate, count: foundCount }
+        : { ok: true, found: false, message: 'No se encontraron partidos en los próximos 45 días para esta liga (puede seguir en parón).' };
+
+      cacheSet(cacheKey, result);
+
+      return res.json(result);
+
+    } catch (error) {
+
+      console.error('NEXT FIXTURE ERROR:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error al buscar el próximo partido.'
+      });
+    }
+  }
+);
+
+/* =========================================================
    API FIXTURES
 ========================================================= */
 
@@ -4312,7 +4462,7 @@ function renderPage() {
 >
 
 <title>
-MK Bets V7.15.0
+MK Bets V7.16.0
 </title>
 
 <style>
@@ -5053,7 +5203,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.15.0 ANALYST
+● V7.16.0 ANALYST
 </span>
 
 <div class="logo-row">
@@ -5123,6 +5273,15 @@ Buscar partidos por fecha
   style="margin-top:8px"
 >
 📅 Ver semana completa
+</button>
+
+<button
+  class="analysis-close"
+  id="nextFixtureBtn"
+  type="button"
+  style="margin-top:8px"
+>
+⏭️ Buscar próximo partido disponible
 </button>
 
 <div id="weekView" style="display:none;margin-top:12px"></div>
@@ -5262,6 +5421,8 @@ Modelo estadístico propio (xG + forma reciente ponderada + lesionados + descans
   <button class="sb-add-btn" type="button" id="addFavoriteBtn">+ Agregar</button>
 </div>
 
+<div id="favoritesFixtures" style="margin-top:12px"></div>
+
 <div class="card-title" style="margin-top:18px">
 ❓ ¿Cómo funciona?
 </div>
@@ -5380,7 +5541,7 @@ let selectedCompetition = '';
 let sbSelectedCompetition = '';
 
 console.log(
-  '[V7.15.0] JavaScript cargado correctamente'
+  '[V7.16.0] JavaScript cargado correctamente'
 );
 
 /* =========================================================
@@ -5425,6 +5586,52 @@ function renderFavoritesList(){
         </span>
       \`).join('')
     : '<span class="muted">Sin favoritos todavía</span>';
+}
+
+async function loadFavoritesFixtures(){
+
+  const container = document.getElementById('favoritesFixtures');
+  if(!container){ return; }
+
+  const favorites = getFavoriteTeams();
+
+  if(!favorites.length){
+    container.innerHTML = '';
+    return;
+  }
+
+  container.innerHTML = '<div class="muted">Buscando próximos partidos de tus favoritos...</div>';
+
+  try{
+
+    const response = await fetch('/api/fixtures/favorites?teams=' + encodeURIComponent(favorites.join(',')), { cache:'no-store' });
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      container.innerHTML = '';
+      return;
+    }
+
+    const fixtures = Array.isArray(data.fixtures) ? data.fixtures : [];
+
+    if(!fixtures.length){
+      container.innerHTML = '<div class="muted">Ninguno de tus favoritos juega en los próximos 14 días (puede ser parón de selecciones).</div>';
+      return;
+    }
+
+    container.innerHTML = '<div class="card-title">Próximos partidos de tus favoritos</div>' +
+      fixtures.slice(0, 6).map(f => \`
+        <div class="bet-row">
+          <div class="bet-row-head">
+            <span>\${teamCrestHtml(f.homeCrest, f.home)} \${esc(f.home)} vs \${teamCrestHtml(f.awayCrest, f.away)} \${esc(f.away)}</span>
+          </div>
+          <div class="bet-row-meta">\${formatTime(f.kickoff)} · \${esc(f.competition || '')}</div>
+        </div>
+      \`).join('');
+
+  }catch(e){
+    container.innerHTML = '';
+  }
 }
 
 function esc(value){
@@ -5580,6 +5787,47 @@ function closeAllPanels(
     );
 }
 
+async function findNextFixture(){
+
+  if(!selectedCompetition){
+    alert('Elige primero una liga específica (no "Todas") para buscar su próximo partido.');
+    return;
+  }
+
+  const button = document.getElementById('nextFixtureBtn');
+  const originalText = button.textContent;
+
+  button.disabled = true;
+  button.textContent = 'Buscando...';
+
+  try{
+
+    const response = await fetch('/api/fixtures/next?competition=' + encodeURIComponent(selectedCompetition), { cache:'no-store' });
+    const data = await response.json();
+
+    if(!response.ok || !data.ok){
+      throw new Error(data.error || 'No se pudo buscar el próximo partido.');
+    }
+
+    if(!data.found){
+      alert(data.message || 'No se encontraron partidos próximos para esta liga.');
+      return;
+    }
+
+    document.getElementById('date').value = data.date;
+    await searchFixtures();
+
+  }catch(errorObject){
+
+    alert(errorObject.message || 'Error al buscar el próximo partido.');
+
+  }finally{
+
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 async function loadWeekView(){
 
   const container = document.getElementById('weekView');
@@ -5627,7 +5875,7 @@ async function loadWeekView(){
 async function searchFixtures(){
 
   console.log(
-    '[V7.15.0] searchFixtures ejecutado'
+    '[V7.16.0] searchFixtures ejecutado'
   );
 
   const date =
@@ -5719,7 +5967,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.15.0] fixtures:',
+      '[V7.16.0] fixtures:',
       data
     );
 
@@ -5789,7 +6037,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.15.0] ERROR:',
+      '[V7.16.0] ERROR:',
       errorObject
     );
 
@@ -6019,7 +6267,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.15.0] análisis:',
+      '[V7.16.0] análisis:',
       data
     );
 
@@ -6046,7 +6294,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.15.0] ANALYZE ERROR:',
+      '[V7.16.0] ANALYZE ERROR:',
       errorObject
     );
 
@@ -6723,6 +6971,7 @@ async function showHomeView(){
   setActiveNav('navHome');
 
   renderFavoritesList();
+  loadFavoritesFixtures();
 
   try{
     const response = await fetch('/api/bets/summary?period=month', { cache:'no-store' });
@@ -7480,7 +7729,7 @@ async function simulateSlipBets(){
 function initializeApp(){
 
   console.log(
-    '[V7.15.0] inicializando interfaz'
+    '[V7.16.0] inicializando interfaz'
   );
 
   fetch('/api/status', { cache:'no-store' })
@@ -7509,7 +7758,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.15.0] searchBtn no encontrado'
+      '[V7.16.0] searchBtn no encontrado'
     );
 
     return;
@@ -7524,6 +7773,12 @@ function initializeApp(){
 
   if(weekViewBtn){
     weekViewBtn.addEventListener('click', loadWeekView);
+  }
+
+  const nextFixtureBtn = document.getElementById('nextFixtureBtn');
+
+  if(nextFixtureBtn){
+    nextFixtureBtn.addEventListener('click', findNextFixture);
   }
 
   const leagueChips = document.querySelectorAll('.league-chip');
@@ -7602,6 +7857,7 @@ function initializeApp(){
         favorites.push(name);
         saveFavoriteTeams(favorites);
         renderFavoritesList();
+        loadFavoritesFixtures();
       }
 
       input.value = '';
@@ -7775,13 +8031,14 @@ function initializeApp(){
         favorites.splice(Number(favRemove.dataset.removeFav), 1);
         saveFavoriteTeams(favorites);
         renderFavoritesList();
+        loadFavoritesFixtures();
       }
 
     }
   );
 
   console.log(
-    '[V7.15.0] interfaz inicializada correctamente'
+    '[V7.16.0] interfaz inicializada correctamente'
   );
 }
 
@@ -7883,7 +8140,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.15.0 ANALYST running on port ${PORT}`
+      `V7.16.0 ANALYST running on port ${PORT}`
     );
 
     console.log(
