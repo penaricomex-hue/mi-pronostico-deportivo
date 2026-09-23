@@ -74,7 +74,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] APP_USERNAME/APP_PASSWORD no configuradas: la app queda sin login.');
 }
 
-const MODEL_VERSION = 'V7.16.1';
+const MODEL_VERSION = 'V7.16.2';
 
 const FOOTBALL_DATA_BASE =
   'https://api.football-data.org/v4';
@@ -1102,16 +1102,26 @@ function calculateRecentTeamStats(
 ========================================================= */
 
 async function getFixturesFootballData(
-  date
+  date,
+  competitionFilter
 ) {
   console.log(
-    `[FIXTURES FD] buscando ${date}`
+    `[FIXTURES FD] buscando ${date} (liga=${competitionFilter || 'TODAS'})`
   );
 
   try {
+    // Cuando se pide una liga específica, usamos la ruta propia de
+    // esa competición — en el plan gratis de Football-Data resultó
+    // ser más confiable para fechas más lejanas que la ruta general
+    // /matches, que parece tener una ventana más corta.
+    const path =
+      competitionFilter && COMPETITIONS.includes(competitionFilter)
+        ? `/competitions/${competitionFilter}/matches?dateFrom=${date}&dateTo=${date}`
+        : `/matches?dateFrom=${date}&dateTo=${date}`;
+
     const data =
       await footballData(
-        `/matches?dateFrom=${date}&dateTo=${date}`
+        path
       );
 
     const matches =
@@ -1122,12 +1132,14 @@ async function getFixturesFootballData(
         : [];
 
     const filtered =
-      matches.filter(
-        match =>
-          ODDS_SPORT_BY_COMPETITION[
-            match?.competition?.code
-          ]
-      );
+      competitionFilter
+        ? matches
+        : matches.filter(
+            match =>
+              ODDS_SPORT_BY_COMPETITION[
+                match?.competition?.code
+              ]
+          );
 
     console.log(
       `[FIXTURES FD] ${date}: ${filtered.length} partidos`
@@ -1394,7 +1406,8 @@ async function getFixture(
 
   let matches =
     await getFixturesFootballData(
-      date
+      date,
+      competitionFilter
     );
 
   if (competitionFilter) {
@@ -4462,7 +4475,7 @@ function renderPage() {
 >
 
 <title>
-MK Bets V7.16.1
+MK Bets V7.16.2
 </title>
 
 <style>
@@ -5203,7 +5216,7 @@ input{
 <header class="header">
 
 <span class="version">
-● V7.16.1 ANALYST
+● V7.16.2 ANALYST
 </span>
 
 <div class="logo-row">
@@ -5541,7 +5554,7 @@ let selectedCompetition = '';
 let sbSelectedCompetition = '';
 
 console.log(
-  '[V7.16.1] JavaScript cargado correctamente'
+  '[V7.16.2] JavaScript cargado correctamente'
 );
 
 /* =========================================================
@@ -5875,7 +5888,7 @@ async function loadWeekView(){
 async function searchFixtures(){
 
   console.log(
-    '[V7.16.1] searchFixtures ejecutado'
+    '[V7.16.2] searchFixtures ejecutado'
   );
 
   const date =
@@ -5967,7 +5980,7 @@ async function searchFixtures(){
       await response.json();
 
     console.log(
-      '[V7.16.1] fixtures:',
+      '[V7.16.2] fixtures:',
       data
     );
 
@@ -6037,7 +6050,7 @@ async function searchFixtures(){
   }catch(errorObject){
 
     console.error(
-      '[V7.16.1] ERROR:',
+      '[V7.16.2] ERROR:',
       errorObject
     );
 
@@ -6267,7 +6280,7 @@ async function openAnalysis(
       await response.json();
 
     console.log(
-      '[V7.16.1] análisis:',
+      '[V7.16.2] análisis:',
       data
     );
 
@@ -6294,7 +6307,7 @@ async function openAnalysis(
   }catch(errorObject){
 
     console.error(
-      '[V7.16.1] ANALYZE ERROR:',
+      '[V7.16.2] ANALYZE ERROR:',
       errorObject
     );
 
@@ -7729,7 +7742,7 @@ async function simulateSlipBets(){
 function initializeApp(){
 
   console.log(
-    '[V7.16.1] inicializando interfaz'
+    '[V7.16.2] inicializando interfaz'
   );
 
   fetch('/api/status', { cache:'no-store' })
@@ -7758,7 +7771,7 @@ function initializeApp(){
   if(!searchBtn){
 
     console.error(
-      '[V7.16.1] searchBtn no encontrado'
+      '[V7.16.2] searchBtn no encontrado'
     );
 
     return;
@@ -8038,7 +8051,7 @@ function initializeApp(){
   );
 
   console.log(
-    '[V7.16.1] interfaz inicializada correctamente'
+    '[V7.16.2] interfaz inicializada correctamente'
   );
 }
 
@@ -8140,7 +8153,7 @@ app.listen(
   async () => {
 
     console.log(
-      `V7.16.1 ANALYST running on port ${PORT}`
+      `V7.16.2 ANALYST running on port ${PORT}`
     );
 
     console.log(
