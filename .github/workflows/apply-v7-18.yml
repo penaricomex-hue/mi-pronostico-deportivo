@@ -1,0 +1,42 @@
+name: Aplicar V7.18 Hotfix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Aplicar V7.18
+        run: node tools/apply-v7.18.js server.js
+
+      - name: Verificar sintaxis
+        run: node --check server.js
+
+      - name: Commit V7.18
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add server.js tools/apply-v7.18.js
+
+          if git diff --cached --quiet; then
+            echo "No hay cambios para commit."
+          else
+            git commit -m "Release V7.18 stability hotfix"
+            git push
+          fi
