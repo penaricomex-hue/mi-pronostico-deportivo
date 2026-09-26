@@ -104,7 +104,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] Acceso protegido con usuario/contraseña activado.');
 }
 
-const MODEL_VERSION = 'V7.17.0';
+const MODEL_VERSION = 'V7.18.0';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -140,7 +140,7 @@ function getHomeAdvantage(competitionCode) {
   return HOME_ADVANTAGE_BY_LEAGUE[competitionCode] || 1.08;
 }
 
-const CACHE_MINUTES = 1440; // 24 horas
+const CACHE_MINUTES = 30; // V7.18
 const STAKE_EUR = Number(process.env.STAKE_EUR) || 10;
 const DATABASE_URL = process.env.DATABASE_URL || '';
 
@@ -1052,14 +1052,29 @@ app.get('/api/fixtures/favorites', async (req, res) => {
   if (!teams.length) return res.json({ ok: true, fixtures: [] });
 
   const todayStr = new Date().toISOString().slice(0, 10);
-  const toStr = addDaysToDateStr(todayStr, 14);
   const cacheKey = `favorites-fixtures:${teams.join('|')}:${todayStr}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
   try {
-    const data = await footballData(`/matches?dateFrom=${todayStr}&dateTo=${toStr}`);
-    const matches = Array.isArray(data?.matches) ? data.matches : [];
+    // Football-Data.org limita las consultas a ventanas de máximo 10 días.
+    const matches = [];
+
+    for (let offset = 0; offset <= 14; offset += 10) {
+      const from = addDaysToDateStr(todayStr, offset);
+      const to = addDaysToDateStr(
+        todayStr,
+        Math.min(offset + 9, 14)
+      );
+
+      const data = await footballData(
+        `/matches?dateFrom=${from}&dateTo=${to}`
+      );
+
+      if (Array.isArray(data?.matches)) {
+        matches.push(...data.matches);
+      }
+    }
     const filtered = matches.filter(m =>
       teams.some(t => namesMatch(m?.homeTeam?.name, t) || namesMatch(m?.awayTeam?.name, t))
     );
@@ -1765,7 +1780,7 @@ app.get('/api/bets/summary', async (req, res) => {
 });
 
 /* =========================================================
-   FRONTEND - RENDER PAGE (V7.17.0)
+   FRONTEND - RENDER PAGE (V7.18.0)
    Incluye:
    - Banner VS con escudos grandes
    - Medidor circular SVG de confianza
@@ -1782,7 +1797,7 @@ function renderPage() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
-<title>MK Bets V7.17.0 - Pronósticos Deportivos</title>
+<title>MK Bets V7.18.0 - Pronósticos Deportivos</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 90' style='background:%23080b10'%3E%3Cpolyline points='10,80 10,10 45,55 80,10 80,80' fill='none' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='8' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='82' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3C/svg%3E">
 
 <style>
