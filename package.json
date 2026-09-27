@@ -1,8 +1,8 @@
 {
   "name": "mi-pronostico-deportivo",
-  "version": "6.0.0",
+  "version": "7.17.0",
   "private": true,
-  "description": "Aplicación móvil/web de pronósticos deportivos con football-data.org, The Odds API y modelo Poisson",
+  "description": "Aplicación de pronósticos deportivos con cálculo de descanso, ventaja de local por liga y simulador de apuestas",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,7 +11,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "express": "^5.1.0",
+    "express": "^4.21.2",
     "pg": "^8.11.3"
   }
 }
