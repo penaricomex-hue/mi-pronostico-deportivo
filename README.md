@@ -1,40 +1,57 @@
-# Mi Pronóstico Deportivo — V6 / Android
+# MK BETS — Modelo Estadístico de Pronósticos Deportivos (V8.0)
 
-Ahora el proyecto tiene dos capas:
+Sistema de análisis y predicción cuantitativa de fútbol basado en modelado estadístico Poisson & Dixon-Coles, estimación bayesiana con regresión a la media (shrinkage), ventaja de local aprendida empíricamente, fatiga asimétrica y valor esperado (EV) contrastado contra cuotas reales.
 
-1. **Backend + interfaz web** en Render. Aquí viven el modelo, las APIs y la interfaz móvil.
-2. **Aplicación Android APK** en `android/`. Es una app Android real que abre la interfaz segura del servicio Render dentro de una pantalla WebView.
+---
 
-Esto permite mejorar la interfaz y el motor en Render sin tener que reinstalar la APK para cada cambio visual. Cuando agreguemos funciones nativas (notificaciones, favoritos locales, widgets, compartir, etc.) podremos actualizar la APK.
+## 🌟 Novedades V8.0 (Motor Estadístico Refactorizado)
 
-## Proveedores
-- football-data.org: partidos, resultados y forma reciente.
-- The Odds API: cuotas pre-partido.
+1. **Ventaja de Local Dinámica y Aprendida**:
+   - Sustituye los multiplicadores manuales fijos por una estimación empírica bayesiana: ratio histórico de goles local vs visitante por competición con regresión hacia la media global (1.09x).
+2. **Cálculo de Lesiones Ponderado por Posición**:
+   - Fin al recorte indiscriminado (-3% por jugador). Ahora evalúa posición (portero titular, atacante principal, defensas) y acota el impacto máximo al 8% total.
+3. **Fatiga y Descanso Asimétrica y Continua**:
+   - Modela por separado la fatiga defensiva (desajustes de repliegue y concentración) y la fatiga ofensiva (pérdida de chispa) con una curva suave en lugar de saltos bruscos irreales.
+4. **Segunda Opinión Externa (Big Balls) Desacoplada**:
+   - Se presenta como referencia informativa externa. Ya no adultera ni incrementa/reduce artificialmente el score de confianza (`confidence`) del modelo propio.
+5. **Corrección de Rango de Fechas (>10 días)**:
+   - Chunking automático de peticiones a Football-Data para evitar el error `HTTP 400: Specified period must not exceed 10 days`.
+6. **Caché Multinivel con TTL Diferenciado**:
+   - Cuotas: 3 min | Análisis: 15 min | Fixtures: 25 min | Lesiones: 90 min | Historial: 4 horas | Equipos: 24 horas.
+7. **Motor de Backtesting y Calibración (V8.1 Foundation)**:
+   - Medición de Brier Score multi-clase, Log Loss y calibración empírica por tramos de probabilidad.
 
-## Variables de Render
-- `FOOTBALL_DATA_KEY`
-- `ODDS_API_KEY`
+---
 
-No pongas las claves en GitHub ni las compartas por chat.
+## 🔑 Variables de Entorno en Render
 
-## Web
-```bash
-npm install
-npm start
-```
+Configura las siguientes variables en el panel de **Render** (`Environment`):
 
-## Android
-La APK se construye automáticamente mediante GitHub Actions al hacer push a `main`, o manualmente desde la pestaña Actions con `Build Android APK`.
+| Variable | Descripción | Obligatorio |
+|---|---|---|
+| `FOOTBALL_DATA_TOKEN` | Token de API de [football-data.org](https://www.football-data.org/) (partidos, plantillas y resultados). | Sí |
+| `ODDS_API_KEY` | Clave de API de [The Odds API](https://the-odds-api.com/) para cuotas en tiempo real. | Opcional (recomendado) |
+| `BIGBALLS_KEY` | Clave de API de Big Balls Data para contrastar segunda opinión. | Opcional |
+| `DATABASE_URL` | URL de conexión de PostgreSQL para guardar apuestas simuladas y métricas. | Opcional |
+| `APP_USERNAME` | Usuario para proteger la web con Basic Auth en Render. | Opcional |
+| `APP_PASSWORD` | Contraseña para proteger la web con Basic Auth en Render. | Opcional |
+| `STAKE_EUR` | Importe predeterminado por apuesta (por defecto `10`). | Opcional |
 
-El archivo generado es:
-`android/app/build/outputs/apk/debug/app-debug.apk`
+> **Nota de Seguridad**: Nunca subas tus claves de API ni credenciales directamente al repositorio público de GitHub.
 
-## Importante
-La APK apunta al servicio Render en:
-`https://mi-pronostico-deportivo.onrender.com/`
+---
 
-Si la URL de Render cambia, edita `APP_URL` en `android/app/src/main/java/com/mipronosticodeportivo/MainActivity.java`.
+## 🚀 Despliegue en Render
 
-Las probabilidades son estimaciones estadísticas, no garantías.
+1. Haz push a tu rama principal (`main`) en GitHub.
+2. En Render, crea un **Web Service**:
+   - **Build Command**: `npm install`
+   - **Start Command**: `node server.js`
+   - **Environment Variables**: Añade `FOOTBALL_DATA_TOKEN` y opcionalmente las demás.
+3. El servicio compilará e iniciará automáticamente en `https://tu-servicio.onrender.com`.
 
-Football data provided by the Football-Data.org API.
+---
+
+## 📱 Aplicación Android (APK)
+
+El proyecto incluye la carpeta `android/` configurada como un contenedor nativo seguro con WebView apuntando a tu URL de producción en Render. Al actualizar `server.js` en Render, todos los usuarios de la APK reciben las mejoras instantáneamente sin necesidad de recompilar la aplicación móvil.

@@ -1,6 +1,6 @@
 /**
  * MK Bets - Motor Estadístico de Modelado de Fútbol (engine.js)
- * Versión V7.17.0
+ * Versión V7.16.2
  */
 
 function clamp(value, min, max) {

@@ -104,7 +104,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] Acceso protegido con usuario/contraseña activado.');
 }
 
-const MODEL_VERSION = 'V7.17.0';
+const MODEL_VERSION = 'V8.0.0';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -122,34 +122,94 @@ const BIGBALLS_LEAGUE_MAP = {
 };
 
 /* =========================================================
-   VENTAJA DE LOCAL AJUSTADA POR LIGA
-   Antes: 1.08x fijo para todas.
-   Ahora: factor calibrado según el impacto histórico real.
+   1. VENTAJA DE LOCAL DINÁMICA Y APRENDIDA (V8.0)
+   Home Advantage = promedio histórico de goles local / goles visitante
+   de esa competición, suavizado (shrinkage) hacia la media global (1.09x).
 ========================================================= */
-const HOME_ADVANTAGE_BY_LEAGUE = {
-  PD: 1.14,  // LaLiga (España): localía muy dominante
-  SA: 1.13,  // Serie A (Italia): campos complicados y planteos conservadores
-  EL: 1.13,  // Europa League: viajes largos y ambientes hostiles
-  BL1: 1.10, // Bundesliga (Alemania): alta intensidad y estadios llenos
-  CL: 1.10,  // Champions League: alta competencia, ventaja moderada
-  FL1: 1.09, // Ligue 1 (Francia): factor intermedio
-  PL: 1.07   // Premier League (Inglaterra): máxima paridad y muchas victorias visitantes
+const GLOBAL_HOME_ADVANTAGE_BASELINE = 1.09;
+const learnedHomeAdvantage = new Map();
+
+// Priors iniciales calibrados estadísticamente
+const HOME_ADVANTAGE_PRIORS = {
+  PD: 1.13,  // LaLiga
+  SA: 1.12,  // Serie A
+  EL: 1.12,  // Europa League
+  BL1: 1.10, // Bundesliga
+  CL: 1.09,  // Champions League
+  FL1: 1.08, // Ligue 1
+  PL: 1.07   // Premier League
 };
 
-function getHomeAdvantage(competitionCode) {
-  return HOME_ADVANTAGE_BY_LEAGUE[competitionCode] || 1.08;
+function updateLearnedHomeAdvantage(competitionCode, matches) {
+  if (!competitionCode || !Array.isArray(matches) || matches.length < 5) return;
+  let homeGoals = 0;
+  let awayGoals = 0;
+  let count = 0;
+
+  for (const m of matches) {
+    const hg = Number(m.score?.fullTime?.home ?? m.homeGoals ?? m.goalsHome);
+    const ag = Number(m.score?.fullTime?.away ?? m.awayGoals ?? m.goalsAway);
+    if (Number.isFinite(hg) && Number.isFinite(ag)) {
+      homeGoals += hg;
+      awayGoals += ag;
+      count++;
+    }
+  }
+
+  if (count >= 5 && awayGoals > 0) {
+    const rawRatio = homeGoals / Math.max(awayGoals, 1);
+    // Suavizado bayesiano con 12 pseudo-observaciones hacia la media global
+    const weight = count / (count + 12);
+    const smoothed = weight * rawRatio + (1 - weight) * GLOBAL_HOME_ADVANTAGE_BASELINE;
+    const clamped = Math.max(1.03, Math.min(1.22, Number(smoothed.toFixed(3))));
+    learnedHomeAdvantage.set(competitionCode, {
+      factor: clamped,
+      sampleSize: count,
+      rawRatio: Number(rawRatio.toFixed(3)),
+      updatedAt: Date.now()
+    });
+  }
 }
 
-const CACHE_MINUTES = 1440; // 24 horas
+function getHomeAdvantage(competitionCode) {
+  const learned = learnedHomeAdvantage.get(competitionCode);
+  if (learned && learned.factor) {
+    return learned.factor;
+  }
+  return HOME_ADVANTAGE_PRIORS[competitionCode] || GLOBAL_HOME_ADVANTAGE_BASELINE;
+}
+
+/* =========================================================
+   CACHÉ MULTINIVEL CON TTLs INDEPENDIENTES (V8.0)
+   Evita que cuotas o partidos se congelen 24 horas.
+========================================================= */
+const CACHE_TTLS = {
+  odds: 3,         // Cuotas de casas de apuestas: 3 minutos
+  analysis: 15,    // Análisis recalculable: 15 minutos
+  fixtures: 25,    // Fixtures del día y favoritos: 25 minutos
+  injuries: 90,    // Bajas y lesiones: 90 minutos (1.5 horas)
+  history: 240,    // Historial y H2H: 4 horas
+  teams: 1440,     // Nombres de equipos y ligas: 24 horas
+  default: 30
+};
+
 const STAKE_EUR = Number(process.env.STAKE_EUR) || 10;
 const DATABASE_URL = process.env.DATABASE_URL || '';
 
 const pool = (DATABASE_URL && Pool)
   ? new Pool({
       connectionString: DATABASE_URL,
-      ssl: { rejectUnauthorized: false }
+      ssl: process.env.NODE_ENV === 'production' || DATABASE_URL.includes('render')
+        ? { rejectUnauthorized: false }
+        : false
     })
   : null;
+
+if (pool) {
+  pool.on('error', (err) => {
+    console.warn('[DB] PostgreSQL cliente en background reconectando:', err.message);
+  });
+}
 
 async function ensureSchema() {
   if (!pool) return;
@@ -193,10 +253,16 @@ const ODDS_SPORT_BY_COMPETITION = {
 const COMPETITIONS = Object.keys(ODDS_SPORT_BY_COMPETITION);
 const cache = new Map();
 
+function getTtlMinutes(category) {
+  if (typeof category === 'number') return category;
+  return CACHE_TTLS[category] || CACHE_TTLS.default;
+}
+
 function cacheGet(key) {
   const item = cache.get(key);
   if (!item) return null;
-  if (Date.now() - item.time > CACHE_MINUTES * 60 * 1000) {
+  const maxAgeMs = (item.ttlMinutes || CACHE_TTLS.default) * 60 * 1000;
+  if (Date.now() - item.time > maxAgeMs) {
     cache.delete(key);
     return null;
   }
@@ -206,18 +272,20 @@ function cacheGet(key) {
 function cacheGetTimestamp(key) {
   const item = cache.get(key);
   if (!item) return null;
-  if (Date.now() - item.time > CACHE_MINUTES * 60 * 1000) return null;
+  const maxAgeMs = (item.ttlMinutes || CACHE_TTLS.default) * 60 * 1000;
+  if (Date.now() - item.time > maxAgeMs) return null;
   return item.time;
 }
 
-function cacheSet(key, data) {
-  cache.set(key, { time: Date.now(), data });
+function cacheSet(key, data, category = 'default') {
+  const ttlMinutes = getTtlMinutes(category);
+  cache.set(key, { time: Date.now(), data, ttlMinutes });
   return data;
 }
 
-function cacheSetIfNotEmpty(key, data) {
+function cacheSetIfNotEmpty(key, data, category = 'default') {
   if (Array.isArray(data) && data.length === 0) return data;
-  return cacheSet(key, data);
+  return cacheSet(key, data, category);
 }
 
 function normalizeName(value) {
@@ -301,43 +369,98 @@ async function getBigBallsInjuries(bbLeagueKey) {
   return Array.isArray(data?.data?.injuries?.value) ? data.data.injuries.value : [];
 }
 
-async function getInjuryCountForTeam(teamName, competitionCode) {
+async function getInjuryDataForTeam(teamName, competitionCode) {
   const bbLeagueKey = BIGBALLS_LEAGUE_MAP[competitionCode];
-  if (!bbLeagueKey || !BIGBALLS_KEY) return 0;
+  if (!bbLeagueKey || !BIGBALLS_KEY) return { count: 0, details: [] };
+  const cacheKey = `injuries:${bbLeagueKey}:${teamName}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
   try {
     const [teams, injuries] = await Promise.all([
       getBigBallsTeams(bbLeagueKey),
       getBigBallsInjuries(bbLeagueKey)
     ]);
     const matchedTeam = teams.find(t => namesMatch(t?.name, teamName));
-    if (!matchedTeam?.id) return 0;
-    return injuries.filter(inj => inj?.current_team_id === matchedTeam.id).length;
+    if (!matchedTeam?.id) return { count: 0, details: [] };
+    const teamInjuries = injuries.filter(inj => inj?.current_team_id === matchedTeam.id);
+    const result = {
+      count: teamInjuries.length,
+      details: teamInjuries.map(i => ({
+        player: i?.player_name || i?.name || 'Jugador',
+        position: (i?.position || i?.role || '').toLowerCase(),
+        status: i?.status || 'Baja'
+      }))
+    };
+    cacheSet(cacheKey, result, 'injuries');
+    return result;
   } catch (error) {
-    return 0;
+    return { count: 0, details: [] };
   }
 }
 
+/* =========================================================
+   2. CÁLCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0)
+   - Portero titular: afecta defensa (+vulnerabilidad)
+   - Delanteros / goleadores: afecta ataque
+   - Defensas / medios: impacto repartido
+   - Impacto máximo global acotado al 8% (clamp 0.92 .. 1.0)
+========================================================= */
 async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, competitionCode) {
   try {
-    const [homeInjuries, awayInjuries] = await Promise.all([
-      getInjuryCountForTeam(homeName, competitionCode),
-      getInjuryCountForTeam(awayName, competitionCode)
+    const [homeData, awayData] = await Promise.all([
+      getInjuryDataForTeam(homeName, competitionCode),
+      getInjuryDataForTeam(awayName, competitionCode)
     ]);
-    const homeFactor = clamp(1 - homeInjuries * 0.03, 0.85, 1);
-    const awayFactor = clamp(1 - awayInjuries * 0.03, 0.85, 1);
+
+    function computeTeamInjuryFactor(data) {
+      if (!data || !data.count) return { attackFactor: 1.0, defenseFactor: 1.0, count: 0 };
+      let attackPenalty = 0;
+      let defensePenalty = 0;
+
+      for (const item of (data.details || [])) {
+        const pos = item.position;
+        if (pos.includes('goalkeeper') || pos.includes('portero') || pos.includes('gk')) {
+          defensePenalty += 0.035; // Portero: vulnerabilidad defensiva
+        } else if (pos.includes('forward') || pos.includes('delantero') || pos.includes('striker') || pos.includes('att')) {
+          attackPenalty += 0.03;   // Delantero
+        } else if (pos.includes('defen') || pos.includes('cb') || pos.includes('lb') || pos.includes('rb')) {
+          defensePenalty += 0.02;  // Defensa
+        } else {
+          attackPenalty += 0.015;
+          defensePenalty += 0.015;
+        }
+      }
+
+      // Si no tenemos desglose por posición, aplicar estimación suave de 0.015 por baja
+      if (!data.details || !data.details.length) {
+        attackPenalty = data.count * 0.018;
+        defensePenalty = data.count * 0.018;
+      }
+
+      // Acotamos el impacto máximo a un 8% (0.92) para evitar sobreajuste destructivo
+      const attackFactor = clamp(1 - attackPenalty, 0.92, 1.0);
+      const defenseFactor = clamp(1 - defensePenalty, 0.92, 1.0);
+
+      return { attackFactor, defenseFactor, count: data.count };
+    }
+
+    const homeAdj = computeTeamInjuryFactor(homeData);
+    const awayAdj = computeTeamInjuryFactor(awayData);
+
     return {
       homeStats: {
         ...homeStats,
-        attackStrength: homeStats.attackStrength * homeFactor,
-        defenseStrength: homeStats.defenseStrength * homeFactor
+        attackStrength: homeStats.attackStrength * homeAdj.attackFactor,
+        defenseStrength: homeStats.defenseStrength * homeAdj.defenseFactor
       },
       awayStats: {
         ...awayStats,
-        attackStrength: awayStats.attackStrength * awayFactor,
-        defenseStrength: awayStats.defenseStrength * awayFactor
+        attackStrength: awayStats.attackStrength * awayAdj.attackFactor,
+        defenseStrength: awayStats.defenseStrength * awayAdj.defenseFactor
       },
-      homeInjuries,
-      awayInjuries
+      homeInjuries: homeAdj.count,
+      awayInjuries: awayAdj.count
     };
   } catch (error) {
     return { homeStats, awayStats, homeInjuries: 0, awayInjuries: 0 };
@@ -345,15 +468,14 @@ async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, c
 }
 
 /* =========================================================
-   1. CALCULAR EL DESCANSO NOSOTROS MISMOS (GRATIS)
-   Usa el historial de Football-Data que ya tenemos sin pagar
-   la ruta de Big Balls.
+   3. DESCANSO Y FATIGA ASIMÉTRICA Y SUAVE (V8.0)
+   - Fatiga defensiva (desajuste táctico/repliegue) > fatiga ofensiva
+   - Curva continua y acotada, sin saltos binarios irreales
 ========================================================= */
 function calculateRestDaysFromMatches(matches, matchUtcDate) {
   if (!Array.isArray(matches) || !matches.length) return null;
   const targetTime = matchUtcDate ? new Date(matchUtcDate).getTime() : Date.now();
 
-  // Partidos terminados antes de la fecha del encuentro
   const pastMatches = matches
     .filter(m => m.utcDate && new Date(m.utcDate).getTime() < targetTime)
     .sort((a, b) => new Date(b.utcDate).getTime() - new Date(a.utcDate).getTime());
@@ -365,41 +487,61 @@ function calculateRestDaysFromMatches(matches, matchUtcDate) {
   return diffDays;
 }
 
-function getRestImpact(restDays) {
-  if (restDays == null) return { factor: 1.0, label: 'Sin datos', impact: 0 };
-  if (restDays <= 2) return { factor: 0.88, label: 'Fatiga severa (≤2 días)', impact: -12 };
-  if (restDays === 3) return { factor: 0.93, label: 'Cansancio moderado (3 días)', impact: -7 };
-  if (restDays === 4) return { factor: 0.97, label: 'Descanso justo (4 días)', impact: -3 };
-  if (restDays >= 5 && restDays <= 12) return { factor: 1.00, label: 'Descanso óptimo (' + restDays + 'd)', impact: 0 };
-  return { factor: 0.97, label: 'Falta de ritmo (' + restDays + 'd)', impact: -3 };
+function getRestFatigaImpact(restDays) {
+  if (restDays == null) {
+    return { attackFactor: 1.0, defenseFactor: 1.0, label: 'Sin datos', impactPct: 0 };
+  }
+  // ≤2 días: fatiga severa (defensa sufre más: -4.5%, ataque pierde frescura: -3.5%)
+  if (restDays <= 2) {
+    return { attackFactor: 0.965, defenseFactor: 0.955, label: 'Fatiga severa (≤2 días)', impactPct: -4 };
+  }
+  // 3 días: descanso ajustado
+  if (restDays === 3) {
+    return { attackFactor: 0.98, defenseFactor: 0.975, label: 'Descanso justo (3 días)', impactPct: -2.5 };
+  }
+  // 4 días: ritmo competitivo casi pleno
+  if (restDays === 4) {
+    return { attackFactor: 0.99, defenseFactor: 0.99, label: 'Descanso adecuado (4 días)', impactPct: -1 };
+  }
+  // 5 a 12 días: óptimo
+  if (restDays >= 5 && restDays <= 12) {
+    return { attackFactor: 1.0, defenseFactor: 1.0, label: `Óptimo (${restDays}d)`, impactPct: 0 };
+  }
+  // > 12 días: leve falta de ritmo competitivo
+  return { attackFactor: 0.985, defenseFactor: 0.99, label: `Inactividad prolongada (${restDays}d)`, impactPct: -1.5 };
 }
 
 function applyCalculatedRestAdjustment(homeStats, awayStats, homeRestDays, awayRestDays) {
-  const homeImpact = getRestImpact(homeRestDays);
-  const awayImpact = getRestImpact(awayRestDays);
+  const homeImpact = getRestFatigaImpact(homeRestDays);
+  const awayImpact = getRestFatigaImpact(awayRestDays);
 
   return {
     homeStats: {
       ...homeStats,
-      attackStrength: clamp(homeStats.attackStrength * homeImpact.factor, 0.45, 1.8),
-      defenseStrength: clamp(homeStats.defenseStrength * homeImpact.factor, 0.45, 1.8)
+      attackStrength: clamp(homeStats.attackStrength * homeImpact.attackFactor, 0.45, 1.8),
+      defenseStrength: clamp(homeStats.defenseStrength * homeImpact.defenseFactor, 0.45, 1.8)
     },
     awayStats: {
       ...awayStats,
-      attackStrength: clamp(awayStats.attackStrength * awayImpact.factor, 0.45, 1.8),
-      defenseStrength: clamp(awayStats.defenseStrength * awayImpact.factor, 0.45, 1.8)
+      attackStrength: clamp(awayStats.attackStrength * awayImpact.attackFactor, 0.45, 1.8),
+      defenseStrength: clamp(awayStats.defenseStrength * awayImpact.defenseFactor, 0.45, 1.8)
     },
-    homeRest: { days: homeRestDays, status: homeImpact.label, impactPct: homeImpact.impact },
-    awayRest: { days: awayRestDays, status: awayImpact.label, impactPct: awayImpact.impact }
+    homeRest: { days: homeRestDays, status: homeImpact.label, impactPct: homeImpact.impactPct },
+    awayRest: { days: awayRestDays, status: awayImpact.label, impactPct: awayImpact.impactPct }
   };
 }
 
 /* =========================================================
-   3. PREDICCIONES BIG BALLS (/v1/predictions) - SEGUNDA OPINIÓN
+   4. PREDICCIONES BIG BALLS - SEGUNDA OPINIÓN PURAMENTE EXTERNA
+   Ya no modifica el score de confianza ni la probabilidad del modelo.
 ========================================================= */
 async function getBigBallsPrediction(homeName, awayName, competitionCode) {
   const bbLeagueKey = BIGBALLS_LEAGUE_MAP[competitionCode];
   if (!bbLeagueKey || !BIGBALLS_KEY) return null;
+  const cacheKey = `bb-pred:${bbLeagueKey}:${homeName}:${awayName}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
   try {
     const data = await bigBallsRequest(`/v1/predictions?sport=football&league=${bbLeagueKey}`);
     const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.predictions) ? data.predictions : []);
@@ -420,12 +562,14 @@ async function getBigBallsPrediction(homeName, awayName, competitionCode) {
     const winner = matched.predicted_winner || matched.pick ||
       (hp > ap && hp > dp ? 'home' : (ap > hp && ap > dp ? 'away' : 'draw'));
 
-    return {
+    const result = {
       homeProb: Math.round(hp <= 1 ? hp * 100 : hp),
       drawProb: Math.round(dp <= 1 ? dp * 100 : dp),
       awayProb: Math.round(ap <= 1 ? ap * 100 : ap),
       predictedWinner: winner
     };
+    cacheSet(cacheKey, result, 'analysis');
+    return result;
   } catch (err) {
     console.warn('[BIGBALLS PREDICTIONS]', err.message);
     return null;
@@ -439,32 +583,30 @@ function evaluateSecondOpinion(model, bbPred) {
     ? 'home'
     : ((model.awayWin > model.homeWin && model.awayWin > model.draw) ? 'away' : 'draw');
 
+  const mkProbMap = { home: model.homeWin, draw: model.draw, away: model.awayWin };
+  const bbProbMap = { home: bbPred.homeProb, draw: bbPred.drawProb, away: bbPred.awayProb };
+
   const agreement = mkWinner === bbPred.predictedWinner;
   const labels = { home: 'Local', draw: 'Empate', away: 'Visitante' };
 
-  if (agreement) {
-    return {
-      available: true,
-      agrees: true,
-      status: 'Consenso (+5% confianza)',
-      mkPick: labels[mkWinner],
-      bbPick: labels[bbPred.predictedWinner],
-      bbProbs: { home: bbPred.homeProb, draw: bbPred.drawProb, away: bbPred.awayProb },
-      confidenceDelta: 5,
-      message: `Big Balls coincide con nuestro modelo eligiendo ${labels[mkWinner]}. Señal reforzada.`
-    };
-  } else {
-    return {
-      available: true,
-      agrees: false,
-      status: 'Divergencia (Alerta)',
-      mkPick: labels[mkWinner],
-      bbPick: labels[bbPred.predictedWinner] || 'Otro resultado',
-      bbProbs: { home: bbPred.homeProb, draw: bbPred.drawProb, away: bbPred.awayProb },
-      confidenceDelta: -6,
-      message: `Alerta: Big Balls proyecta ${labels[bbPred.predictedWinner] || 'resultado opuesto'}. Discrepancia entre modelos.`
-    };
-  }
+  const mkProbPct = Math.round((mkProbMap[mkWinner] || 0) * 100);
+  const bbProbPct = bbProbMap[bbPred.predictedWinner] || 0;
+  const diffPts = bbProbPct - mkProbPct;
+
+  return {
+    available: true,
+    agrees: agreement,
+    status: agreement ? 'Coincidencia con 2ª opinión' : 'Divergencia (Alerta externa)',
+    mkPick: labels[mkWinner],
+    mkProb: mkProbPct,
+    bbPick: labels[bbPred.predictedWinner] || 'Otro resultado',
+    bbProb: bbProbPct,
+    diffPts: diffPts > 0 ? `+${diffPts}` : `${diffPts}`,
+    confidenceDelta: 0, // V8: ¡0% de contaminación al modelo propio!
+    message: agreement
+      ? `Segunda opinión externa coincide en ${labels[mkWinner]} (${bbProbPct}%).`
+      : `Segunda opinión externa proyecta ${labels[bbPred.predictedWinner] || 'opuesto'} (${bbProbPct}%). Discrepancia entre fuentes.`
+  };
 }
 
 /* =========================================================
@@ -1074,19 +1216,45 @@ app.get('/api/fixtures/favorites', async (req, res) => {
   if (!teams.length) return res.json({ ok: true, fixtures: [] });
 
   const todayStr = new Date().toISOString().slice(0, 10);
-  const toStr = addDaysToDateStr(todayStr, 14);
   const cacheKey = `favorites-fixtures:${teams.join('|')}:${todayStr}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
   try {
-    const data = await footballData(`/matches?dateFrom=${todayStr}&dateTo=${toStr}`);
-    const matches = Array.isArray(data?.matches) ? data.matches : [];
-    const filtered = matches.filter(m =>
+    // Football-Data rechaza periodos superiores a 10 días:
+    // "Specified period must not exceed 10 days" (HTTP 400).
+    // Consultamos en 2 bloques seguros de 7 días: [0..7] y [8..14]
+    const b1From = todayStr;
+    const b1To = addDaysToDateStr(todayStr, 7);
+    const b2From = addDaysToDateStr(todayStr, 8);
+    const b2To = addDaysToDateStr(todayStr, 14);
+
+    const [data1, data2] = await Promise.all([
+      footballData(`/matches?dateFrom=${b1From}&dateTo=${b1To}`).catch(() => ({ matches: [] })),
+      footballData(`/matches?dateFrom=${b2From}&dateTo=${b2To}`).catch(() => ({ matches: [] }))
+    ]);
+
+    const allMatches = [
+      ...(Array.isArray(data1?.matches) ? data1.matches : []),
+      ...(Array.isArray(data2?.matches) ? data2.matches : [])
+    ];
+
+    const seenIds = new Set();
+    const uniqueMatches = [];
+    for (const m of allMatches) {
+      const matchId = m?.id || `${m?.homeTeam?.name}-${m?.awayTeam?.name}-${m?.utcDate}`;
+      if (!seenIds.has(matchId)) {
+        seenIds.add(matchId);
+        uniqueMatches.push(m);
+      }
+    }
+
+    const filtered = uniqueMatches.filter(m =>
       teams.some(t => namesMatch(m?.homeTeam?.name, t) || namesMatch(m?.awayTeam?.name, t))
     );
 
     const fixtures = filtered.map(m => ({
+      id: m.id,
       home: m.homeTeam?.name || null,
       away: m.awayTeam?.name || null,
       homeCrest: m.homeTeam?.crest || null,
@@ -1096,7 +1264,7 @@ app.get('/api/fixtures/favorites', async (req, res) => {
     })).sort((a, b) => new Date(a.kickoff) - new Date(b.kickoff));
 
     const result = { ok: true, fixtures };
-    cacheSet(cacheKey, result);
+    cacheSet(cacheKey, result, 'fixtures');
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
@@ -1261,7 +1429,7 @@ async function analyzeOneFixture(fixture) {
   const bbPred = await getBigBallsPrediction(homeName, awayName, compCode);
   const bbComparison = evaluateSecondOpinion(model, bbPred);
 
-  // Confianza
+  // Confianza propia matemática pura (sin adulteración externa)
   let modelConf = 50;
   try {
     const bestP = Math.max(model.homeWin, model.draw, model.awayWin);
@@ -1271,12 +1439,10 @@ async function analyzeOneFixture(fixture) {
     modelConf = 50;
   }
 
-  // Ajuste de confianza por acuerdo con Big Balls
-  if (bbComparison?.confidenceDelta) {
-    modelConf += bbComparison.confidenceDelta;
-  }
-
   const confidenceAdjusted = clamp(Math.round(modelConf), 20, 95);
+
+  // Aprendizaje empírico de ventaja de local de la liga
+  updateLearnedHomeAdvantage(compCode, (homeMatches || []).concat(awayMatches || []));
 
   const odds = await getOdds(homeName, awayName, compCode);
   const markets = buildMarkets(model, odds, homeName, awayName);
@@ -1503,7 +1669,7 @@ app.get('/api/analyze', async (req, res) => {
     const bbPrediction = await getBigBallsPrediction(actualHomeName, actualAwayName, competitionCode);
     const bbComparison = evaluateSecondOpinion(model, bbPrediction);
 
-    // Confianza base
+    // Confianza base matemática autónoma
     let modelConfidence = 50;
     try {
       const bestProbability = Math.max(model.homeWin, model.draw, model.awayWin);
@@ -1513,12 +1679,10 @@ app.get('/api/analyze', async (req, res) => {
       modelConfidence = 50;
     }
 
-    // Impacto de Big Balls en la confianza (+5 si acuerdan, -6 si discrepan)
-    if (bbComparison?.confidenceDelta) {
-      modelConfidence += bbComparison.confidenceDelta;
-    }
-
     const confidenceAdjusted = clamp(Math.round(modelConfidence), 20, 95);
+
+    // Actualizar ventaja de local aprendida
+    updateLearnedHomeAdvantage(competitionCode, (homeMatches || []).concat(awayMatches || []));
 
     // Cuotas reales
     const odds = await getOdds(actualHomeName, actualAwayName, competitionCode);
@@ -1608,6 +1772,140 @@ app.get('/api/analyze', async (req, res) => {
   } catch (error) {
     console.error('ANALYZE ERROR:', error);
     return res.status(500).json({ ok: false, error: error.message, modelVersion: MODEL_VERSION });
+  }
+});
+
+/* =========================================================
+   BACKTESTING & CALIBRACIÓN ESTADÍSTICA (V8.1 Foundation)
+   Calcula Brier Score, Log Loss, precisión 1X2 y calibración
+   por tramos con resultados reales de Football-Data.
+========================================================= */
+app.get('/api/backtest', async (req, res) => {
+  const comp = String(req.query.competition || 'PD').trim().toUpperCase();
+  const limit = Math.min(50, Math.max(10, Number(req.query.limit) || 25));
+  const cacheKey = `backtest:${comp}:${limit}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const pastFrom = addDaysToDateStr(today, -35);
+    const data = await footballData(`/competitions/${comp}/matches?dateFrom=${pastFrom}&dateTo=${today}&status=FINISHED`);
+    const matches = (Array.isArray(data?.matches) ? data.matches : []).slice(-limit);
+
+    if (matches.length < 5) {
+      return res.json({
+        ok: true,
+        modelVersion: MODEL_VERSION,
+        competition: comp,
+        evaluatedMatches: matches.length,
+        message: 'No hay suficientes partidos históricos finalizados en este periodo para calcular métricas.',
+        metrics: null
+      });
+    }
+
+    let brierSum = 0;
+    let logLossSum = 0;
+    let correct1X2 = 0;
+    let totalEvaluated = 0;
+    let simulatedPnl = 0;
+
+    const bins = {
+      '40-55': { count: 0, predictedSum: 0, actualWins: 0 },
+      '55-65': { count: 0, predictedSum: 0, actualWins: 0 },
+      '65-75': { count: 0, predictedSum: 0, actualWins: 0 },
+      '75+': { count: 0, predictedSum: 0, actualWins: 0 }
+    };
+
+    for (const m of matches) {
+      const hGoals = Number(m.score?.fullTime?.home);
+      const aGoals = Number(m.score?.fullTime?.away);
+      if (!Number.isFinite(hGoals) || !Number.isFinite(aGoals)) continue;
+
+      const actualResult = hGoals > aGoals ? 'home' : (hGoals === aGoals ? 'draw' : 'away');
+      const yH = actualResult === 'home' ? 1 : 0;
+      const yD = actualResult === 'draw' ? 1 : 0;
+      const yA = actualResult === 'away' ? 1 : 0;
+
+      const hAdv = getHomeAdvantage(comp);
+      const estimatedHXg = clamp(1.4 * hAdv, 0.4, 3.2);
+      const estimatedAXg = clamp(1.15, 0.3, 2.8);
+      const pred = matchModel(estimatedHXg, estimatedAXg);
+
+      const pH = pred.homeWin;
+      const pD = pred.draw;
+      const pA = pred.awayWin;
+
+      // Multi-class Brier Score: (pH - yH)^2 + (pD - yD)^2 + (pA - yA)^2
+      const brier = Math.pow(pH - yH, 2) + Math.pow(pD - yD, 2) + Math.pow(pA - yA, 2);
+      brierSum += brier;
+
+      // Log Loss
+      const probTarget = actualResult === 'home' ? pH : (actualResult === 'draw' ? pD : pA);
+      logLossSum += -Math.log(Math.max(0.001, probTarget));
+
+      // Pronóstico favorito del modelo
+      const predictedWinner = (pH > pD && pH > pA) ? 'home' : (pA > pH && pA > pD ? 'away' : 'draw');
+      const maxP = Math.max(pH, pD, pA);
+      const maxPPct = maxP * 100;
+
+      if (predictedWinner === actualResult) {
+        correct1X2++;
+      }
+
+      let binKey = '40-55';
+      if (maxPPct >= 75) binKey = '75+';
+      else if (maxPPct >= 65) binKey = '65-75';
+      else if (maxPPct >= 55) binKey = '55-65';
+
+      bins[binKey].count++;
+      bins[binKey].predictedSum += maxPPct;
+      if (predictedWinner === actualResult) {
+        bins[binKey].actualWins++;
+      }
+
+      const fairOdds = 1 / Math.max(0.05, maxP);
+      if (predictedWinner === actualResult) {
+        simulatedPnl += (fairOdds - 1) * 10;
+      } else {
+        simulatedPnl -= 10;
+      }
+
+      totalEvaluated++;
+    }
+
+    const avgBrier = totalEvaluated > 0 ? Number((brierSum / totalEvaluated).toFixed(4)) : null;
+    const avgLogLoss = totalEvaluated > 0 ? Number((logLossSum / totalEvaluated).toFixed(4)) : null;
+    const accuracyPct = totalEvaluated > 0 ? Number(((correct1X2 / totalEvaluated) * 100).toFixed(1)) : null;
+    const roiPct = totalEvaluated > 0 ? Number(((simulatedPnl / (totalEvaluated * 10)) * 100).toFixed(1)) : null;
+
+    const calibrationReport = Object.entries(bins).map(([binName, b]) => ({
+      range: binName,
+      matches: b.count,
+      avgPredictedPct: b.count > 0 ? Number((b.predictedSum / b.count).toFixed(1)) : 0,
+      actualWinRatePct: b.count > 0 ? Number(((b.actualWins / b.count) * 100).toFixed(1)) : 0,
+      gap: b.count > 0 ? Number(((b.actualWins / b.count) * 100 - (b.predictedSum / b.count)).toFixed(1)) : 0
+    }));
+
+    const result = {
+      ok: true,
+      modelVersion: MODEL_VERSION,
+      competition: comp,
+      evaluatedMatches: totalEvaluated,
+      metrics: {
+        brierScore: avgBrier,
+        logLoss: avgLogLoss,
+        accuracy1X2Pct: accuracyPct,
+        simulatedPnlEur: Number(simulatedPnl.toFixed(2)),
+        simulatedRoiPct: roiPct,
+        calibration: calibrationReport
+      }
+    };
+
+    cacheSet(cacheKey, result, 'analysis');
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
