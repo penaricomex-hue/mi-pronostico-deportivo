@@ -104,7 +104,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] Acceso protegido con usuario/contraseña activado.');
 }
 
-const MODEL_VERSION = 'V7.18.0';
+const MODEL_VERSION = 'V7.17.0';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -140,7 +140,7 @@ function getHomeAdvantage(competitionCode) {
   return HOME_ADVANTAGE_BY_LEAGUE[competitionCode] || 1.08;
 }
 
-const CACHE_MINUTES = 30; // V7.18
+const CACHE_MINUTES = 1440; // 24 horas
 const STAKE_EUR = Number(process.env.STAKE_EUR) || 10;
 const DATABASE_URL = process.env.DATABASE_URL || '';
 
@@ -1028,12 +1028,34 @@ app.get('/api/status', (req, res) => {
 
 // Descargar el archivo server.js actualizado
 app.get('/api/download-server', (req, res) => {
-  const serverPath = path.join(__dirname, 'server.js');
-  if (fs.existsSync(serverPath)) {
-    res.download(serverPath, 'server.js');
-  } else {
-    res.status(404).send('server.js no encontrado.');
+  const possiblePaths = [
+    path.join(__dirname, 'server.js'),
+    path.join(__dirname, 'public', 'server.js'),
+    path.join(process.cwd(), 'server.js'),
+    path.join(process.cwd(), 'public', 'server.js')
+  ];
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      return res.download(p, 'server.js');
+    }
   }
+  res.status(404).send('server.js no encontrado.');
+});
+
+// Descargar el archivo zip del proyecto completo
+app.get('/api/download-zip', (req, res) => {
+  const possiblePaths = [
+    path.join(__dirname, 'public', 'mi-pronostico-deportivo-v7.17.zip'),
+    path.join(__dirname, 'mi-pronostico-deportivo-v7.17.zip'),
+    path.join(process.cwd(), 'public', 'mi-pronostico-deportivo-v7.17.zip'),
+    path.join(process.cwd(), 'mi-pronostico-deportivo-v7.17.zip')
+  ];
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      return res.download(p, 'mi-pronostico-deportivo-v7.17.zip');
+    }
+  }
+  res.status(404).send('ZIP no encontrado.');
 });
 
 function addDaysToDateStr(dateStr, days) {
@@ -1052,29 +1074,14 @@ app.get('/api/fixtures/favorites', async (req, res) => {
   if (!teams.length) return res.json({ ok: true, fixtures: [] });
 
   const todayStr = new Date().toISOString().slice(0, 10);
+  const toStr = addDaysToDateStr(todayStr, 14);
   const cacheKey = `favorites-fixtures:${teams.join('|')}:${todayStr}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
   try {
-    // Football-Data.org limita las consultas a ventanas de máximo 10 días.
-    const matches = [];
-
-    for (let offset = 0; offset <= 14; offset += 10) {
-      const from = addDaysToDateStr(todayStr, offset);
-      const to = addDaysToDateStr(
-        todayStr,
-        Math.min(offset + 9, 14)
-      );
-
-      const data = await footballData(
-        `/matches?dateFrom=${from}&dateTo=${to}`
-      );
-
-      if (Array.isArray(data?.matches)) {
-        matches.push(...data.matches);
-      }
-    }
+    const data = await footballData(`/matches?dateFrom=${todayStr}&dateTo=${toStr}`);
+    const matches = Array.isArray(data?.matches) ? data.matches : [];
     const filtered = matches.filter(m =>
       teams.some(t => namesMatch(m?.homeTeam?.name, t) || namesMatch(m?.awayTeam?.name, t))
     );
@@ -1780,7 +1787,7 @@ app.get('/api/bets/summary', async (req, res) => {
 });
 
 /* =========================================================
-   FRONTEND - RENDER PAGE (V7.18.0)
+   FRONTEND - RENDER PAGE (V7.17.0)
    Incluye:
    - Banner VS con escudos grandes
    - Medidor circular SVG de confianza
@@ -1797,7 +1804,7 @@ function renderPage() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
-<title>MK Bets V7.18.0 - Pronósticos Deportivos</title>
+<title>MK Bets V7.17.0 - Pronósticos Deportivos</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 90' style='background:%23080b10'%3E%3Cpolyline points='10,80 10,10 45,55 80,10 80,80' fill='none' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='8' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='82' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3C/svg%3E">
 
 <style>
@@ -2180,9 +2187,8 @@ input{
 <div class="app">
 
 <header class="header">
-  <div style="display:flex;justify-content:space-between;align-items:center">
+  <div>
     <span class="version">● V7.17.0 ANALYST</span>
-    <a href="/api/download-server" class="btn-download" style="margin-top:0;width:auto;padding:5px 12px;font-size:11px">⬇️ Descargar server.js</a>
   </div>
 
   <div class="logo-row">
@@ -2205,7 +2211,7 @@ input{
   </div>
 </header>
 
-<section class="card">
+<section class="card" id="searchCard">
   <div class="card-title">Buscar partidos por fecha</div>
 
   <div class="league-chips" id="leagueChips">
@@ -2281,17 +2287,56 @@ input{
     4. <b>Banner VS y Medidor Circular:</b> Interfaz visual de alta gama con escudos reales y medidor de confianza.
   </div>
 
-  <a href="/api/download-server" class="btn-download" style="margin-top:16px">
-    📥 Descargar este archivo server.js listo para subir a Render
-  </a>
+  <!-- Zona de descarga directa para Render y GitHub -->
+  <div style="margin-top:18px;padding-top:14px;border-top:1px solid #242b36">
+    <div style="font-weight:800;color:white;font-size:12px;margin-bottom:8px">📥 Archivos para actualizar tu Render y GitHub:</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a href="/api/download-server" style="flex:1;text-align:center;padding:8px 12px;background:#1b2432;color:#ffb45d;border:1px solid #ffb45d55;border-radius:10px;text-decoration:none;font-weight:bold;font-size:11px;display:flex;align-items:center;justify-content:center;gap:6px">
+        ⬇️ Descargar server.js
+      </a>
+      <a href="/api/download-zip" style="flex:1;text-align:center;padding:8px 12px;background:#ffb45d;color:#080b10;border-radius:10px;text-decoration:none;font-weight:bold;font-size:11px;display:flex;align-items:center;justify-content:center;gap:6px">
+        📦 Descargar ZIP Completo
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- VISTA MIS APUESTAS (SIMULADOR DE APUESTAS & RENTABILIDAD) -->
+<section id="betsCard" class="card" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid #242b36;padding-bottom:10px">
+    <div>
+      <div class="card-title" style="margin:0">📊 Mis apuestas</div>
+      <div class="muted" style="font-size:11px">Simulador para recoger datos y medir el % de acierto real</div>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button type="button" id="btnDemoBets" class="league-chip" style="font-size:11px;padding:4px 8px">+ Probar</button>
+      <button type="button" id="btnClearBets" class="league-chip" style="font-size:11px;padding:4px 8px;color:#ff7b72">Vaciar</button>
+    </div>
+  </div>
+
+  <!-- Panel de Rentabilidad y Acierto -->
+  <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:6px;margin-bottom:12px" id="betsStatsGrid">
+    <!-- Se llena con renderBetsView() -->
+  </div>
+
+  <!-- Filtros -->
+  <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:10px" id="betsFilters">
+    <button type="button" class="league-chip active" data-filter="all">Todas</button>
+    <button type="button" class="league-chip" data-filter="pending">Pendientes</button>
+    <button type="button" class="league-chip" data-filter="won">Ganadas</button>
+    <button type="button" class="league-chip" data-filter="lost">Perdidas</button>
+  </div>
+
+  <!-- Lista de Apuestas -->
+  <div id="betsList"></div>
 </section>
 
 </div>
 
 <nav class="nav">
-  <span id="navHome" class="active-nav">⌂<br>Inicio</span>
-  <span id="navAnalyst"><strong>🧠<br>Analyst</strong></span>
-  <span id="navDownload"><strong>⬇️<br>Descargar</strong></span>
+  <span id="navHome">⌂<br>Inicio</span>
+  <span id="navAnalyst" class="active-nav"><strong>🧠<br>Analyst</strong></span>
+  <span id="navBets"><strong>📊<br>Mis apuestas</strong></span>
 </nav>
 
 <script>
@@ -2531,60 +2576,385 @@ function renderAnalysisContent(data){
 
   // DECISIÓN VALUE BET
   const decisionClass = data.betEligible ? 'bet' : 'noBet';
+  const recMarket = (Array.isArray(data.markets) ? data.markets.find(mk => mk.name === data.recommendation) : null) || (Array.isArray(data.markets) ? data.markets[0] : null);
+  const recOdds = recMarket && recMarket.bestOdds ? Number(recMarket.bestOdds) : 1.95;
+  const recProb = recMarket && recMarket.probability ? Number(recMarket.probability) : (data.probabilities?.homeWin || 50);
+  const isEligible = data.recommendation && data.recommendation !== 'NO BET';
 
-  return \`
-    \${bannerHtml}
+  let simulateBtnHtml = '';
+  if (isEligible) {
+    simulateBtnHtml = '<div style="margin-top:12px">' +
+      '<button type="button" class="simulate-bet-btn" onclick="saveSimulatedBet(\'' + esc(m.home) + '\', \'' + esc(m.homeCrest||'') + '\', \'' + esc(m.away) + '\', \'' + esc(m.awayCrest||'') + '\', \'' + esc(m.competition||'') + '\', \'' + esc(data.recommendation) + '\', ' + recOdds + ', ' + recProb + ', ' + data.confidence + ', \'' + esc(data.confidenceLevel) + '\')">' +
+        '📌 Simular esta apuesta (Guardar en Mis apuestas)' +
+      '</button>' +
+    '</div>';
+  }
 
-    <div class="fixture-decision">
-      <div class="section-label">Decisión del modelo</div>
-      <h3 class="\${decisionClass}">\${esc(data.recommendation)}</h3>
-      <div class="muted">\${esc(data.reason)}</div>
-    </div>
+  let marketsHtml = '';
+  if (Array.isArray(data.markets) && data.markets.length > 0) {
+    marketsHtml = '<div class="section-label">💵 Cuotas & Mercados Disponibles</div>' +
+      data.markets.map(function(mk){
+        const o = mk.bestOdds ? Number(mk.bestOdds).toFixed(2) : '-';
+        const ev = mk.referenceEvPct ? (mk.referenceEvPct > 0 ? '+' : '') + mk.referenceEvPct + '%' : '-';
+        return '<div class="market" style="display:flex;justify-content:space-between;align-items:center">' +
+          '<div>' +
+            '<b>' + esc(mk.name) + '</b>' +
+            '<div class="muted" style="font-size:11px">Prob: ' + pct(mk.probability) + ' • EV: ' + ev + '</div>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:8px">' +
+            '<span style="font-weight:900;color:#ffb45d;font-size:14px">@' + o + '</span>' +
+            '<button type="button" class="league-chip" style="padding:4px 8px;font-size:11px;background:#ffb45d;color:#080b10;font-weight:800;border:0;cursor:pointer" onclick="saveSimulatedBet(\'' + esc(m.home) + '\', \'' + esc(m.homeCrest||'') + '\', \'' + esc(m.away) + '\', \'' + esc(m.awayCrest||'') + '\', \'' + esc(m.competition||'') + '\', \'' + esc(mk.name) + '\', ' + (mk.bestOdds||1.90) + ', ' + (mk.probability||50) + ', ' + data.confidence + ', \'' + esc(data.confidenceLevel) + '\')">' +
+              '+ Simular' +
+            '</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+  }
 
-    \${confidenceGaugeHtml}
+  let bbHtml = '';
+  if (data.bigBallsComparison && data.bigBallsComparison.available) {
+    const borderColor = data.bigBallsComparison.agrees ? '#1a5230' : '#5a261c';
+    const bgColor = data.bigBallsComparison.agrees ? '#0b1f14' : '#1e110f';
+    const textColor = data.bigBallsComparison.agrees ? '#7ee787' : '#ff7b72';
+    const textTitle = data.bigBallsComparison.agrees ? '🤝 Consenso Big Balls' : '⚠️ Alerta de Divergencia Big Balls';
+    bbHtml = '<div class="value-box" style="border-color:' + borderColor + ';background:' + bgColor + '">' +
+      '<b style="color:' + textColor + '">' + textTitle + '</b>' +
+      '<div class="muted" style="margin-top:4px">' + esc(data.bigBallsComparison.message) + '</div>' +
+    '</div>';
+  }
 
-    <!-- 2ª OPINIÓN BIG BALLS -->
-    \${data.bigBallsComparison && data.bigBallsComparison.available ? \`
-      <div class="value-box" style="border-color:\${data.bigBallsComparison.agrees ? '#1a5230' : '#5a261c'};background:\${data.bigBallsComparison.agrees ? '#0b1f14' : '#1e110f'}">
-        <b style="color:\${data.bigBallsComparison.agrees ? '#7ee787' : '#ff7b72'}">
-          \${data.bigBallsComparison.agrees ? '🤝 Consenso Big Balls' : '⚠️ Alerta de Divergencia Big Balls'}
-        </b>
-        <div class="muted" style="margin-top:4px">\${esc(data.bigBallsComparison.message)}</div>
-      </div>
-    \` : ''}
+  return bannerHtml +
+    '<div class="fixture-decision">' +
+      '<div class="section-label">Decisión del modelo</div>' +
+      '<h3 class="' + decisionClass + '">' + esc(data.recommendation) + '</h3>' +
+      '<div class="muted">' + esc(data.reason) + '</div>' +
+      simulateBtnHtml +
+    '</div>' +
+    confidenceGaugeHtml +
+    bbHtml +
+    '<div class="section-label">📊 Probabilidades 1X2</div>' +
+    '<div class="prob-grid">' +
+      '<div class="prob"><span>🏠 LOCAL</span><b>' + pct(data.probabilities?.homeWin) + '</b></div>' +
+      '<div class="prob"><span>🤝 EMPATE</span><b>' + pct(data.probabilities?.draw) + '</b></div>' +
+      '<div class="prob"><span>✈️ VISITANTE</span><b>' + pct(data.probabilities?.awayWin) + '</b></div>' +
+    '</div>' +
+    '<div class="section-label">⚽ xG Esperados (Localía ' + (data.homeAdvantage?.factor || 1.08) + 'x)</div>' +
+    '<div class="xg-grid">' +
+      '<div class="xg"><span>LOCAL</span><b>' + (data.xG?.home || '-') + '</b></div>' +
+      '<div class="xg"><span>VISITANTE</span><b>' + (data.xG?.away || '-') + '</b></div>' +
+      '<div class="xg"><span>TOTAL</span><b>' + (data.xG?.total || '-') + '</b></div>' +
+    '</div>' +
+    '<div class="section-label">⏱️ Descanso Calculado (Football-Data)</div>' +
+    '<div class="market">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
+        '<span><b>' + esc(m.home) + ':</b> ' + esc(data.rest?.home?.status || 'Sin datos') + '</span>' +
+        '<span>' + (data.rest?.home?.impactPct ? data.rest.home.impactPct + '%' : '0%') + '</span>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between">' +
+        '<span><b>' + esc(m.away) + ':</b> ' + esc(data.rest?.away?.status || 'Sin datos') + '</span>' +
+        '<span>' + (data.rest?.away?.impactPct ? data.rest.away.impactPct + '%' : '0%') + '</span>' +
+      '</div>' +
+    '</div>' +
+    '<div class="section-label">🎯 Marcador Más Probable</div>' +
+    '<div class="market" style="text-align:center">' +
+      '<div style="font-size:32px;font-weight:900">' + esc(data.mostLikelyScore?.score) + '</div>' +
+      '<div class="muted">Probabilidad: ' + pct(data.mostLikelyScore?.probability) + '</div>' +
+    '</div>' +
+    marketsHtml;
+}
 
-    <div class="section-label">📊 Probabilidades 1X2</div>
-    <div class="prob-grid">
-      <div class="prob"><span>🏠 LOCAL</span><b>\${pct(data.probabilities?.homeWin)}</b></div>
-      <div class="prob"><span>🤝 EMPATE</span><b>\${pct(data.probabilities?.draw)}</b></div>
-      <div class="prob"><span>✈️ VISITANTE</span><b>\${pct(data.probabilities?.awayWin)}</b></div>
-    </div>
+// ==========================================
+// SIMULADOR DE APUESTAS & RENTABILIDAD (LOCALSTORAGE)
+// ==========================================
+const STORAGE_BETS_KEY = 'mkbets_my_bets_v1';
 
-    <div class="section-label">⚽ xG Esperados (Localía \${data.homeAdvantage?.factor || 1.08}x)</div>
-    <div class="xg-grid">
-      <div class="xg"><span>LOCAL</span><b>\${data.xG?.home}</b></div>
-      <div class="xg"><span>VISITANTE</span><b>\${data.xG?.away}</b></div>
-      <div class="xg"><span>TOTAL</span><b>\${data.xG?.total}</b></div>
-    </div>
+function getSavedBets() {
+  try {
+    const raw = localStorage.getItem(STORAGE_BETS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
 
-    <div class="section-label">⏱️ Descanso Calculado (Football-Data)</div>
-    <div class="market">
-      <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-        <span><b>\${esc(m.home)}:</b> \${esc(data.rest?.home?.status || 'Sin datos')}</span>
-        <span>\${data.rest?.home?.impactPct ? data.rest.home.impactPct + '%' : '0%'}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between">
-        <span><b>\${esc(m.away)}:</b> \${esc(data.rest?.away?.status || 'Sin datos')}</span>
-        <span>\${data.rest?.away?.impactPct ? data.rest.away.impactPct + '%' : '0%'}</span>
-      </div>
-    </div>
+function saveBets(bets) {
+  try {
+    localStorage.setItem(STORAGE_BETS_KEY, JSON.stringify(bets));
+  } catch (e) {}
+}
 
-    <div class="section-label">🎯 Marcador Más Probable</div>
-    <div class="market" style="text-align:center">
-      <div style="font-size:32px;font-weight:900">\${esc(data.mostLikelyScore?.score)}</div>
-      <div class="muted">Probabilidad: \${pct(data.mostLikelyScore?.probability)}</div>
-    </div>
-  \`;
+window.saveSimulatedBet = function(home, homeCrest, away, awayCrest, competition, marketName, odds, probability, confidence, confidenceLevel) {
+  const bets = getSavedBets();
+  const exists = bets.some(function(b){ return b.home === home && b.away === away && b.marketName === marketName && b.status === 'pending'; });
+  if (exists) {
+    alert('Esta apuesta ya está guardada en Mis apuestas como pendiente.');
+    return;
+  }
+  const dateInput = document.getElementById('date');
+  const newBet = {
+    id: 'bet_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    createdAt: new Date().toISOString(),
+    matchDate: (dateInput && dateInput.value) || new Date().toISOString().slice(0, 10),
+    home: home,
+    homeCrest: homeCrest,
+    away: away,
+    awayCrest: awayCrest,
+    competition: competition,
+    marketName: marketName,
+    odds: Number(odds) || 1.95,
+    probability: Number(probability) || 50,
+    stakeEur: 10,
+    confidence: Number(confidence) || 75,
+    confidenceLevel: confidenceLevel || 'Alta',
+    status: 'pending',
+    profitEur: 0
+  };
+  bets.unshift(newBet);
+  saveBets(bets);
+  alert('¡Apuesta guardada en "Mis apuestas"! Puedes ver las métricas de acierto y rentabilidad en la pestaña Mis apuestas.');
+  renderBetsView();
+};
+
+window.settleBet = function(id, status) {
+  const bets = getSavedBets();
+  const bet = bets.find(function(b){ return b.id === id; });
+  if (!bet) return;
+  bet.status = status;
+  if (status === 'won') {
+    bet.profitEur = Number((bet.stakeEur * (bet.odds - 1)).toFixed(2));
+  } else if (status === 'lost') {
+    bet.profitEur = -bet.stakeEur;
+  } else {
+    bet.profitEur = 0;
+  }
+  bet.settledAt = status === 'pending' ? null : new Date().toISOString();
+  saveBets(bets);
+  renderBetsView();
+};
+
+window.deleteBet = function(id) {
+  let bets = getSavedBets();
+  bets = bets.filter(function(b){ return b.id !== id; });
+  saveBets(bets);
+  renderBetsView();
+};
+
+window.clearAllBets = function() {
+  if (confirm('¿Deseas vaciar todas tus apuestas simuladas?')) {
+    saveBets([]);
+    renderBetsView();
+  }
+};
+
+window.seedDemoBets = function() {
+  const d = new Date();
+  const yesterday = new Date(d.getTime() - 86400000).toISOString().slice(0, 10);
+  const demo = [
+    {
+      id: 'demo_1',
+      createdAt: new Date(d.getTime() - 86400000).toISOString(),
+      matchDate: yesterday,
+      home: 'Real Madrid',
+      homeCrest: 'https://crests.football-data.org/86.png',
+      away: 'FC Barcelona',
+      awayCrest: 'https://crests.football-data.org/81.png',
+      competition: 'LaLiga EA Sports',
+      marketName: 'Gana local',
+      odds: 1.95,
+      probability: 58.4,
+      stakeEur: 10,
+      confidence: 82,
+      confidenceLevel: 'Alta',
+      status: 'won',
+      profitEur: 9.50,
+      settledAt: new Date().toISOString()
+    },
+    {
+      id: 'demo_2',
+      createdAt: new Date(d.getTime() - 172800000).toISOString(),
+      matchDate: new Date(d.getTime() - 172800000).toISOString().slice(0, 10),
+      home: 'Arsenal FC',
+      homeCrest: 'https://crests.football-data.org/57.png',
+      away: 'Chelsea FC',
+      awayCrest: 'https://crests.football-data.org/61.png',
+      competition: 'Premier League',
+      marketName: 'Over 2.5',
+      odds: 1.92,
+      probability: 56.2,
+      stakeEur: 10,
+      confidence: 76,
+      confidenceLevel: 'Alta',
+      status: 'won',
+      profitEur: 9.20,
+      settledAt: new Date().toISOString()
+    },
+    {
+      id: 'demo_3',
+      createdAt: new Date(d.getTime() - 259200000).toISOString(),
+      matchDate: new Date(d.getTime() - 259200000).toISOString().slice(0, 10),
+      home: 'Inter de Milán',
+      homeCrest: 'https://crests.football-data.org/108.png',
+      away: 'Juventus FC',
+      awayCrest: 'https://crests.football-data.org/109.png',
+      competition: 'Serie A',
+      marketName: 'Gana local',
+      odds: 2.10,
+      probability: 49.0,
+      stakeEur: 10,
+      confidence: 65,
+      confidenceLevel: 'Media',
+      status: 'lost',
+      profitEur: -10.00,
+      settledAt: new Date().toISOString()
+    },
+    {
+      id: 'demo_4',
+      createdAt: new Date().toISOString(),
+      matchDate: new Date().toISOString().slice(0, 10),
+      home: 'Manchester City',
+      homeCrest: 'https://crests.football-data.org/65.png',
+      away: 'Liverpool FC',
+      awayCrest: 'https://crests.football-data.org/64.png',
+      competition: 'Premier League',
+      marketName: 'Gana local',
+      odds: 1.88,
+      probability: 60.5,
+      stakeEur: 10,
+      confidence: 84,
+      confidenceLevel: 'Alta',
+      status: 'pending',
+      profitEur: 0
+    }
+  ];
+  saveBets(demo);
+  renderBetsView();
+};
+
+let currentBetsFilter = 'all';
+
+function renderBetsView() {
+  const container = document.getElementById('betsList');
+  const statsContainer = document.getElementById('betsStatsGrid');
+  if (!container || !statsContainer) return;
+
+  const bets = getSavedBets();
+  const resolved = bets.filter(function(b){ return b.status === 'won' || b.status === 'lost'; });
+  const won = bets.filter(function(b){ return b.status === 'won'; }).length;
+  const lost = bets.filter(function(b){ return b.status === 'lost'; }).length;
+  const pending = bets.filter(function(b){ return b.status === 'pending'; }).length;
+
+  const accuracy = resolved.length > 0 ? ((won / resolved.length) * 100).toFixed(1) + '%' : '—';
+  const totalProfit = resolved.reduce(function(acc, b){ return acc + (b.profitEur || 0); }, 0);
+  const totalStaked = resolved.reduce(function(acc, b){ return acc + (b.stakeEur || 10); }, 0);
+  const roi = totalStaked > 0 ? ((totalProfit / totalStaked) * 100).toFixed(1) + '%' : '—';
+
+  let streakCount = 0;
+  let streakType = null;
+  for (let i = 0; i < resolved.length; i++) {
+    const b = resolved[i];
+    if (streakType === null) {
+      streakType = b.status;
+      streakCount = 1;
+    } else if (b.status === streakType) {
+      streakCount++;
+    } else {
+      break;
+    }
+  }
+
+  const profitColor = totalProfit > 0 ? '#7ee787' : totalProfit < 0 ? '#ff7b72' : 'white';
+  const profitSign = totalProfit > 0 ? '+' : '';
+  const streakText = streakType === 'won' ? ('🔥 ' + streakCount + 'G') : streakType === 'lost' ? ('❄️ ' + streakCount + 'P') : (pending + ' pend.');
+  const streakColor = streakType === 'won' ? '#7ee787' : streakType === 'lost' ? '#ff7b72' : '#ffb45d';
+
+  statsContainer.innerHTML =
+    '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
+      '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Acierto</div>' +
+      '<div style="font-size:16px;font-weight:900;color:white;margin:2px 0">' + accuracy + '</div>' +
+      '<div style="font-size:9px;color:#9da5b2">' + won + 'G / ' + lost + 'P</div>' +
+    '</div>' +
+    '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
+      '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Beneficio</div>' +
+      '<div style="font-size:16px;font-weight:900;color:' + profitColor + ';margin:2px 0">' + profitSign + totalProfit.toFixed(2) + '€</div>' +
+      '<div style="font-size:9px;color:#9da5b2">10€ stake</div>' +
+    '</div>' +
+    '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
+      '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">ROI</div>' +
+      '<div style="font-size:16px;font-weight:900;color:' + profitColor + ';margin:2px 0">' + roi + '</div>' +
+      '<div style="font-size:9px;color:#9da5b2">Rendimiento</div>' +
+    '</div>' +
+    '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
+      '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Racha</div>' +
+      '<div style="font-size:15px;font-weight:900;color:' + streakColor + ';margin:2px 0">' + streakText + '</div>' +
+      '<div style="font-size:9px;color:#9da5b2">' + pending + ' en juego</div>' +
+    '</div>';
+
+  const filtered = bets.filter(function(b){
+    if (currentBetsFilter === 'all') return true;
+    return b.status === currentBetsFilter;
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML =
+      '<div class="empty" style="padding:24px 10px;border:1px dashed #283344;border-radius:12px">' +
+        '<div style="font-size:28px;margin-bottom:6px">📊</div>' +
+        '<div style="font-weight:bold;color:white;margin-bottom:4px">No hay apuestas en esta vista</div>' +
+        '<div style="font-size:11px;color:#8e97a5;margin-bottom:12px">Abre cualquier partido en "Analyst" y haz clic en "📌 Simular esta apuesta" para medir los resultados.</div>' +
+        '<button type="button" class="league-chip active" onclick="seedDemoBets()">+ Cargar 4 apuestas de ejemplo</button>' +
+      '</div>';
+    return;
+  }
+
+  container.innerHTML = filtered.map(function(b){
+    const isWon = b.status === 'won';
+    const isLost = b.status === 'lost';
+    const isPending = b.status === 'pending';
+
+    let badgeHtml = '';
+    if (isPending) {
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ffb45d;background:#282114;border:1px solid #ffb45d55;padding:2px 8px;border-radius:12px">⏳ Pendiente</span>';
+    } else if (isWon) {
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#7ee787;background:#0d2a1b;border:1px solid #1d5b38;padding:2px 8px;border-radius:12px">✅ Ganó (+' + b.profitEur.toFixed(2) + '€)</span>';
+    } else if (isLost) {
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ff7b72;background:#2a1314;border:1px solid #5d2225;padding:2px 8px;border-radius:12px">❌ Perdió (' + b.profitEur.toFixed(2) + '€)</span>';
+    } else {
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#c7ccd4;background:#1f2633;border:1px solid #37455d;padding:2px 8px;border-radius:12px">➖ Anulada</span>';
+    }
+
+    const wonAmount = (b.stakeEur * (b.odds - 1)).toFixed(2);
+    const actionsHtml = isPending ?
+      '<div style="display:flex;gap:6px">' +
+        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'won\')" style="background:#103320;color:#7ee787;border:1px solid #22633d;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">✅ Ganó (+' + wonAmount + '€)</button>' +
+        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'lost\')" style="background:#2e1315;color:#ff7b72;border:1px solid #5d2327;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">❌ Perdió (-' + b.stakeEur + '€)</button>' +
+        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'void\')" style="background:#1b2330;color:#9da5b2;border:1px solid #2a374c;border-radius:8px;padding:6px 8px;font-size:11px;cursor:pointer" title="Anular">➖</button>' +
+      '</div>' :
+      '<div>' +
+        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'pending\')" style="background:transparent;border:0;color:#8e97a5;text-decoration:underline;font-size:11px;cursor:pointer">Modificar resultado</button>' +
+      '</div>';
+
+    return '<div style="background:#0b0f16;border:1px solid #202b3a;border-radius:12px;padding:12px;margin-bottom:8px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#8e97a5;margin-bottom:6px">' +
+        '<span>🏆 ' + esc(b.competition || '') + ' • 📅 ' + esc(b.matchDate || '') + '</span>' +
+        badgeHtml +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+        '<div style="font-size:13px;font-weight:bold;color:white;display:flex;align-items:center;gap:6px">' +
+          '<span>' + esc(b.home) + '</span>' +
+          '<span style="color:#8e97a5;font-size:10px">vs</span>' +
+          '<span>' + esc(b.away) + '</span>' +
+        '</div>' +
+        '<button type="button" onclick="deleteBet(\'' + b.id + '\')" style="background:transparent;border:0;color:#64748b;font-size:12px;cursor:pointer" title="Eliminar">🗑️</button>' +
+      '</div>' +
+      '<div style="background:#121824;border:1px solid #212d40;border-radius:10px;padding:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">' +
+        '<div>' +
+          '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Pronóstico Simulado</div>' +
+          '<div style="font-size:13px;font-weight:900;color:white">' + esc(b.marketName) + ' <span style="color:#ffb45d;font-size:11px">@' + Number(b.odds).toFixed(2) + '</span></div>' +
+          '<div style="font-size:10px;color:#9da5b2">Confianza: ' + esc(b.confidenceLevel || 'Alta') + ' (' + b.confidence + '%) • Stake: ' + b.stakeEur + '€</div>' +
+        '</div>' +
+        actionsHtml +
+      '</div>' +
+    '</div>';
+  }).join('');
 }
 
 // INICIALIZACIÓN
@@ -2615,14 +2985,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  document.getElementById('navHome')?.addEventListener('click', () => {
-    document.getElementById('homeCard').style.display = 'block';
-    document.getElementById('fixturesCard').style.display = 'none';
-  });
+  function showTab(name) {
+    document.getElementById('navHome')?.classList.toggle('active-nav', name === 'home');
+    document.getElementById('navAnalyst')?.classList.toggle('active-nav', name === 'analyst');
+    document.getElementById('navBets')?.classList.toggle('active-nav', name === 'bets');
+
+    const homeCard = document.getElementById('homeCard');
+    const searchCard = document.getElementById('searchCard');
+    const fixturesCard = document.getElementById('fixturesCard');
+    const betsCard = document.getElementById('betsCard');
+
+    if (homeCard) homeCard.style.display = name === 'home' ? 'block' : 'none';
+    if (searchCard) searchCard.style.display = name === 'analyst' ? 'block' : 'none';
+    if (fixturesCard) fixturesCard.style.display = name === 'analyst' ? 'block' : 'none';
+    if (betsCard) betsCard.style.display = name === 'bets' ? 'block' : 'none';
+
+    if (name === 'bets') {
+      renderBetsView();
+    }
+  }
+
+  document.getElementById('navHome')?.addEventListener('click', () => showTab('home'));
   document.getElementById('navAnalyst')?.addEventListener('click', () => {
-    document.getElementById('homeCard').style.display = 'none';
+    showTab('analyst');
     searchFixtures();
   });
+  document.getElementById('navBets')?.addEventListener('click', () => showTab('bets'));
+
+  document.querySelectorAll('#betsFilters button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#betsFilters button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentBetsFilter = btn.dataset.filter || 'all';
+      renderBetsView();
+    });
+  });
+
+  document.getElementById('btnDemoBets')?.addEventListener('click', seedDemoBets);
+  document.getElementById('btnClearBets')?.addEventListener('click', clearAllBets);
 });
 })();
 </script>
