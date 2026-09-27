@@ -1,107 +1,107 @@
 const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
-let Pool;
-try {
+const ruta = require('ruta');
+dejar Piscina;
+intentar {
   Pool = require('pg').Pool;
-} catch (e) {
-  Pool = null;
+} capturar (e) {
+  Piscina = nulo;
 }
 
-// Importar motor o usar fallback interno aut\u00f3nomo
-let engine;
-try {
-  engine = require('./engine');
-} catch (e) {
-  engine = {
+// Importar motor o usar fallback interno autónomo
+dejar motor;
+intentar {
+  motor = requerir('./motor');
+} capturar (e) {
+  motor = {
     clamp: (val, min, max) => Math.max(min, Math.min(max, val)),
     shrinkToMean: (val, baseline, n = 10) => {
-      const weight = n / (n + 4);
-      return weight * val + (1 - weight) * baseline;
+      const peso = n / (n + 4);
+      devolver peso * val + (1 - peso) * línea base;
     },
-    implied: (odds) => odds > 1 ? Number(((1 / odds) * 100).toFixed(1)) : null,
-    ev: (p, odds) => {
+    implícito: (odds) => odds > 1 ? Number(((1 / odds) * 100).toFixed(1)) : null,
+    ev: (p, probabilidades) => {
       const prob = p > 1 ? p / 100 : p;
       return Number(((prob * odds - 1) * 100).toFixed(1));
     },
-    confidence: (prob, n = 10) => {
+    confianza: (prob, n = 10) => {
       const p = prob > 1 ? prob / 100 : prob;
-      const sample = Math.min(1, Math.max(0.4, n / 10));
+      const muestra = Math.min(1, Math.max(0.4, n / 10));
       return Math.round(Math.min(95, Math.max(20, (35 + ((p - 0.33) / 0.45) * 55) * sample)));
     },
     matchModel: (homeXg, awayXg) => {
       const hXg = Math.max(0.1, Number(homeXg) || 1.3);
       const aXg = Math.max(0.1, Number(awayXg) || 1.1);
-      function p(k, l) {
-        let f = 1; for (let i = 2; i <= k; i++) f *= i;
-        return (Math.exp(-l) * Math.pow(l, k)) / f;
+      función p(k, l) {
+        sea ​​f = 1; para (sea i = 2; i <= k; i++) f *= i;
+        devolver (Math.exp(-l) * Math.pow(l, k)) / f;
       }
-      let hw = 0, d = 0, aw = 0, o25 = 0, u25 = 0, btts = 0;
-      for (let h = 0; h <= 7; h++) {
-        for (let a = 0; a <= 7; a++) {
+      sea ​​hw = 0, d = 0, aw = 0, o25 = 0, u25 = 0, btts = 0;
+      para (sea h = 0; h <= 7; h++) {
+        para (sea a = 0; a <= 7; a++) {
           const prob = p(h, hXg) * p(a, aXg);
-          if (h > a) hw += prob; else if (h === a) d += prob; else aw += prob;
-          if (h + a >= 3) o25 += prob; else u25 += prob;
-          if (h >= 1 && a >= 1) btts += prob;
+          si (h > a) hw += prob; si no si (h === a) d += prob; si no aw += prob;
+          si (h + a >= 3) o25 += prob; de lo contrario u25 += prob;
+          si (h >= 1 && a >= 1) btts += prob;
         }
       }
       const total = hw + d + aw;
-      return { homeWin: hw / total, draw: d / total, awayWin: aw / total, over25: o25, under25: u25, btts };
+      return { victoria local: hw / total, sorteo: d / total, victoria visitante: aw / total, over25: o25, under25: u25, btts };
     }
   };
 }
 
 const {
-  matchModel,
-  implied,
+  Modelo de coincidencia,
+  implícito,
   ev,
-  confidence,
-  shrinkToMean,
-  clamp
-} = engine;
+  confianza,
+  encogerParaSignificar,
+  abrazadera
+} = motor;
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PUERTO = proceso.env.PUERTO || 3000;
 
 app.use(express.json());
 
 /* =========================================================
-   ACCESO PRIVADO (usuario/contrase\u00f1a)
-========================================================= */
+   ACCESO PRIVADO (usuario/contraseña)
+========================================================== */
 const APP_USERNAME = process.env.APP_USERNAME || '';
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
 
-function timingSafeEqual(a, b) {
+función timingSafeEqual(a, b) {
   const bufA = Buffer.from(String(a));
   const bufB = Buffer.from(String(b));
-  if (bufA.length !== bufB.length) {
+  if (bufA.longitud!== bufB.longitud) {
     crypto.timingSafeEqual(bufA, bufA);
-    return false;
+    devolver falso;
   }
-  return crypto.timingSafeEqual(bufA, bufB);
+  devolver crypto.timingSafeEqual(bufA, bufB);
 }
 
-if (APP_USERNAME && APP_PASSWORD) {
+Si (APP_USERNAME && APP_PASSWORD) {
   app.use((req, res, next) => {
-    // Permitir health check y descargas p\u00fablicas
-    if (req.path === '/health' || req.path === '/api/download-server') return next();
+    // Permitir chequeo de salud y descargas públicas
+    Si (req.path === '/health' || req.path === '/api/download-server') devuelve next();
 
     const header = req.headers.authorization || '';
-    const [scheme, encoded] = header.split(' ');
-    if (scheme === 'Basic' && encoded) {
-      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const [esquema, codificado] = encabezado.split(' ');
+    si (esquema === 'Básico' && codificado) {
+      const decodificado = Buffer.from(codificado, 'base64').toString('utf8');
       const sep = decoded.indexOf(':');
       const user = sep >= 0 ? decoded.slice(0, sep) : decoded;
       const pass = sep >= 0 ? decoded.slice(sep + 1) : '';
-      if (timingSafeEqual(user, APP_USERNAME) && timingSafeEqual(pass, APP_PASSWORD)) {
-        return next();
+      Si (timingSafeEqual(usuario, APP_USERNAME) && timingSafeEqual(contraseña, APP_PASSWORD)) {
+        devolver siguiente();
       }
     }
-    res.set('WWW-Authenticate', 'Basic realm="Mi Pronostico Deportivo"');
+    res.set('WWW-Authenticate', 'Basic kingdom="Mi Pronóstico Deportivo"');
     return res.status(401).send('Acceso restringido.');
   });
-  console.log('[AUTH] Acceso protegido con usuario/contrase\u00f1a activado.');
+  console.log('[AUTH] Acceso protegido con usuario/contraseña activado.');
 }
 
 const MODEL_VERSION = 'V8.0.0';
@@ -111,7 +111,7 @@ const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const BIGBALLS_KEY = process.env.BIGBALLS_KEY || '';
 
-const BIGBALLS_LEAGUE_MAP = {
+const MAPA_LIGA_BALLS_BIGBALLS = {
   PD: 'laliga',
   PL: 'epl',
   FL1: 'ligue1',
@@ -122,654 +122,654 @@ const BIGBALLS_LEAGUE_MAP = {
 };
 
 /* =========================================================
-   1. VENTAJA DE LOCAL DIN\u00c1MICA Y APRENDIDA (V8.0)
-   Home Advantage = promedio hist\u00f3rico de goles local / goles visitante
-   de esa competici\u00f3n, suavizado (shrinkage) hacia la media global (1.09x).
-========================================================= */
+   1. VENTAJA DE LOCAL DINÁMICA Y APRENDIDA (V8.0)
+   Ventaja de local = promedio histórico de goles local / goles visitante
+   de esa competición, suavizado (shrinkage) hacia la media global (1.09x).
+========================================================== */
 const GLOBAL_HOME_ADVANTAGE_BASELINE = 1.09;
 const learnedHomeAdvantage = new Map();
 
-// Priors iniciales calibrados estad\u00edsticamente
+// Priors iniciales calibrados estadísticamente
 const HOME_ADVANTAGE_PRIORS = {
-  PD: 1.13,  // LaLiga
-  SA: 1.12,  // Serie A
-  EL: 1.12,  // Europa League
+  PD: 1.13, // LaLiga
+  SA: 1.12, // Serie A
+  EL: 1.12, // Europa League
   BL1: 1.10, // Bundesliga
-  CL: 1.09,  // Champions League
+  CL: 1.09, // Liga de Campeones
   FL1: 1.08, // Ligue 1
-  PL: 1.07   // Premier League
+  PL: 1.07 // Premier League
 };
 
-function updateLearnedHomeAdvantage(competitionCode, matches) {
-  if (!competitionCode || !Array.isArray(matches) || matches.length < 5) return;
-  let homeGoals = 0;
-  let awayGoals = 0;
-  let count = 0;
+función actualizarVentajaHomeAprendida(códigoCompetición, coincidencias) {
+  Si (!competitionCode || !Array.isArray(matches) || matches.length < 5) regresar;
+  sea ​​homeGoals = 0;
+  dejar objetivos = 0;
+  sea ​​contador = 0;
 
-  for (const m of matches) {
+  para (const m de coincidencias) {
     const hg = Number(m.score?.fullTime?.home ?? m.homeGoals ?? m.goalsHome);
     const ag = Number(m.score?.fullTime?.away ?? m.awayGoals ?? m.goalsAway);
-    if (Number.isFinite(hg) && Number.isFinite(ag)) {
-      homeGoals += hg;
-      awayGoals += ag;
-      count++;
+    Si (Number.isFinite(hg) && Number.isFinite(ag)) {
+      objetivos_inicio += hg;
+      Goles de visitante += ag;
+      recuento++;
     }
   }
 
-  if (count >= 5 && awayGoals > 0) {
+  si (count >= 5 && awayGoals > 0) {
     const rawRatio = homeGoals / Math.max(awayGoals, 1);
     // Suavizado bayesiano con 12 pseudo-observaciones hacia la media global
-    const weight = count / (count + 12);
-    const smoothed = weight * rawRatio + (1 - weight) * GLOBAL_HOME_ADVANTAGE_BASELINE;
+    const peso = contador / (contador + 12);
+    const suavizado = peso * rawRatio + (1 - peso) * GLOBAL_HOME_ADVANTAGE_BASELINE;
     const clamped = Math.max(1.03, Math.min(1.22, Number(smoothed.toFixed(3))));
     learnedHomeAdvantage.set(competitionCode, {
-      factor: clamped,
-      sampleSize: count,
-      rawRatio: Number(rawRatio.toFixed(3)),
-      updatedAt: Date.now()
+      factor: sujeto,
+      Tamaño de la muestra: recuento,
+      rawRatio: Número(rawRatio.toFixed(3)),
+      actualizadoEn: Fecha.ahora()
     });
   }
 }
 
-function getHomeAdvantage(competitionCode) {
+función obtenerVentajaHome(códigoCompetición) {
   const learned = learnedHomeAdvantage.get(competitionCode);
-  if (learned && learned.factor) {
-    return learned.factor;
+  si (aprendido && factor.aprendido) {
+    devolver factor aprendido;
   }
-  return HOME_ADVANTAGE_PRIORS[competitionCode] || GLOBAL_HOME_ADVANTAGE_BASELINE;
+  devolver HOME_ADVANTAGE_PRIORS[competitionCode] || GLOBAL_HOME_ADVANTAGE_BASELINE;
 }
 
 /* =========================================================
-   CACH\u00c9 MULTINIVEL CON TTLs INDEPENDIENTES (V8.0)
-   Evita que cuotas o partidos se congelen 24 horas.
-========================================================= */
+   CACHÉÉ MULTINIVEL CON TTLs INDEPENDIENTE (V8.0)
+   Evita que cuotas o partidos se congelen las 24 horas.
+========================================================== */
 const CACHE_TTLS = {
-  odds: 3,         // Cuotas de casas de apuestas: 3 minutos
-  analysis: 15,    // An\u00e1lisis recalculable: 15 minutos
-  fixtures: 25,    // Fixtures del d\u00eda y favoritos: 25 minutos
-  injuries: 90,    // Bajas y lesiones: 90 minutos (1.5 horas)
-  history: 240,    // Historial y H2H: 4 horas
-  teams: 1440,     // Nombres de equipos y ligas: 24 horas
-  default: 30
+  cuotas: 3, // Cuotas de casas de apuestas: 3 minutos
+  análisis: 15, // Análisis recalculable: 15 minutos
+  Calendario: 25, // Calendario del día favoritos: 25 minutos
+  lesiones: 90, // Bajas y lesiones: 90 minutos (1,5 horas)
+  historia: 240, // Historial y H2H: 4 horas
+  equipos: 1440, // Nombres de equipos y ligas: 24 horas
+  valor predeterminado: 30
 };
 
 const STAKE_EUR = Number(process.env.STAKE_EUR) || 10;
 const DATABASE_URL = process.env.DATABASE_URL || '';
 
-const pool = (DATABASE_URL && Pool)
-  ? new Pool({
-      connectionString: DATABASE_URL,
+const pool = (URL_BASE_DE_DATOS && Pool)
+  ? nuevo Pool({
+      cadena de conexión: URL_DE_LA_BASE_DE_DATOS,
       ssl: process.env.NODE_ENV === 'production' || DATABASE_URL.includes('render')
-        ? { rejectUnauthorized: false }
-        : false
+        ? { rechazarNo autorizado: falso }
+        : FALSO
     })
-  : null;
+  : nulo;
 
-if (pool) {
+si (pool) {
   pool.on('error', (err) => {
-    console.warn('[DB] PostgreSQL cliente en background reconectando:', err.message);
+    console.warn('[DB] Cliente PostgreSQL en segundo plano reconectando:', err.message);
   });
 }
 
-async function ensureSchema() {
-  if (!pool) return;
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS simulated_bets (
-        id SERIAL PRIMARY KEY,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        match_date DATE,
-        home TEXT NOT NULL,
-        away TEXT NOT NULL,
-        competition TEXT,
-        market TEXT NOT NULL,
-        outcome TEXT NOT NULL,
-        market_name TEXT NOT NULL,
-        odds NUMERIC NOT NULL,
-        model_probability NUMERIC,
-        stake_eur NUMERIC NOT NULL DEFAULT 10,
-        status TEXT NOT NULL DEFAULT 'pending',
-        profit_eur NUMERIC,
-        settled_at TIMESTAMPTZ,
-        legs_json JSONB
+función asíncrona ensureSchema() {
+  si (!pool) regresar;
+  intentar {
+    esperar pool.query(`
+      CREAR TABLA SI NO EXISTE apuestas_simuladas (
+        ID CLAVE PRIMARIA SERIAL,
+        creado_en TIMESTAMPTZ NO NULO PREDETERMINADO ahora(),
+        fecha_coincidencia FECHA,
+        Inicio TEXTO NO NULO,
+        lejos TEXTO NO NULO,
+        texto de la competición,
+        TEXTO DEL MERCADO NO NULO,
+        Resultado TEXTO NO NULO,
+        nombre_mercado TEXTO NO NULO,
+        probabilidades NUMÉRICAS NO NULAS,
+        modelo_probabilidad NUMÉRICO,
+        stake_eur NUMÉRICO NO NULO PREDETERMINADO 10,
+        estado TEXTO NO NULO PREDETERMINADO 'pendiente',
+        beneficio_eur NUMÉRICO,
+        establecido_en HIMESTAMPTZ,
+        piernas_json JSONB
       );
     `);
-    console.log('[DB] Esquema verificado (simulated_bets).');
+    console.log('[DB] Esquema verificado (apuestas_simuladas).');
   } catch (error) {
-    console.error('[DB] Error creando esquema:', error.message);
+    console.error('[DB] Error al crear esquema:', error.message);
   }
 }
 
 const ODDS_SPORT_BY_COMPETITION = {
   PL: 'soccer_epl',
-  PD: 'soccer_spain_la_liga',
+  PD: 'fútbol_españa_la_liga',
   BL1: 'soccer_germany_bundesliga',
   SA: 'soccer_italy_serie_a',
-  FL1: 'soccer_france_ligue_one',
+  FL1: 'fútbol_france_ligue_one',
   CL: 'soccer_uefa_champs_league',
   EL: 'soccer_uefa_europa_league'
 };
 
 const COMPETITIONS = Object.keys(ODDS_SPORT_BY_COMPETITION);
-const cache = new Map();
+const caché = nuevo Mapa();
 
-function getTtlMinutes(category) {
-  if (typeof category === 'number') return category;
-  return CACHE_TTLS[category] || CACHE_TTLS.default;
+función obtenerTtlMinutos(categoría) {
+  si (typeof category === 'number') devolver categoría;
+  devolver CACHE_TTLS[categoría] || CACHE_TTLS.predeterminado;
 }
 
-function cacheGet(key) {
+función cacheGet(clave) {
   const item = cache.get(key);
-  if (!item) return null;
+  Si (!elemento) devuelve null;
   const maxAgeMs = (item.ttlMinutes || CACHE_TTLS.default) * 60 * 1000;
-  if (Date.now() - item.time > maxAgeMs) {
-    cache.delete(key);
-    return null;
+  Si (Fecha.ahora() - item.hora > maxAgeMs) {
+    caché.eliminar(clave);
+    devolver nulo;
   }
-  return item.data;
+  devolver item.data;
 }
 
-function cacheGetTimestamp(key) {
+función cacheGetTimestamp(clave) {
   const item = cache.get(key);
-  if (!item) return null;
+  Si (!elemento) devuelve null;
   const maxAgeMs = (item.ttlMinutes || CACHE_TTLS.default) * 60 * 1000;
-  if (Date.now() - item.time > maxAgeMs) return null;
-  return item.time;
+  Si (Fecha.ahora() - item.tiempo > maxAgeMs) devuelve null;
+  devolver artículo.tiempo;
 }
 
-function cacheSet(key, data, category = 'default') {
+función cacheSet(clave, datos, categoría = 'predeterminado') {
   const ttlMinutes = getTtlMinutes(category);
   cache.set(key, { time: Date.now(), data, ttlMinutes });
-  return data;
+  devolver datos;
 }
 
-function cacheSetIfNotEmpty(key, data, category = 'default') {
-  if (Array.isArray(data) && data.length === 0) return data;
-  return cacheSet(key, data, category);
+función cacheSetIfNotEmpty(clave, datos, categoría = 'predeterminado') {
+  Si (Array.isArray(data) && data.length === 0) devolver data;
+  devolver cacheSet(clave, datos, categoría);
 }
 
-function normalizeName(value) {
-  return String(value || '')
+función normalizarNombre(valor) {
+  devolver String(valor || '')
     .toLowerCase()
-    .normalize('NFD')
+    .normalizar('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]/g, '');
 }
 
 const TEAM_NAME_STOPWORDS = new Set([
   'fc', 'cf', 'afc', 'ac', 'cd', 'sc', 'ec', 'ud', 'rc', 'ca',
-  'club', 'the', 'de', 'of', 'sad', 'sa', 'cfr', 'if'
+  'club', 'el', 'de', 'de', 'triste', 'sa', 'cfr', 'si'
 ]);
 
-function nameTokens(value) {
-  return String(value || '')
+función nameTokens(valor) {
+  devolver String(valor || '')
     .toLowerCase()
-    .normalize('NFD')
+    .normalizar('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
+    .recortar()
     .split(/\s+/)
-    .filter(Boolean)
+    .filter(Booleano)
     .filter(token => !TEAM_NAME_STOPWORDS.has(token));
 }
 
-function tokenFoundIn(word, tokenList) {
-  for (const token of tokenList) {
-    if (token === word) return true;
+función tokenFoundIn(palabra, listaToken) {
+  para (const token de tokenList) {
+    Si (token === palabra) devolver verdadero;
     if (word.length >= 4 && token.length >= 4 && (token.includes(word) || word.includes(token))) {
-      return true;
+      devolver verdadero;
     }
   }
-  return false;
+  devolver falso;
 }
 
-function namesMatch(a, b) {
+función namesMatch(a, b) {
   const fullA = normalizeName(a);
   const fullB = normalizeName(b);
-  if (!fullA || !fullB || fullA.length < 3 || fullB.length < 3) return false;
-  if (fullA === fullB) return true;
+  Si (!fullA || !fullB || fullA.length < 3 || fullB.length < 3) devolver falso;
+  Si (fullA === fullB) devolver verdadero;
   const tokensA = nameTokens(a);
   const tokensB = nameTokens(b);
-  if (!tokensA.length || !tokensB.length) return false;
+  Si (!tokensA.length || !tokensB.length) devuelve falso;
   const [shortSide, longSide] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
   return shortSide.every(word => tokenFoundIn(word, longSide));
 }
 
 /* =========================================================
    BIG BALLS API & PREDICCIONES
-========================================================= */
-async function bigBallsRequest(path) {
-  if (!BIGBALLS_KEY) return null;
+========================================================== */
+función asíncrona bigBallsRequest(ruta) {
+  Si (!BIGBALLS_KEY) devuelve null;
   const key = `bigballs:${path}`;
   const cached = cacheGet(key);
-  if (cached) return cached;
-  try {
-    const response = await fetch(`https://api.bigballsdata.com${path}`, {
-      headers: { 'Authorization': `Bearer ${BIGBALLS_KEY}` }
+  si (cached) devolver cached;
+  intentar {
+    const respuesta = await fetch(`https://api.bigballsdata.com${path}`, {
+      encabezados: { 'Authorization': `Bearer ${BIGBALLS_KEY}` }
     });
-    if (!response.ok) {
+    si (!respuesta.ok) {
       console.warn(`[BIGBALLS] ${path} -> HTTP ${response.status}`);
-      return null;
+      devolver nulo;
     }
-    const data = await response.json();
-    return cacheSetIfNotEmpty(key, data);
+    const datos = esperar respuesta.json();
+    devolver cacheSetIfNotEmpty(clave, datos);
   } catch (error) {
     console.warn('[BIGBALLS] error:', path, error.message);
-    return null;
+    devolver nulo;
   }
 }
 
-async function getBigBallsTeams(bbLeagueKey) {
+función asíncrona getBigBallsTeams(bbLeagueKey) {
   const data = await bigBallsRequest(`/v1/teams?sport=football&league=${bbLeagueKey}`);
-  return Array.isArray(data?.data) ? data.data : [];
+  devolver Array.isArray(datos?.datos)? datos.datos: [];
 }
 
-async function getBigBallsInjuries(bbLeagueKey) {
+función asíncrona getBigBallsInjuries(bbLeagueKey) {
   const data = await bigBallsRequest(`/v1/injuries?sport=football&league=${bbLeagueKey}`);
-  return Array.isArray(data?.data?.injuries?.value) ? data.data.injuries.value : [];
+  return Array.isArray(datos?.datos?.lesiones?.valor)? datos.datos.lesiones.valor: [];
 }
 
-async function getInjuryDataForTeam(teamName, competitionCode) {
+función asíncrona getInjuryDataForTeam(teamName, competitionCode) {
   const bbLeagueKey = BIGBALLS_LEAGUE_MAP[competitionCode];
   if (!bbLeagueKey || !BIGBALLS_KEY) return { count: 0, details: [] };
   const cacheKey = `injuries:${bbLeagueKey}:${teamName}`;
   const cached = cacheGet(cacheKey);
-  if (cached) return cached;
+  si (cached) devolver cached;
 
-  try {
-    const [teams, injuries] = await Promise.all([
-      getBigBallsTeams(bbLeagueKey),
-      getBigBallsInjuries(bbLeagueKey)
+  intentar {
+    const [equipos, lesiones] = esperar Promise.all([
+      obtenerBigBallsTeams(bbLeagueKey),
+      obtenerLesionesDeGrandesBolas(bbLeagueKey)
     ]);
     const matchedTeam = teams.find(t => namesMatch(t?.name, teamName));
     if (!matchedTeam?.id) return { count: 0, details: [] };
     const teamInjuries = injuries.filter(inj => inj?.current_team_id === matchedTeam.id);
-    const result = {
-      count: teamInjuries.length,
-      details: teamInjuries.map(i => ({
-        player: i?.player_name || i?.name || 'Jugador',
-        position: (i?.position || i?.role || '').toLowerCase(),
-        status: i?.status || 'Baja'
+    const resultado = {
+      recuento: lesionesdelequipo.longitud,
+      detalles: teamInjuries.map(i => ({
+        jugador: i?.player_name || i?.name || 'Jugador',
+        posición: (i?.posición || i?.rol || '').toLowerCase(),
+        estado: i?.estado || 'Baja'
       }))
     };
     cacheSet(cacheKey, result, 'injuries');
-    return result;
+    devolver resultado;
   } catch (error) {
-    return { count: 0, details: [] };
+    devolver { count: 0, details: [] };
   }
 }
 
 /* =========================================================
-   2. C\u00c1LCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0)
+   2. CÁLCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0)
    - Portero titular: afecta defensa (+vulnerabilidad)
    - Delanteros / goleadores: afecta ataque
    - Defensas / medios: impacto repartido
-   - Impacto m\u00e1ximo global acotado al 8% (clamp 0.92 .. 1.0)
-========================================================= */
-async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, competitionCode) {
-  try {
-    const [homeData, awayData] = await Promise.all([
-      getInjuryDataForTeam(homeName, competitionCode),
-      getInjuryDataForTeam(awayName, competitionCode)
+   - Impacto máximo global acotado al 8% (clamp 0.92.. 1.0)
+========================================================== */
+función asíncrona applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, competitionCode) {
+  intentar {
+    const [homeData, awayData] = esperar Promise.all([
+      getInjuryDataForTeam(nombre de casa, código de competencia),
+      getInjuryDataForTeam(nombre ausente, código de competencia)
     ]);
 
-    function computeTeamInjuryFactor(data) {
+    función computeTeamInjuryFactor(datos) {
       if (!data || !data.count) return { attackFactor: 1.0, defenseFactor: 1.0, count: 0 };
-      let attackPenalty = 0;
-      let defensePenalty = 0;
+      sea ​​attackPenalty = 0;
+      sea ​​penalización de defensa = 0;
 
-      for (const item of (data.details || [])) {
+      para (const item de (data.details || [])) {
         const pos = item.position;
         if (pos.includes('goalkeeper') || pos.includes('portero') || pos.includes('gk')) {
-          defensePenalty += 0.035; // Portero: vulnerabilidad defensiva
+          defensaPenalización += 0,035; // Portero: vulnerabilidad defensiva
         } else if (pos.includes('forward') || pos.includes('delantero') || pos.includes('striker') || pos.includes('att')) {
-          attackPenalty += 0.03;   // Delantero
+          penalización de ataque += 0,03; // Delantero
         } else if (pos.includes('defen') || pos.includes('cb') || pos.includes('lb') || pos.includes('rb')) {
-          defensePenalty += 0.02;  // Defensa
-        } else {
-          attackPenalty += 0.015;
-          defensePenalty += 0.015;
+          defensaPenalización += 0,02; // defensa
+        } demás {
+          penalización por ataque += 0,015;
+          penalización de defensa += 0,015;
         }
       }
 
-      // Si no tenemos desglose por posici\u00f3n, aplicar estimaci\u00f3n suave de 0.015 por baja
-      if (!data.details || !data.details.length) {
-        attackPenalty = data.count * 0.018;
-        defensePenalty = data.count * 0.018;
+      // Si no tenemos desglose por posición, aplique estimación suave de 0.015 por baja
+      Si (!data.details || !data.details.length) {
+        penalizaciónAtaque = data.count * 0.018;
+        penalización de defensa = data.count * 0,018;
       }
 
-      // Acotamos el impacto m\u00e1ximo a un 8% (0.92) para evitar sobreajuste destructivo
+      // Acotamos el impacto máximo a un 8% (0,92) para evitar sobreajuste destructivo
       const attackFactor = clamp(1 - attackPenalty, 0.92, 1.0);
       const defenseFactor = clamp(1 - defensePenalty, 0.92, 1.0);
 
-      return { attackFactor, defenseFactor, count: data.count };
+      devolver { attackFactor, defenseFactor, count: data.count };
     }
 
     const homeAdj = computeTeamInjuryFactor(homeData);
     const awayAdj = computeTeamInjuryFactor(awayData);
 
-    return {
+    devolver {
       homeStats: {
         ...homeStats,
-        attackStrength: homeStats.attackStrength * homeAdj.attackFactor,
-        defenseStrength: homeStats.defenseStrength * homeAdj.defenseFactor
+        Fuerza de ataque: homeStats.fuerza de ataque * homeAdj.factor de ataque,
+        Fuerza de defensa: homeStats.fuerza de defensa * homeAdj.factor de defensa
       },
       awayStats: {
         ...awayStats,
-        attackStrength: awayStats.attackStrength * awayAdj.attackFactor,
-        defenseStrength: awayStats.defenseStrength * awayAdj.defenseFactor
+        fuerzaAtaque: awayStats.fuerzaAtaque * awayAdj.factorAtaque,
+        fuerza de defensa: awayStats.fuerza de defensa * awayAdj.factor de defensa
       },
-      homeInjuries: homeAdj.count,
-      awayInjuries: awayAdj.count
+      Lesiones en el hogar: recuento ajustado en el hogar,
+      Lesiones fuera: recuento ajustado fuera
     };
   } catch (error) {
-    return { homeStats, awayStats, homeInjuries: 0, awayInjuries: 0 };
+    devolver { homeStats, awayStats, homeInjuries: 0, awayInjuries: 0 };
   }
 }
 
 /* =========================================================
-   3. DESCANSO Y FATIGA ASIM\u00c9TRICA Y SUAVE (V8.0)
-   - Fatiga defensiva (desajuste t\u00e1ctico/repliegue) > fatiga ofensiva
+   3. DESCANSO Y FATIGA ASIMÉTRICA Y SUAVE (V8.0)
+   - Fatiga defensiva (desajuste táctico/repliegue) > fatiga ofensiva
    - Curva continua y acotada, sin saltos binarios irreales
-========================================================= */
-function calculateRestDaysFromMatches(matches, matchUtcDate) {
-  if (!Array.isArray(matches) || !matches.length) return null;
+========================================================== */
+función calcularDíasDescansadosDesdePartidos(partidos, fechaUtcdepartido) {
+  Si (!Array.isArray(matches) || !matches.length) devuelve null;
   const targetTime = matchUtcDate ? new Date(matchUtcDate).getTime() : Date.now();
 
-  const pastMatches = matches
+  const PartidasPasadas = coincidencias
     .filter(m => m.utcDate && new Date(m.utcDate).getTime() < targetTime)
     .sort((a, b) => new Date(b.utcDate).getTime() - new Date(a.utcDate).getTime());
 
-  if (!pastMatches.length) return null;
+  Si (!pastMatches.length) devuelve null;
 
   const lastMatchTime = new Date(pastMatches[0].utcDate).getTime();
   const diffDays = Math.max(0, Math.floor((targetTime - lastMatchTime) / (1000 * 60 * 60 * 24)));
-  return diffDays;
+  devolver días de diferencia;
 }
 
-function getRestFatigaImpact(restDays) {
-  if (restDays == null) {
+función obtenerRestFatigaImpact(restDays) {
+  si (restDays == null) {
     return { attackFactor: 1.0, defenseFactor: 1.0, label: 'Sin datos', impactPct: 0 };
   }
-  // \u22642 d\u00edas: fatiga severa (defensa sufre m\u00e1s: -4.5%, ataque pierde frescura: -3.5%)
-  if (restDays <= 2) {
-    return { attackFactor: 0.965, defenseFactor: 0.955, label: 'Fatiga severa (\u22642 d\u00edas)', impactPct: -4 };
+  // ≤2 días: fatiga severa (defensa sufre más: -4.5%, ataque pierde frescura: -3.5%)
+  si (días de descanso <= 2) {
+    return { attackFactor: 0.965, defenseFactor: 0.955, label: 'Fatiga severa (≤2 días)', impactPct: -4 };
   }
-  // 3 d\u00edas: descanso ajustado
-  if (restDays === 3) {
-    return { attackFactor: 0.98, defenseFactor: 0.975, label: 'Descanso justo (3 d\u00edas)', impactPct: -2.5 };
+  // 3 días: descanso ajustado
+  si (días de descanso === 3) {
+    return { attackFactor: 0.98, defenseFactor: 0.975, label: 'Descanso justo (3 días)', impactPct: -2.5 };
   }
-  // 4 d\u00edas: ritmo competitivo casi pleno
-  if (restDays === 4) {
-    return { attackFactor: 0.99, defenseFactor: 0.99, label: 'Descanso adecuado (4 d\u00edas)', impactPct: -1 };
+  // 4 días: ritmo competitivo casi pleno
+  si (días de descanso === 4) {
+    return { attackFactor: 0.99, defensaFactor: 0.99, label: 'Descanso adecuado (4 días)', impactPct: -1 };
   }
-  // 5 a 12 d\u00edas: \u00f3ptimo
-  if (restDays >= 5 && restDays <= 12) {
-    return { attackFactor: 1.0, defenseFactor: 1.0, label: `\u00d3ptimo (${restDays}d)`, impactPct: 0 };
+  // 5 a 12 días: óptimo
+  Si (días de descanso >= 5 y días de descanso <= 12) {
+    return { attackFactor: 1.0, defenseFactor: 1.0, label: `Óptimo (${restDays}d)`, impactPct: 0 };
   }
-  // > 12 d\u00edas: leve falta de ritmo competitivo
-  return { attackFactor: 0.985, defenseFactor: 0.99, label: `Inactividad prolongada (${restDays}d)`, impactPct: -1.5 };
+  // > 12 días: leve falta de ritmo competitivo
+  return { AttackFactor: 0.985, DefenseFactor: 0.99, etiqueta: `Inactividad prolongada (${restDays}d)`, impactPct: -1.5 };
 }
 
-function applyCalculatedRestAdjustment(homeStats, awayStats, homeRestDays, awayRestDays) {
+función applyCalculatedRestAdjustment(homeStats, awayStats, homeRestDays, awayRestDays) {
   const homeImpact = getRestFatigaImpact(homeRestDays);
   const awayImpact = getRestFatigaImpact(awayRestDays);
 
-  return {
+  devolver {
     homeStats: {
       ...homeStats,
       attackStrength: clamp(homeStats.attackStrength * homeImpact.attackFactor, 0.45, 1.8),
-      defenseStrength: clamp(homeStats.defenseStrength * homeImpact.defenseFactor, 0.45, 1.8)
+      defensaFuerza: clamp(homeStats.defenseStrength * homeImpact.defenseFactor, 0.45, 1.8)
     },
     awayStats: {
       ...awayStats,
       attackStrength: clamp(awayStats.attackStrength * awayImpact.attackFactor, 0.45, 1.8),
-      defenseStrength: clamp(awayStats.defenseStrength * awayImpact.defenseFactor, 0.45, 1.8)
+      defensaFuerza: clamp(awayStats.defenseStrength * awayImpact.defenseFactor, 0.45, 1.8)
     },
-    homeRest: { days: homeRestDays, status: homeImpact.label, impactPct: homeImpact.impactPct },
-    awayRest: { days: awayRestDays, status: awayImpact.label, impactPct: awayImpact.impactPct }
+    homeRest: { días: homeRestDays, estado: homeImpact.label, impactPct: homeImpact.impactPct },
+    awayRest: { días: awayRestDays, estado: awayImpact.label, impactPct: awayImpact.impactPct }
   };
 }
 
 /* =========================================================
-   4. PREDICCIONES BIG BALLS - SEGUNDA OPINI\u00d3N PURAMENTE EXTERNA
-   Ya no modifica el score de confianza ni la probabilidad del modelo.
-========================================================= */
-async function getBigBallsPrediction(homeName, awayName, competitionCode) {
+   4. PREDICCIONES BIG BALLS - SEGUNDA OPINIÓN PURAMENTE EXTERNA
+   Ya no modifica el puntaje de confianza ni la probabilidad del modelo.
+========================================================== */
+función asíncrona getBigBallsPrediction(homeName, awayName, competitionCode) {
   const bbLeagueKey = BIGBALLS_LEAGUE_MAP[competitionCode];
-  if (!bbLeagueKey || !BIGBALLS_KEY) return null;
+  Si (!bbLeagueKey || !BIGBALLS_KEY) devuelve null;
   const cacheKey = `bb-pred:${bbLeagueKey}:${homeName}:${awayName}`;
   const cached = cacheGet(cacheKey);
-  if (cached) return cached;
+  si (cached) devolver cached;
 
-  try {
+  intentar {
     const data = await bigBallsRequest(`/v1/predictions?sport=football&league=${bbLeagueKey}`);
-    const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.predictions) ? data.predictions : []);
-    if (!list.length) return null;
+    const lista = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.predictions) ? data.predictions : []);
+    Si (!list.length) devuelve null;
 
     const matched = list.find(p => {
       const h = p?.home_team || p?.home_team_name || p?.home;
       const a = p?.away_team || p?.away_team_name || p?.away;
-      return namesMatch(h, homeName) && namesMatch(a, awayName);
+      devolver namesMatch(h, homeName) && namesMatch(a, awayName);
     });
 
-    if (!matched) return null;
+    Si (!coincide) devuelve null;
 
     const hp = Number(matched.home_win_probability ?? matched.home_prob ?? matched.home_win ?? 0);
     const dp = Number(matched.draw_probability ?? matched.draw_prob ?? matched.draw ?? 0);
     const ap = Number(matched.away_win_probability ?? matched.away_prob ?? matched.away_win ?? 0);
 
-    const winner = matched.predicted_winner || matched.pick ||
+    const ganador = matched.predicted_winner || matched.pick ||
       (hp > ap && hp > dp ? 'home' : (ap > hp && ap > dp ? 'away' : 'draw'));
 
-    const result = {
+    const resultado = {
       homeProb: Math.round(hp <= 1 ? hp * 100 : hp),
       drawProb: Math.round(dp <= 1 ? dp * 100 : dp),
       awayProb: Math.round(ap <= 1 ? ap * 100 : ap),
-      predictedWinner: winner
+      Ganador previsto: ganador
     };
     cacheSet(cacheKey, result, 'analysis');
-    return result;
-  } catch (err) {
-    console.warn('[BIGBALLS PREDICTIONS]', err.message);
-    return null;
+    devolver resultado;
+  } capturar (error) {
+    console.warn('[PREDICCIONES DE BIGBALLS]', err.message);
+    devolver nulo;
   }
 }
 
-function evaluateSecondOpinion(model, bbPred) {
-  if (!bbPred) return null;
+función evaluarSegundaOpinión(modelo, bbPred) {
+  si (!bbPred) devolver null;
 
   const mkWinner = (model.homeWin > model.awayWin && model.homeWin > model.draw)
-    ? 'home'
+    ? 'hogar'
     : ((model.awayWin > model.homeWin && model.awayWin > model.draw) ? 'away' : 'draw');
 
   const mkProbMap = { home: model.homeWin, draw: model.draw, away: model.awayWin };
   const bbProbMap = { home: bbPred.homeProb, draw: bbPred.drawProb, away: bbPred.awayProb };
 
-  const agreement = mkWinner === bbPred.predictedWinner;
+  const acuerdo = mkWinner === bbPred.predictedWinner;
   const labels = { home: 'Local', draw: 'Empate', away: 'Visitante' };
 
   const mkProbPct = Math.round((mkProbMap[mkWinner] || 0) * 100);
   const bbProbPct = bbProbMap[bbPred.predictedWinner] || 0;
   const diffPts = bbProbPct - mkProbPct;
 
-  return {
-    available: true,
-    agrees: agreement,
-    status: agreement ? 'Coincidencia con 2\u00aa opini\u00f3n' : 'Divergencia (Alerta externa)',
-    mkPick: labels[mkWinner],
+  devolver {
+    disponible: verdadero,
+    está de acuerdo: acuerdo,
+    estado: acuerdo ? 'Coincidencia con 2ª opinión' : 'Divergencia (Alerta externa)',
+    mkPick: etiquetas[mkWinner],
     mkProb: mkProbPct,
-    bbPick: labels[bbPred.predictedWinner] || 'Otro resultado',
+    bbPick: etiquetas[bbPred.predictedWinner] || 'Otro resultado',
     bbProb: bbProbPct,
     diffPts: diffPts > 0 ? `+${diffPts}` : `${diffPts}`,
-    confidenceDelta: 0, // V8: \u00a10% de contaminaci\u00f3n al modelo propio!
-    message: agreement
-      ? `Segunda opini\u00f3n externa coincide en ${labels[mkWinner]} (${bbProbPct}%).`
-      : `Segunda opini\u00f3n externa proyecta ${labels[bbPred.predictedWinner] || 'opuesto'} (${bbProbPct}%). Discrepancia entre fuentes.`
+    confianzaDelta: 0, // V8: ¡0% de contaminaciónón al modelo propio!
+    mensaje: acuerdo
+      ? `Segunda opinión externa coincide en ${labels[mkWinner]} (${bbProbPct}%).`
+      : `Segunda opinión externa proyecta ${labels[bbPred.predictedWinner] || 'opuesto'} (${bbProbPct}%). Discrepancia entre fuentes.`
   };
 }
 
 /* =========================================================
-   HISTORIAL H2H
-========================================================= */
-async function getBigBallsTeamId(teamName, competitionCode) {
+   HISTÓRICO H2H
+========================================================== */
+función asíncrona getBigBallsTeamId(teamName, competitionCode) {
   const bbLeagueKey = BIGBALLS_LEAGUE_MAP[competitionCode];
-  if (!bbLeagueKey || !BIGBALLS_KEY) return null;
-  try {
-    const teams = await getBigBallsTeams(bbLeagueKey);
+  Si (!bbLeagueKey || !BIGBALLS_KEY) devuelve null;
+  intentar {
+    const equipos = await getBigBallsTeams(bbLeagueKey);
     const matchedTeam = teams.find(t => namesMatch(t?.name, teamName));
-    return matchedTeam?.id || null;
+    devolver matchedTeam?.id || null;
   } catch (error) {
-    return null;
+    devolver nulo;
   }
 }
 
-async function getH2HDrawRate(homeTeamId, awayTeamId) {
-  if (!homeTeamId || !awayTeamId || !BIGBALLS_KEY) return null;
-  try {
+función asíncrona getH2HDrawRate(homeTeamId, awayTeamId) {
+  Si (!homeTeamId || !awayTeamId || !BIGBALLS_KEY) devuelve null;
+  intentar {
     const data = await bigBallsRequest(`/v1/teams/${homeTeamId}/h2h-intelligence?opponent=${awayTeamId}`);
-    const context = data?.data || data;
+    const contexto = datos?.datos || datos;
     const draws = Number(context?.draws ?? context?.draw_count);
     const totalMatches = Number(context?.matches ?? context?.total_matches ?? context?.games_played);
-    if (Number.isFinite(draws) && Number.isFinite(totalMatches) && totalMatches >= 3) {
-      return draws / totalMatches;
+    Si (Number.isFinite(draws) && Number.isFinite(totalMatches) && totalMatches >= 3) {
+      devolver sorteos / total de coincidencias;
     }
-    return null;
+    devolver nulo;
   } catch (error) {
-    return null;
+    devolver nulo;
   }
 }
 
-function applyH2HAdjustment(model, h2hDrawRate) {
-  if (h2hDrawRate == null || !Number.isFinite(h2hDrawRate)) return model;
+función applyH2HAdjustment(modelo, h2hDrawRate) {
+  Si (h2hDrawRate == null || !Number.isFinite(h2hDrawRate)) devuelve el modelo;
   const bump = clamp((h2hDrawRate - model.draw) * 0.3, 0, 0.03);
-  if (bump <= 0) return model;
+  si (bump <= 0) devolver modelo;
   const totalOthers = model.homeWin + model.awayWin;
-  if (totalOthers <= 0) return model;
+  si (totalOtros <= 0) devolver modelo;
   const homeShare = model.homeWin / totalOthers;
   const awayShare = model.awayWin / totalOthers;
-  return {
-    ...model,
-    draw: model.draw + bump,
-    homeWin: model.homeWin - bump * homeShare,
-    awayWin: model.awayWin - bump * awayShare
+  devolver {
+    ...modelo,
+    dibujar: model.draw + bump,
+    homeWin: model.homeWin - golpe * homeShare,
+    awayWin: modelo.awayWin - bump * awayShare
   };
 }
 
-function median(values) {
+función mediana(valores) {
   const nums = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
-  if (!nums.length) return null;
+  Si (!nums.length) devuelve null;
   const m = Math.floor(nums.length / 2);
   return nums.length % 2 ? nums[m] : (nums[m - 1] + nums[m]) / 2;
 }
 
-function uniqueNumbers(values) {
+función númerosúnicos(valores) {
   return [...new Set(values.map(Number).filter(Number.isFinite).map(v => Number(v.toFixed(4))))];
 }
 
-function dateFromISO(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
+función dateFromISO(valor) {
+  Si (!valor) devuelve null;
+  const d = new Date(valor);
+  devolver Número.isNaN(d.getTime()) ? nulo : d;
 }
 
-function datePartUTC(value) {
-  const d = dateFromISO(value);
+función datePartUTC(valor) {
+  const d = dateFromISO(valor);
   return d ? d.toISOString().slice(0, 10) : null;
 }
 
-async function fetchJson(url, options = {}) {
+función asíncrona fetchJson(url, opciones = {}) {
   const res = await fetch(url, options);
-  let data = null;
+  sea ​​datos = nulo;
   try { data = await res.json(); } catch (_) { data = null; }
-  if (!res.ok) {
+  si (!res.ok) {
     const err = new Error(data?.message || data?.error || `HTTP ${res.status}`);
     err.status = res.status;
-    err.data = data;
-    throw err;
+    err.data = datos;
+    lanzar error;
   }
-  return data;
+  devolver datos;
 }
 
 /* =========================================================
-   FOOTBALL DATA
-========================================================= */
-async function footballData(path) {
-  if (!FOOTBALL_DATA_TOKEN) {
+   DATOS DE FÚTBOL
+========================================================== */
+función asíncrona footballData(path) {
+  si (!FOOTBALL_DATA_TOKEN) {
     throw new Error('FOOTBALL_DATA_TOKEN no configurado');
   }
   const key = `football:${path}`;
   const cached = cacheGet(key);
-  if (cached) return cached;
+  si (cached) devolver cached;
   const data = await fetchJson(`${FOOTBALL_DATA_BASE}${path}`, {
-    headers: { 'X-Auth-Token': FOOTBALL_DATA_TOKEN }
+    encabezados: { 'X-Auth-Token': FOOTBALL_DATA_TOKEN }
   });
-  return cacheSet(key, data);
+  devolver cacheSet(clave, datos);
 }
 
-async function getCompetitionTeams(competitionCode) {
-  const key = `competition-teams:${competitionCode}`;
+función asíncrona getCompetitionTeams(competitionCode) {
+  const key = `equipos-de-competencia:${código-de-competencia}`;
   const cached = cacheGet(key);
-  if (cached) return cached;
-  try {
+  si (cached) devolver cached;
+  intentar {
     const data = await footballData(`/competitions/${competitionCode}/teams`);
-    const teams = Array.isArray(data?.teams) ? data.teams : [];
-    return cacheSetIfNotEmpty(key, teams);
+    const equipos = Array.isArray(datos?.equipos) ? datos.equipos : [];
+    devolver cacheSetIfNotEmpty(clave, equipos);
   } catch (error) {
-    return [];
+    devolver [];
   }
 }
 
-async function findTeam(teamName, competitionCode) {
-  if (!teamName || !competitionCode) return null;
-  const teams = await getCompetitionTeams(competitionCode);
-  if (!teams.length) return null;
+función asíncrona findTeam(teamName, competitionCode) {
+  Si (!teamName || !competitionCode) devuelve null;
+  const equipos = await obtenerEquiposDeCompetencia(códigoDeCompetencia);
+  Si (!teams.length) devuelve null;
   const target = normalizeName(teamName);
   const exact = teams.find(t => normalizeName(t?.name) === target);
-  if (exact) return exact;
+  si (exacto) devolver exacto;
   const partial = teams.find(t => namesMatch(t?.name, teamName));
-  return partial || null;
+  devolver parcial || nulo;
 }
 
-async function getTeamRecentMatches(teamId) {
-  if (!teamId) return [];
+función asíncrona getTeamRecentMatches(teamId) {
+  si (!teamId) devolver [];
   const key = `team:${teamId}:recent`;
   const cached = cacheGet(key);
-  if (cached) return cached;
-  try {
+  si (cached) devolver cached;
+  intentar {
     const data = await footballData(`/teams/${teamId}/matches?status=FINISHED&limit=20`);
     const matches = Array.isArray(data?.matches) ? data.matches : [];
-    return cacheSetIfNotEmpty(key, matches);
+    devolver cacheSetIfNotEmpty(clave, coincidencias);
   } catch (error) {
-    return [];
+    devolver [];
   }
 }
 
-function calculateRecentTeamStats(teamId, matches) {
-  const relevant = matches
+función calcularEstadísticasRecientesDelEquipo(teamId, matches) {
+  const relevante = coincidencias
     .filter(m => m?.homeTeam?.id === teamId || m?.awayTeam?.id === teamId)
     .sort((a, b) => new Date(b.utcDate) - new Date(a.utcDate))
     .slice(0, 10);
 
-  if (!relevant.length) {
-    return {
-      matches: 0,
-      goalsFor: 0,
-      goalsAgainst: 0,
-      avgGoalsFor: 1.25,
-      avgGoalsAgainst: 1.25,
-      attackStrength: 1,
-      defenseStrength: 1,
+  si (!longitud relevante) {
+    devolver {
+      coincidencias: 0,
+      objetivosPara: 0,
+      golesEn contra: 0,
+      promedio de goles para: 1.25,
+      promedio de goles en contra: 1,25
+      fuerza de ataque: 1,
+      Fuerza de defensa: 1,
       formPoints: 0,
-      formPct: 50
+      Porcentaje de formulario: 50
     };
   }
 
-  const n = relevant.length;
-  let weightedGF = 0, weightedGA = 0, weightedPts = 0, totalW = 0;
-  let gf = 0, ga = 0, pts = 0;
+  const n = longitud.relevante;
+  sea ​​weightedGF = 0, weightedGA = 0, weightedPts = 0, totalW = 0;
+  sea ​​gf = 0, ga = 0, pts = 0;
 
-  relevant.forEach((m, idx) => {
+  relevante.paraCada((m, idx) => {
     const w = n - idx;
     totalW += w;
     const h = Number(m?.score?.fullTime?.home ?? 0);
@@ -778,176 +778,176 @@ function calculateRecentTeamStats(teamId, matches) {
     const gFor = isHome ? h : a;
     const gAg = isHome ? a : h;
 
-    gf += gFor;
+    gf += gPara;
     ga += gAg;
-    weightedGF += gFor * w;
-    weightedGA += gAg * w;
+    GF ponderado += gPara * w;
+    GA ponderado += gAg * w;
 
     if (gFor > gAg) { pts += 3; weightedPts += 3 * w; }
     else if (gFor === gAg) { pts += 1; weightedPts += 1 * w; }
   });
 
-  const avgGoalsFor = weightedGF / totalW;
-  const avgGoalsAgainst = weightedGA / totalW;
+  const promedioGoalesPara = GF ponderado / totalW;
+  const promedioGolesEnGanancia = ponderadoGA / totalW;
 
-  return {
-    matches: relevant.length,
-    goalsFor: gf,
-    goalsAgainst: ga,
-    avgGoalsFor,
-    avgGoalsAgainst,
+  devolver {
+    coincidencias: longitud relevante,
+    objetivosPara: novia,
+    golesEn contra: ga,
+    promedio de objetivos para,
+    promedio de goles en contra,
     attackStrength: clamp(avgGoalsFor / 1.35, 0.45, 1.8),
-    defenseStrength: clamp(1.35 / Math.max(avgGoalsAgainst, 0.25), 0.45, 1.8),
+    defensaFuerza: clamp(1.35 / Math.max(promedioGolesEnGanancia, 0.25), 0.45, 1.8),
     formPoints: pts,
-    formPct: (weightedPts / (totalW * 3)) * 100
+    Porcentaje de forma: (Puntos ponderados / (Puntuación total * 3)) * 100
   };
 }
 
-async function getFixturesFootballData(date, competitionFilter) {
-  try {
+función asíncrona getFixturesFootballData(fecha, filtro de competición) {
+  intentar {
     const path = competitionFilter && COMPETITIONS.includes(competitionFilter)
       ? `/competitions/${competitionFilter}/matches?dateFrom=${date}&dateTo=${date}`
       : `/matches?dateFrom=${date}&dateTo=${date}`;
 
-    const data = await footballData(path);
+    const datos = await footballData(ruta);
     const matches = Array.isArray(data?.matches) ? data.matches : [];
-    const filtered = competitionFilter
-      ? matches
+    const filtrado = filtro de competición
+      ? partidos
       : matches.filter(m => ODDS_SPORT_BY_COMPETITION[m?.competition?.code]);
 
-    return filtered.map(m => ({
-      ...m,
-      competitionCode: m?.competition?.code || null,
-      competitionName: m?.competition?.name || m?.competition?.code || null,
-      source: 'football-data'
+    devolver filtered.map(m => ({
+      ...metro,
+      código de competición: m?.competition?.code || nulo,
+      Nombre de la competición: m?.competition?.name || m?.competition?.code || null,
+      Fuente: 'datos de fútbol'
     }));
   } catch (error) {
-    return [];
+    devolver [];
   }
 }
 
 /* =========================================================
-   ODDS API
-========================================================= */
-async function getOddsEvents(competitionCode) {
-  if (!ODDS_API_KEY) return [];
+   API de probabilidades
+========================================================== */
+función asíncrona getOddsEvents(competitionCode) {
+  si (!ODDS_API_KEY) devuelve [];
   const sport = ODDS_SPORT_BY_COMPETITION[competitionCode];
-  if (!sport) return [];
+  si (!deporte) devolver [];
 
   const key = `odds-events:${sport}`;
   const cached = cacheGet(key);
-  if (cached) return cached;
+  si (cached) devolver cached;
 
-  try {
+  intentar {
     const url = `${ODDS_BASE}/sports/${sport}/odds?regions=us,uk,eu&markets=h2h,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(ODDS_API_KEY)}`;
     const data = await fetchJson(url);
     const events = Array.isArray(data) ? data : [];
-    return cacheSetIfNotEmpty(key, events);
+    devolver cacheSetIfNotEmpty(clave, eventos);
   } catch (error) {
-    return [];
+    devolver [];
   }
 }
 
-async function getFixturesOdds(date, competitionFilter) {
-  if (!ODDS_API_KEY) return [];
-  const all = [];
+función asíncrona getFixturesOdds(fecha, filtro de competición) {
+  si (!ODDS_API_KEY) devuelve [];
+  const todo = [];
   const comps = competitionFilter && COMPETITIONS.includes(competitionFilter) ? [competitionFilter] : COMPETITIONS;
 
-  for (const c of comps) {
+  para (constante c de componentes) {
     const events = await getOddsEvents(c);
-    for (const e of events) {
-      if (!e?.home_team || !e?.away_team || !e?.commence_time) continue;
-      if (datePartUTC(e.commence_time) !== date) continue;
+    para (constante de eventos) {
+      si (!e?.home_team || !e?.away_team || !e?.commence_time) continuar;
+      Si (datePartUTC(e.commence_time) !== date) continuar;
 
-      all.push({
+      todos.empujar({
         id: `odds-${e.id || normalizeName(e.home_team + '-' + e.away_team)}`,
-        homeTeam: { id: null, name: e.home_team, crest: null },
-        awayTeam: { id: null, name: e.away_team, crest: null },
-        utcDate: e.commence_time,
-        competition: { code: c, name: competitionName(c) },
-        competitionCode: c,
-        competitionName: competitionName(c),
-        status: 'SCHEDULED',
-        source: 'the-odds-api',
-        oddsEvent: e
+        HomeTeam: { id: null, name: e.home_team, crest: null },
+        equipo visitante: { id: null, nombre: e.away_team, escudo: null },
+        utcDate: hora_de_comienzo_electrónico,
+        competición: { código: c, nombre: competitionName(c) },
+        Código de competición: c,
+        nombre de la competición: nombre de la competición(c),
+        estado: 'PROGRAMADO',
+        Fuente: 'the-odds-api',
+        Evento de probabilidades: e
       });
     }
   }
-  return all;
+  devolver todo;
 }
 
-function competitionName(code) {
-  const names = {
+función nombreCompetición(código) {
+  const nombres = {
     PL: 'Premier League',
     PD: 'LaLiga',
     BL1: 'Bundesliga',
     SA: 'Serie A',
     FL1: 'Ligue 1',
-    CL: 'Champions League',
-    EL: 'Europa League'
+    CL: 'Liga de Campeones',
+    EL: 'Liga Europa'
   };
-  return names[code] || code;
+  devolver nombres[código] || código;
 }
 
-async function getFixture(date, competitionFilter) {
+función asíncrona getFixture(fecha, filtro de competición) {
   const key = `fixtures:${date}:${competitionFilter || 'ALL'}`;
   const cached = cacheGet(key);
-  if (cached) return cached;
+  si (cached) devolver cached;
 
   let matches = await getFixturesFootballData(date, competitionFilter);
-  if (competitionFilter) {
-    matches = matches.filter(m => (m.competitionCode || m.competition?.code) === competitionFilter);
+  si (filtro de competencia) {
+    coincidencias = coincidencias.filter(m => (m.competitionCode || m.competition?.code) === competitionFilter);
   }
 
-  if (!matches.length) {
-    matches = await getFixturesOdds(date, competitionFilter);
+  si (!coincide.length) {
+    partidos = esperar obtenerCuotasDeCombate(fecha, filtroDeCompetencia);
   }
 
-  matches = Array.isArray(matches) ? matches : [];
+  coincidencias = Array.isArray(coincidencias) ? coincidencias : [];
   matches.sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate));
 
-  if (matches.length > 0) cacheSet(key, matches);
-  return matches;
+  Si (matches.length > 0) cacheSet(key, matches);
+  devolver coincidencias;
 }
 
-function findOddsEvent(events, homeName, awayName) {
-  if (!Array.isArray(events)) return null;
+función findOddsEvent(eventos, homeName, awayName) {
+  Si (!Array.isArray(eventos)) devuelve null;
   const direct = events.find(e => namesMatch(e?.home_team, homeName) && namesMatch(e?.away_team, awayName));
-  if (direct) return { event: direct, reversed: false };
+  si (directo) devuelve { evento: directo, invertido: falso };
   const rev = events.find(e => namesMatch(e?.home_team, awayName) && namesMatch(e?.away_team, homeName));
   if (rev) return { event: rev, reversed: true };
-  return null;
+  devolver nulo;
 }
 
-async function getOdds(homeName, awayName, competitionCode) {
+función asíncrona getOdds(homeName, awayName, competitionCode) {
   if (!ODDS_API_KEY) return { available: false, reason: 'ODDS_API_KEY no configurada' };
   const sport = ODDS_SPORT_BY_COMPETITION[competitionCode];
-  if (!sport) return { available: false, reason: 'Competici\u00f3n no soportada' };
+  if (!sport) return { available: false, reason: 'Competición no soportada' };
 
   const events = await getOddsEvents(competitionCode);
-  const found = findOddsEvent(events, homeName, awayName);
+  const encontrado = findOddsEvent(eventos, homeName, awayName);
   if (!found?.event) return { available: false, reason: 'Partido no encontrado en The Odds API' };
 
-  return {
-    available: true,
+  devolver {
+    disponible: verdadero,
     eventId: found.event.id || null,
-    commenceTime: found.event.commence_time || null,
-    bookmakers: Array.isArray(found.event.bookmakers) ? found.event.bookmakers : [],
-    event: found.event,
-    reversed: Boolean(found.reversed)
+    beginTime: found.event.commence_time || null,
+    casas de apuestas: Array.isArray(found.event.bookmakers) ? found.event.bookmakers : [],
+    evento: encontrado.evento,
+    invertido: Booleano(encontrado.invertido)
   };
 }
 
-function collectPrices(bookmakers, homeName, awayName, reversed = false) {
-  const result = { home: [], draw: [], away: [], over25: [], under25: [] };
+función collectPrices(casas de apuestas, nombre de la casa, nombre de la casa, revertido = falso) {
+  const resultado = { local: [], empate: [], visitante: [], mayor de 25: [], menor de 25: [] };
 
-  for (const b of bookmakers || []) {
-    const bName = b?.title || b?.key || 'Unknown';
-    for (const m of b?.markets || []) {
-      if (m?.key === 'h2h') {
-        for (const o of m.outcomes || []) {
-          const price = Number(o?.price);
-          if (!Number.isFinite(price) || price <= 1) continue;
+  para (const b de casas de apuestas || []) {
+    const bName = b?.title || b?.key || 'Desconocido';
+    para (const m de b?.mercados || []) {
+      si (m?.key === 'h2h') {
+        para (const o de m.outcomes || []) {
+          const precio = Número(o?.precio);
+          Si (!Number.isFinite(price) || price <= 1) continuar;
           const isHome = namesMatch(o?.name, homeName);
           const isAway = namesMatch(o?.name, awayName);
           const isDraw = ['draw', 'tie', 'empate'].includes(normalizeName(o?.name));
@@ -959,11 +959,11 @@ function collectPrices(bookmakers, homeName, awayName, reversed = false) {
           else if (reversed && isHome) result.away.push({ bookmaker: bName, odds: price });
         }
       }
-      if (m?.key === 'totals') {
-        for (const o of m.outcomes || []) {
-          if (Number(o?.point) !== 2.5) continue;
-          const price = Number(o?.price);
-          if (!Number.isFinite(price) || price <= 1) continue;
+      si (m?.key === 'totals') {
+        para (const o de m.outcomes || []) {
+          si (Número(o?.punto) !== 2.5) continuar;
+          const precio = Número(o?.precio);
+          Si (!Number.isFinite(price) || price <= 1) continuar;
           const n = normalizeName(o?.name);
           if (n === 'over') result.over25.push({ bookmaker: bName, odds: price });
           if (n === 'under') result.under25.push({ bookmaker: bName, odds: price });
@@ -971,83 +971,83 @@ function collectPrices(bookmakers, homeName, awayName, reversed = false) {
       }
     }
   }
-  return result;
+  devolver resultado;
 }
 
-function analyzePriceSet(prices) {
-  const valid = prices
+función analyzePriceSet(prices) {
+  const válido = precios
     .filter(item => Number.isFinite(Number(item?.odds)) && Number(item.odds) > 1)
     .map(item => ({ bookmaker: item.bookmaker, odds: Number(item.odds) }));
 
-  if (!valid.length) {
-    return {
-      bestOdds: null,
-      referenceOdds: null,
-      secondBestOdds: null,
-      bookmakerCount: 0,
+  si (!valid.length) {
+    devolver {
+      mejoresProbabilidades: nulo,
+      Probabilidades de referencia: nulo,
+      segundasMejoresProbabilidades: nulo,
+      Número de casas de apuestas: 0,
       supportCount: 0,
-      isOutlier: false,
-      marketDepth: 'none',
-      prices: []
+      isOutlier: falso,
+      profundidad de mercado: 'ninguna',
+      precios: []
     };
   }
 
   const odds = valid.map(x => x.odds).sort((a, b) => a - b);
   const referenceOdds = median(odds);
-  const bestOdds = odds[odds.length - 1];
+  const mejoresOdds = probabilidades[odds.length - 1];
   const unique = uniqueNumbers(odds).sort((a, b) => b - a);
   const secondBestOdds = unique.length > 1 ? unique[1] : null;
 
   const supportCount = odds.filter(val =>
     referenceOdds && Math.abs(val - referenceOdds) / referenceOdds <= 0.10
-  ).length;
+  ).longitud;
 
   const isOutlier = odds.length >= 2 && (
-    bestOdds > referenceOdds * 1.30 ||
+    mejoresOdds > referenciaOdds * 1.30 ||
     (bestOdds > referenceOdds * 1.20 && supportCount < 2) ||
-    (secondBestOdds !== null && bestOdds > secondBestOdds * 1.20)
+    (segundoMejorOdds!== nulo && mejoresOdds > segundoMejorOdds * 1.20)
   );
 
-  let marketDepth = 'low';
-  if (odds.length >= 6 && supportCount >= 4) marketDepth = 'strong';
+  sea ​​marketDepth = 'bajo';
+  Si (odds.length >= 6 && supportCount >= 4) marketDepth = 'strong';
   else if (odds.length >= 3 && supportCount >= 2) marketDepth = 'medium';
 
-  return {
-    bestOdds,
-    referenceOdds,
-    secondBestOdds,
-    bookmakerCount: valid.length,
+  devolver {
+    mejores probabilidades,
+    referenciaProbabilidades,
+    segundasMejoresProbabilidades,
+    BookmakerCount: longitud válida,
     supportCount,
-    isOutlier,
-    marketDepth,
-    prices: valid
+    es un valor atípico,
+    Profundidad del mercado,
+    precios: válido
   };
 }
 
-function marketName(type, outcome) {
-  if (type === 'h2h') {
-    if (outcome === 'home') return 'Gana local';
-    if (outcome === 'draw') return 'Empate';
-    return 'Gana visitante';
+función marketName(tipo, resultado) {
+  si (tipo === 'h2h') {
+    si (resultado === 'home') devolver 'Gana local';
+    si (resultado === 'empate') devolver 'Empate';
+    devolver 'Gana visitante';
   }
   return outcome === 'over' ? 'Over 2.5' : 'Under 2.5';
 }
 
-function buildMarket(type, outcome, probability, prices) {
+función construirMercado(tipo, resultado, probabilidad, precios) {
   const info = analyzePriceSet(prices);
-  const modelProbability = Number(probability);
-  const bestEvPct = info.bestOdds ? ev(modelProbability, info.bestOdds) : null;
-  const referenceEvPct = info.referenceOdds ? ev(modelProbability, info.referenceOdds) : null;
+  const modeloProbabilidad = Número(probabilidad);
+  const bestEvPct = info.bestOdds? ev(modelProbability, info.bestOdds): nulo;
+  referencia constanteEvPct = info.referenceOdds? ev(modelProbability, info.referenceOdds): nulo;
 
-  const valueEligible =
+  const valorElegible =
     info.bookmakerCount >= 2 &&
     info.supportCount >= 2 &&
     !info.isOutlier &&
-    Number.isFinite(referenceEvPct) &&
+    Número.esFinito(referenciaEvPct) &&
     referenceEvPct > 0;
 
-  let valueLevel = 'Sin valor';
-  if (info.isOutlier) valueLevel = 'Precio at\u00edpico';
+  sea ​​valueLevel = 'Sin valor';
+  si (info.isOutlier) valueLevel = 'Precio enípico';
   else if (referenceEvPct >= 10) valueLevel = 'Valor fuerte';
   else if (referenceEvPct >= 5) valueLevel = 'Valor';
   else if (referenceEvPct > 0) valueLevel = 'Valor leve';
@@ -1055,129 +1055,129 @@ function buildMarket(type, outcome, probability, prices) {
   const bestBookmaker = info.prices.find(item => item.odds === info.bestOdds)?.bookmaker || null;
   const preferredBookmakerPrice = info.prices.find(item => /caliente/i.test(item.bookmaker || '')) || null;
 
-  let suggestedStakeEur = STAKE_EUR;
-  if (info.bestOdds && info.bestOdds > 1) {
+  let suggestStakeEur = STAKE_EUR;
+  if (info.mejoresOdds && info.mejoresOdds > 1) {
     const b = info.bestOdds - 1;
-    const p = modelProbability;
-    const q = 1 - p;
+    const p = ProbabilidadModelo;
+    constante q = 1 - p;
     const kelly = (b * p - q) / b;
     const used = Math.max(0, kelly) * 0.25;
-    suggestedStakeEur = Number(clamp(STAKE_EUR * (1 + used * 10), STAKE_EUR * 0.5, STAKE_EUR * 3).toFixed(2));
+    suggestStakeEur = Number(clamp(STAKE_EUR * (1 + used * 10), STAKE_EUR * 0.5, STAKE_EUR * 3).toFixed(2));
   }
 
-  return {
-    type,
-    outcome,
-    name: marketName(type, outcome),
-    probability: Number((modelProbability * 100).toFixed(1)),
-    bestOdds: info.bestOdds,
+  devolver {
+    tipo,
+    resultado,
+    nombre: marketName(tipo, resultado),
+    probabilidad: Número((probabilidadmodelo * 100).toFixed(1)),
+    mejoresProbabilidades: info.bestOdds,
     referenceOdds: info.referenceOdds,
-    secondBestOdds: info.secondBestOdds,
-    impliedProbability: info.bestOdds ? implied(info.bestOdds) : null,
-    evPct: bestEvPct,
-    bestEvPct,
-    referenceEvPct,
-    bookmaker: bestBookmaker,
-    preferredBookmakerOdds: preferredBookmakerPrice?.odds || null,
-    suggestedStakeEur,
-    bookmakerCount: info.bookmakerCount,
+    segundasMejoresProbabilidades: info.secondBestOdds,
+    Probabilidad implícita: info.bestOdds ? implied(info.bestOdds) : null,
+    evPct: mejorEvPct,
+    mejorEvPct,
+    referenciaEvPct,
+    casa de apuestas: bestBookmaker,
+    Cuotas de casa de apuestas preferidas: precio de casa de apuestas preferidas?.cuotas || nulo,
+    sugeridoStakeEur,
+    Número de casas de apuestas: info.bookmakerCount,
     supportCount: info.supportCount,
     isOutlier: info.isOutlier,
-    marketDepth: info.marketDepth,
-    valueEligible,
-    valueLevel
+    Profundidad del mercado: info.marketDepth,
+    valor elegible,
+    nivel de valor
   };
 }
 
-function buildMarkets(model, oddsData, homeName, awayName) {
-  if (!oddsData?.available) return [];
+función buildMarkets(modelo, oddsData, homeName, awayName) {
+  si (!oddsData?.available) devolver [];
   const prices = collectPrices(oddsData.bookmakers, homeName, awayName, oddsData.reversed);
 
-  return [
-    buildMarket('h2h', 'home', model.homeWin, prices.home),
-    buildMarket('h2h', 'draw', model.draw, prices.draw),
-    buildMarket('h2h', 'away', model.awayWin, prices.away),
-    buildMarket('totals', 'over', model.over25, prices.over25),
-    buildMarket('totals', 'under', model.under25, prices.under25)
+  devolver [
+    construirMercado('h2h', 'casa', modelo.casaWin, precios.casa),
+    construirMercado('h2h', 'draw', model.draw, prices.draw),
+    construirMercado('h2h', 'away', modelo.awayWin, precios.away),
+    construirMercado('totales', 'over', modelo.over25, precios.over25),
+    construirMercado('totales', 'menos de', modelo.menos de 25, precios.menos de 25)
   ];
 }
 
-function bestValue(markets, modelConfidence) {
-  return markets
+función mejorValor(mercados, confianzaModelo) {
+  mercados de retorno
     .filter(m =>
-      m.valueEligible &&
+      m.valorElegible &&
       m.bookmakerCount >= 2 &&
       m.supportCount >= 2 &&
       !m.isOutlier &&
-      Number(m.probability) >= 45 &&
-      Number(m.referenceEvPct) >= 1 &&
-      Number(modelConfidence) >= 45
+      Número(m.probabilidad) >= 45 &&
+      Número(m.referenceEvPct) >= 1 &&
+      Número(confianza del modelo) >= 45
     )
     .sort((a, b) => Number(b.referenceEvPct) - Number(a.referenceEvPct))[0] || null;
 }
 
-function mostLikelyScore(homeXg, awayXg) {
-  let best = { home: 0, away: 0, probability: 0 };
-  function p(k, l) {
-    let f = 1; for (let i = 2; i <= k; i++) f *= i;
-    return (Math.exp(-l) * Math.pow(l, k)) / f;
+función puntuación más probable(homeXg, awayXg) {
+  sea ​​mejor = { local: 0, fuera: 0, probabilidad: 0 };
+  función p(k, l) {
+    sea ​​f = 1; para (sea i = 2; i <= k; i++) f *= i;
+    devolver (Math.exp(-l) * Math.pow(l, k)) / f;
   }
-  for (let h = 0; h <= 7; h++) {
-    for (let a = 0; a <= 7; a++) {
+  para (sea h = 0; h <= 7; h++) {
+    para (sea a = 0; a <= 7; a++) {
       const prob = p(h, Math.max(0.01, Number(homeXg))) * p(a, Math.max(0.01, Number(awayXg)));
-      if (prob > best.probability) best = { home: h, away: a, probability: prob };
+      si (prob > best.probability) best = { home: h, away: a, probability: prob };
     }
   }
-  return { score: `${best.home}-${best.away}`, probability: Number((best.probability * 100).toFixed(1)) };
+  return { puntuación: `${best.home}-${best.away}`, probabilidad: Number((best.probability * 100).toFixed(1)) };
 }
 
 /* =========================================================
    2. MODELO CON VENTAJA DE LOCAL AJUSTADA POR LIGA
-========================================================= */
-function createModelInput(homeStats, awayStats, competitionCode) {
+========================================================== */
+función createModelInput(homeStats, awayStats, competitionCode) {
   const homeAttack = homeStats.avgGoalsFor * clamp(homeStats.attackStrength, 0.75, 1.35);
   const awayAttack = awayStats.avgGoalsFor * clamp(awayStats.attackStrength, 0.75, 1.35);
 
-  const homeAdvantage = getHomeAdvantage(competitionCode);
+  const homeAdvantage = obtenerHomeAdvantage(códigoCompetición);
   const homeXg = ((homeAttack + awayStats.avgGoalsAgainst) / 2) * homeAdvantage;
   const awayXg = (awayAttack + homeStats.avgGoalsAgainst) / 2;
 
-  return {
+  devolver {
     homeXg: clamp(homeXg, 0.25, 3.8),
     awayXg: clamp(awayXg, 0.20, 3.5),
-    homeAdvantage
+    Ventaja de inicio
   };
 }
 
 /* =========================================================
-   ENDPOINTS & API
-========================================================= */
+   PUNTOS FINALES Y API
+========================================================== */
 
 app.get('/api/status', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
-    ok: true,
+    ok: verdadero,
     footballDataConfigured: Boolean(FOOTBALL_DATA_TOKEN),
-    oddsApiConfigured: Boolean(ODDS_API_KEY),
-    databaseConfigured: Boolean(DATABASE_URL && Pool),
-    bigBallsConfigured: Boolean(BIGBALLS_KEY),
+    oddsApiConfigured: Booleano(ODDS_API_KEY),
+    baseDeDatosConfigurada: Booleano(URL_DE_LA_BASE_DE_DATOS && Pool),
+    bigBallsConfigured: Booleano(BIGBALLS_KEY),
     stakeEur: STAKE_EUR,
-    provider: 'football-data.org + The Odds API + Big Balls',
+    proveedor: 'football-data.org + The Odds API + Big Balls',
     cacheMinutes: CACHE_MINUTES,
-    modelVersion: MODEL_VERSION
+    Versión del modelo: VERSIÓN_DEL_MODELO
   });
 });
 
 // Descargar el archivo server.js actualizado
 app.get('/api/download-server', (req, res) => {
   const possiblePaths = [
-    path.join(__dirname, 'server.js'),
-    path.join(__dirname, 'public', 'server.js'),
-    path.join(process.cwd(), 'server.js'),
-    path.join(process.cwd(), 'public', 'server.js')
+    ruta.join(__dirname, 'server.js'),
+    ruta.join(__dirname, 'public', 'server.js'),
+    ruta.join(process.cwd(), 'server.js'),
+    ruta.join(process.cwd(), 'public', 'server.js')
   ];
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
+  para (constante p de posiblesPasos) {
+    si (fs.existsSync(p)) {
       return res.download(p, 'server.js');
     }
   }
@@ -1187,30 +1187,30 @@ app.get('/api/download-server', (req, res) => {
 // Descargar el archivo zip del proyecto completo
 app.get('/api/download-zip', (req, res) => {
   const possiblePaths = [
-    path.join(__dirname, 'public', 'mi-pronostico-deportivo-v7.17.zip'),
-    path.join(__dirname, 'mi-pronostico-deportivo-v7.17.zip'),
-    path.join(process.cwd(), 'public', 'mi-pronostico-deportivo-v7.17.zip'),
-    path.join(process.cwd(), 'mi-pronostico-deportivo-v7.17.zip')
+    ruta.join(__dirname, 'public', 'mi-pronostico-deportivo-v7.17.zip'),
+    ruta.join(__dirname, 'mi-pronostico-deportivo-v7.17.zip'),
+    ruta.join(process.cwd(), 'public', 'mi-pronostico-deportivo-v7.17.zip'),
+    ruta.join(process.cwd(), 'mi-pronostico-deportivo-v7.17.zip')
   ];
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
+  para (constante p de posiblesPasos) {
+    si (fs.existsSync(p)) {
       return res.download(p, 'mi-pronostico-deportivo-v7.17.zip');
     }
   }
   res.status(404).send('ZIP no encontrado.');
 });
 
-function addDaysToDateStr(dateStr, days) {
+función addDaysToDateStr(dateStr, days) {
   const d = new Date(dateStr + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() + days);
+  d.setUTCDate(d.getUTCDate() + días);
   return d.toISOString().slice(0, 10);
 }
 
 app.get('/api/fixtures/favorites', async (req, res) => {
-  const teams = String(req.query.teams || '')
-    .split(',')
+  const equipos = String(req.query.teams || '')
+    .dividir(',')
     .map(t => t.trim())
-    .filter(Boolean)
+    .filter(Booleano)
     .slice(0, 5);
 
   if (!teams.length) return res.json({ ok: true, fixtures: [] });
@@ -1218,12 +1218,12 @@ app.get('/api/fixtures/favorites', async (req, res) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const cacheKey = `favorites-fixtures:${teams.join('|')}:${todayStr}`;
   const cached = cacheGet(cacheKey);
-  if (cached) return res.json(cached);
+  si (cached) devuelve res.json(cached);
 
-  try {
-    // Football-Data rechaza periodos superiores a 10 d\u00edas:
-    // "Specified period must not exceed 10 days" (HTTP 400).
-    // Consultamos en 2 bloques seguros de 7 d\u00edas: [0..7] y [8..14]
+  intentar {
+    // Football-Data rechaza periodos superiores a 10 días:
+    // "El período especificado no debe exceder los 10 días" (HTTP 400).
+    // Consultamos en 2 bloques seguros de 7 días: [0..7] y [8..14]
     const b1From = todayStr;
     const b1To = addDaysToDateStr(todayStr, 7);
     const b2From = addDaysToDateStr(todayStr, 8);
@@ -1239,33 +1239,33 @@ app.get('/api/fixtures/favorites', async (req, res) => {
       ...(Array.isArray(data2?.matches) ? data2.matches : [])
     ];
 
-    const seenIds = new Set();
-    const uniqueMatches = [];
-    for (const m of allMatches) {
+    const seenIds = nuevo Set();
+    const coincidenciasúnicas = [];
+    para (const m de todosLosMatches) {
       const matchId = m?.id || `${m?.homeTeam?.name}-${m?.awayTeam?.name}-${m?.utcDate}`;
-      if (!seenIds.has(matchId)) {
+      si (!seenIds.has(matchId)) {
         seenIds.add(matchId);
-        uniqueMatches.push(m);
+        coincidenciasúnicas.push(m);
       }
     }
 
-    const filtered = uniqueMatches.filter(m =>
-      teams.some(t => namesMatch(m?.homeTeam?.name, t) || namesMatch(m?.awayTeam?.name, t))
+    const filtrado = coincidencias únicas.filtro(m =>
+      equipos.some(t => namesMatch(m?.homeTeam?.name, t) || namesMatch(m?.awayTeam?.name, t))
     );
 
     const fixtures = filtered.map(m => ({
       id: m.id,
-      home: m.homeTeam?.name || null,
-      away: m.awayTeam?.name || null,
+      Inicio: m.homeTeam?.name || nulo,
+      fuera: m.awayTeam?.name || nulo,
       homeCrest: m.homeTeam?.crest || null,
       awayCrest: m.awayTeam?.crest || null,
-      kickoff: m.utcDate || null,
-      competition: m.competition?.name || m.competition?.code || null
+      inicio: m.utcDate || null,
+      competición: m.competition?.name || m.competition?.code || null
     })).sort((a, b) => new Date(a.kickoff) - new Date(b.kickoff));
 
-    const result = { ok: true, fixtures };
+    const resultado = { ok: true, fixtures };
     cacheSet(cacheKey, result, 'fixtures');
-    return res.json(result);
+    devolver res.json(resultado);
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
   }
@@ -1273,38 +1273,38 @@ app.get('/api/fixtures/favorites', async (req, res) => {
 
 app.get('/api/fixtures/next', async (req, res) => {
   const comp = String(req.query.competition || '').trim().toUpperCase();
-  if (!comp) {
-    return res.status(400).json({ ok: false, error: 'Debes indicar una liga espec\u00edfica.' });
+  si (!comp) {
+    return res.status(400).json({ ok: false, error: 'Debes indicar una liga específica.' });
   }
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const cacheKey = `next-fixture:${comp}:${todayStr}`;
   const cached = cacheGet(cacheKey);
-  if (cached) return res.json(cached);
+  si (cached) devuelve res.json(cached);
 
-  try {
+  intentar {
     let foundDate = null;
-    let foundCount = 0;
+    sea ​​foundCount = 0;
 
-    for (let offset = 0; offset < 45 && !foundDate; offset += 10) {
+    para (debe ser offset = 0; offset < 45 && !foundDate; offset += 10) {
       const from = addDaysToDateStr(todayStr, offset);
       const to = addDaysToDateStr(todayStr, Math.min(offset + 9, 44));
       const data = await footballData(`/competitions/${comp}/matches?dateFrom=${from}&dateTo=${to}`);
       const matches = Array.isArray(data?.matches) ? data.matches : [];
 
-      if (matches.length) {
+      si (coincide.longitud) {
         matches.sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate));
         foundDate = matches[0].utcDate.slice(0, 10);
         foundCount = matches.filter(m => m.utcDate.slice(0, 10) === foundDate).length;
       }
     }
 
-    const result = foundDate
-      ? { ok: true, found: true, date: foundDate, count: foundCount }
-      : { ok: true, found: false, message: 'No se encontraron partidos pr\u00f3ximos en 45 d\u00edas.' };
+    const resultado = fecha de hallazgo
+      ? { ok: verdadero, encontrado: verdadero, fecha: fechaEncontrada, cantidad: cantidadEncontrada }
+      : { ok: true, found: false, message: 'No se encontraron partidos próximos en 45 días.' };
 
-    cacheSet(cacheKey, result);
-    return res.json(result);
+    cacheSet(cacheKey, resultado);
+    devolver res.json(resultado);
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
   }
@@ -1314,31 +1314,31 @@ app.get('/api/fixtures', async (req, res) => {
   const date = String(req.query.date || '').trim() || new Date().toISOString().slice(0, 10);
   const comp = String(req.query.competition || '').trim().toUpperCase();
 
-  try {
+  intentar {
     const matches = await getFixture(date, comp);
     const fixtures = matches
       .filter(m => m?.homeTeam?.name && m?.awayTeam?.name)
       .map(m => ({
-        id: m.id || null,
-        home: m.homeTeam.name,
+        id: m.id || nulo,
+        Inicio: m.homeTeam.name,
         homeCrest: m.homeTeam?.crest || null,
-        away: m.awayTeam.name,
+        visitante: m.awayTeam.name,
         awayCrest: m.awayTeam?.crest || null,
-        kickoff: m.utcDate || null,
-        competition: m.competitionName || m.competition?.name || m.competitionCode || null,
-        competitionCode: m.competitionCode || m.competition?.code || null,
-        status: m.status || 'SCHEDULED',
-        source: m.source || 'football-data'
+        inicio: m.utcDate || null,
+        competición: m.competitionName || m.competition?.name || m.competitionCode || null,
+        código de competición: m.competitionCode || m.competition?.code || null,
+        estado: m.status || 'PROGRAMADO',
+        Fuente: m.source || 'datos de fútbol'
       }));
 
     const fetchedAt = cacheGetTimestamp(`fixtures:${date}:${comp || 'ALL'}`) || Date.now();
     return res.json({
-      ok: true,
-      modelVersion: MODEL_VERSION,
-      date,
-      count: fixtures.length,
-      fetchedAt,
-      fixtures
+      ok: verdadero,
+      Versión del modelo: VERSIÓN_DEL_MODELO,
+      fecha,
+      recuento: accesorios.longitud,
+      recuperadoEn,
+      accesorios
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message, modelVersion: MODEL_VERSION });
@@ -1346,39 +1346,39 @@ app.get('/api/fixtures', async (req, res) => {
 });
 
 /* =========================================================
-   AN\u00c1LISIS DE UN PARTIDO (con Descanso Propio + Home Advantage + Big Balls)
-========================================================= */
-async function analyzeOneFixture(fixture) {
+   ANÁLISIS DE UN PARTIDO (con Descanso Propio + Home Advantage + Big Balls)
+========================================================== */
+función asíncrona analyzeOneFixture(fixture) {
   const homeName = fixture.homeTeam?.name;
   const awayName = fixture.awayTeam?.name;
-  if (!homeName || !awayName) return null;
+  Si (!homeName || !awayName) devuelve null;
 
   const compCode = fixture.competitionCode || fixture.competition?.code || null;
   let homeTeamObj = fixture.homeTeam?.id ? fixture.homeTeam : null;
   let awayTeamObj = fixture.awayTeam?.id ? fixture.awayTeam : null;
 
-  if ((!homeTeamObj?.id || !awayTeamObj?.id) && compCode) {
+  si ((!homeTeamObj?.id || !awayTeamObj?.id) && compCode) {
     const [hObj, aObj] = await Promise.all([
-      findTeam(homeName, compCode),
-      findTeam(awayName, compCode)
+      encontrarEquipo(homeName, compCode),
+      encontrarEquipo(nombreAfuera, códigoComp)
     ]);
-    if (hObj) homeTeamObj = hObj;
-    if (aObj) awayTeamObj = aObj;
+    si (hObj) homeTeamObj = hObj;
+    si (aObj) awayTeamObj = aObj;
   }
 
-  const homeId = homeTeamObj?.id || null;
+  const homeId = homeTeamObj?.id || nulo;
   const awayId = awayTeamObj?.id || null;
-  if (!homeId || !awayId) return null;
+  Si (!homeId || !awayId) devuelve null;
 
   const [homeMatches, awayMatches] = await Promise.all([
-    getTeamRecentMatches(homeId),
-    getTeamRecentMatches(awayId)
+    obtenerPartidosRecientesDelEquipo(homeId),
+    obtenerPartidosRecientesDelEquipo(awayId)
   ]);
 
   let homeStats = calculateRecentTeamStats(homeId, homeMatches);
   let awayStats = calculateRecentTeamStats(awayId, awayMatches);
 
-  // Estabilizaci\u00f3n
+  // Estabilización
   const attackBase = 1.35;
   const defBase = 1.20;
   const hGF = shrinkToMean(homeStats.avgGoalsFor, attackBase, homeStats.matches);
@@ -1388,17 +1388,17 @@ async function analyzeOneFixture(fixture) {
 
   homeStats = {
     ...homeStats,
-    avgGoalsFor: hGF,
-    avgGoalsAgainst: hGA,
+    promedioGolesPara: hGF,
+    promedio de goles en contra: hGA,
     attackStrength: clamp(hGF / attackBase, 0.45, 1.8),
-    defenseStrength: clamp(attackBase / Math.max(hGA, 0.25), 0.45, 1.8)
+    defensaFuerza: clamp(ataqueBase / Math.max(hGA, 0.25), 0.45, 1.8)
   };
   awayStats = {
     ...awayStats,
     avgGoalsFor: aGF,
-    avgGoalsAgainst: aGA,
+    promedio de goles en contra: aGA,
     attackStrength: clamp(aGF / attackBase, 0.45, 1.8),
-    defenseStrength: clamp(attackBase / Math.max(aGA, 0.25), 0.45, 1.8)
+    defensaFuerza: clamp(ataqueBase / Math.max(aGA, 0.25), 0.45, 1.8)
   };
 
   // Lesionados
@@ -1413,140 +1413,140 @@ async function analyzeOneFixture(fixture) {
   homeStats = restAdj.homeStats;
   awayStats = restAdj.awayStats;
 
-  // 2. Modelo con Ventaja de Local ajustada por Liga
+  // 2. Modelo con Ventaja de Local ajustado por Liga
   const modelInput = createModelInput(homeStats, awayStats, compCode);
-  let model = matchModel(modelInput.homeXg, modelInput.awayXg);
+  let modelo = matchModel(modelInput.homeXg, modelInput.awayXg);
 
-  // H2H Hist\u00f3rico
+  // H2H Histôrico
   const [bbHomeTeamId, bbAwayTeamId] = await Promise.all([
-    getBigBallsTeamId(homeName, compCode),
-    getBigBallsTeamId(awayName, compCode)
+    obtenerBigBallsTeamId(homeName, compCode),
+    obtenerBigBallsTeamId(awayName, compCode)
   ]);
   const h2hDrawRate = await getH2HDrawRate(bbHomeTeamId, bbAwayTeamId);
-  model = applyH2HAdjustment(model, h2hDrawRate);
+  modelo = aplicarH2HAdjustment(modelo, h2hDrawRate);
 
-  // 3. Predicci\u00f3n Big Balls (Segunda Opini\u00f3n)
+  // 3. Predicción Big Balls (Segunda Opinión)
   const bbPred = await getBigBallsPrediction(homeName, awayName, compCode);
   const bbComparison = evaluateSecondOpinion(model, bbPred);
 
-  // Confianza propia matem\u00e1tica pura (sin adulteraci\u00f3n externa)
-  let modelConf = 50;
-  try {
+  // Confianza propia matemática pura (sin adulteración externa)
+  sea ​​modelConf = 50;
+  intentar {
     const bestP = Math.max(model.homeWin, model.draw, model.awayWin);
     const n = Math.min(homeStats.matches, awayStats.matches);
-    modelConf = confidence(bestP, n);
-  } catch (e) {
+    modelConf = confianza(bestP, n);
+  } capturar (e) {
     modelConf = 50;
   }
 
-  const confidenceAdjusted = clamp(Math.round(modelConf), 20, 95);
+  const confianzaAjustada = clamp(Math.round(modelConf), 20, 95);
 
-  // Aprendizaje emp\u00edrico de ventaja de local de la liga
-  updateLearnedHomeAdvantage(compCode, (homeMatches || []).concat(awayMatches || []));
+  // Aprendizaje emprico de ventaja de local de la liga
+  actualizarVentajaHomeAprendida(compCode, (homeMatches || []).concat(awayMatches || []));
 
   const odds = await getOdds(homeName, awayName, compCode);
   const markets = buildMarkets(model, odds, homeName, awayName);
 
-  return {
-    home: homeName,
+  devolver {
+    casa: homeName,
     homeCrest: homeTeamObj?.crest || fixture.homeCrest || null,
-    away: awayName,
+    lejos: awayName,
     awayCrest: awayTeamObj?.crest || fixture.awayCrest || null,
-    date: fixture.utcDate ? datePartUTC(fixture.utcDate) : null,
-    kickoff: fixture.utcDate || null,
-    competition: fixture.competitionName || fixture.competition?.name || compCode,
-    competitionCode: compCode,
-    confidence: confidenceAdjusted,
+    fecha: fixture.utcDate ? datePartUTC(fixture.utcDate) : null,
+    inicio: fixture.utcDate || null,
+    competición: fixture.competitionName || fixture.competition?.name || compCode,
+    Código de competición: código de competición,
+    confianza: confianzaAjustada,
     homeAdvantage: modelInput.homeAdvantage,
-    rest: { home: restAdj.homeRest, away: restAdj.awayRest },
-    injuries: { home: injuryAdj.homeInjuries, away: injuryAdj.awayInjuries },
+    descanso: { casa: restAdj.homeRest, fuera: restAdj.awayRest },
+    lesiones: { local: injuryAdj.homeInjuries, fuera: injuryAdj.awayInjuries },
     bigBallsComparison: bbComparison,
-    markets,
+    mercados,
     oddsAvailable: Boolean(odds?.available)
   };
 }
 
-function pickParlayCandidate(analysis) {
-  if (!analysis || !analysis.oddsAvailable) return null;
-  const candidates = [];
+función pickParlayCandidate(análisis) {
+  Si (!análisis || !análisis.probabilidadesDisponibles) devolver null;
+  const candidatos = [];
 
-  for (const m of analysis.markets) {
-    if (!m.bestOdds) continue;
+  para (const m de análisis.mercados) {
+    si (!m.bestOdds) continuar;
     const isStrong = m.valueEligible && Number(m.referenceEvPct) >= 1.5 && analysis.confidence >= 45;
     const isOddsError = m.isOutlier && m.referenceOdds && m.bestOdds > m.referenceOdds * 1.10 && Number(m.probability) >= 35;
 
-    if (isStrong || isOddsError) {
-      candidates.push({
-        home: analysis.home,
-        homeCrest: analysis.homeCrest,
-        away: analysis.away,
-        awayCrest: analysis.awayCrest,
-        competition: analysis.competition,
-        date: analysis.date,
-        kickoff: analysis.kickoff,
-        market: m.type,
-        outcome: m.outcome,
-        marketName: m.name,
-        odds: m.bestOdds,
-        probability: m.probability,
+    si (isStrong || isOddsError) {
+      candidatos.push({
+        Inicio: análisis.inicio,
+        homeCrest: análisis.homeCrest,
+        lejos: análisis.lejos,
+        awayCrest: análisis.awayCrest,
+        competencia: análisis.competencia,
+        fecha: análisis.fecha,
+        inicio: análisis.inicio,
+        mercado: m.type,
+        resultado: m.resultado,
+        Nombre del mercado: m.name,
+        probabilidades: m.bestOdds,
+        probabilidad: m.probabilidad,
         referenceEvPct: m.referenceEvPct,
-        confidence: analysis.confidence,
-        tag: isOddsError ? 'Posible error de cuota' : 'Pick fuerte'
+        confianza: análisis.confianza,
+        etiqueta: esOddsError? 'Posible error de cuota' : 'Pick fuerte'
       });
     }
   }
 
-  if (!candidates.length) return null;
-  candidates.sort((a, b) => Number(b.referenceEvPct || 0) - Number(a.referenceEvPct || 0));
-  return candidates[0];
+  Si (!candidates.length) devuelve null;
+  candidatos.sort((a, b) => Number(b.referenceEvPct || 0) - Number(a.referenceEvPct || 0));
+  devolver candidatos[0];
 }
 
 app.get('/api/parlay', async (req, res) => {
-  try {
+  intentar {
     const date = String(req.query.date || '').trim() || new Date().toISOString().slice(0, 10);
     const maxLegs = Math.min(6, Math.max(2, Number(req.query.legs) || 4));
     const comp = String(req.query.competition || '').trim().toUpperCase();
 
     const fixtures = await getFixture(date, comp);
     const withNames = fixtures.filter(m => m?.homeTeam?.name && m?.awayTeam?.name);
-    const candidates = [];
+    const candidatos = [];
 
-    for (const f of withNames) {
-      try {
-        const analysis = await analyzeOneFixture(f);
-        const pick = pickParlayCandidate(analysis);
-        if (pick) candidates.push(pick);
-      } catch (err) {
+    para (const f de withNames) {
+      intentar {
+        const análisis = esperar analizarUnArchivo(f);
+        const pick = pickParlayCandidate(análisis);
+        si (seleccionar) candidatos.push(seleccionar);
+      } capturar (error) {
         console.warn('[PARLAY] fallo analizando partido:', err.message);
       }
     }
 
-    candidates.sort((a, b) => Number(b.referenceEvPct || 0) - Number(a.referenceEvPct || 0));
+    candidatos.sort((a, b) => Number(b.referenceEvPct || 0) - Number(a.referenceEvPct || 0));
 
-    if (!candidates.length) {
+    si (!candidates.length) {
       return res.json({
-        ok: true,
-        date,
+        ok: verdadero,
+        fecha,
         stakeEur: STAKE_EUR,
-        candidates: [],
-        parlays: [],
-        message: 'No se detectaron picks fuertes ni errores de cuota para esta fecha.'
+        candidatos: [],
+        apuestas combinadas: [],
+        mensaje: 'No se detectaron picks fuertes ni errores de cuota para esta fecha.'
       });
     }
 
     const parlays = [];
-    for (let l = 2; l <= Math.min(maxLegs, candidates.length); l++) {
-      const legs = candidates.slice(0, l);
+    para (sea l = 2; l <= Math.min(maxLegs, candidates.length); l++) {
+      const piernas = candidatos.rebanar(0, l);
       const combinedOdds = legs.reduce((acc, leg) => acc * Number(leg.odds), 1);
       const combinedProb = legs.reduce((acc, leg) => acc * (Number(leg.probability) / 100), 1);
       const combinedEv = Number(((combinedProb * combinedOdds - 1) * 100).toFixed(1));
 
       parlays.push({
-        legsCount: l,
-        legs,
-        combinedOdds: Number(combinedOdds.toFixed(2)),
-        combinedProbabilityPct: Number((combinedProb * 100).toFixed(1)),
-        combinedEvPct: combinedEv
+        Número de piernas: l,
+        piernas,
+        Probabilidades combinadas: Número(probabilidades combinadas.toFixed(2)),
+        ProbabilidadCombinadaPct: Número((probabilidadCombinada * 100).toFijo(1)),
+        Ev combinado: Ev combinado
       });
     }
 
@@ -1557,30 +1557,30 @@ app.get('/api/parlay', async (req, res) => {
 });
 
 app.get('/api/analyze', async (req, res) => {
-  try {
+  intentar {
     const requestedHome = String(req.query.home || '').trim();
     const requestedAway = String(req.query.away || '').trim();
     const date = String(req.query.date || '').trim() || new Date().toISOString().slice(0, 10);
 
-    if (!requestedHome || !requestedAway) {
-      return res.status(400).json({ ok: false, error: 'Debes proporcionar home y away.' });
+    si (!solicitadoHome || !solicitadoAusente) {
+      return res.status(400).json({ ok: false, error: 'Debes proporcionar casa y fuera.' });
     }
 
     const fixtures = await getFixture(date);
-    let selected = fixtures.find(m =>
+    sea ​​seleccionado = fixtures.find(m =>
       namesMatch(m?.homeTeam?.name, requestedHome) && namesMatch(m?.awayTeam?.name, requestedAway)
     );
 
     let reversedRequest = false;
-    if (!selected) {
-      selected = fixtures.find(m =>
+    si (!seleccionado) {
+      seleccionado = accesorios.find(m =>
         namesMatch(m?.homeTeam?.name, requestedAway) && namesMatch(m?.awayTeam?.name, requestedHome)
       );
-      if (selected) reversedRequest = true;
+      si (seleccionado) reversedRequest = verdadero;
     }
 
-    if (!selected) {
-      return res.status(404).json({ ok: false, error: 'No se encontr\u00f3 el partido solicitado.', modelVersion: MODEL_VERSION });
+    si (!seleccionado) {
+      return res.status(404).json({ ok: false, error: 'No se encontró el partido solicitado.', modelVersion: MODEL_VERSION });
     }
 
     const actualHomeName = selected.homeTeam?.name || requestedHome;
@@ -1590,29 +1590,29 @@ app.get('/api/analyze', async (req, res) => {
     let homeTeamObj = selected.homeTeam?.id ? selected.homeTeam : null;
     let awayTeamObj = selected.awayTeam?.id ? selected.awayTeam : null;
 
-    if ((!homeTeamObj?.id || !awayTeamObj?.id) && competitionCode) {
+    si ((!homeTeamObj?.id || !awayTeamObj?.id) && competitionCode) {
       const [hObj, aObj] = await Promise.all([
-        findTeam(actualHomeName, competitionCode),
+        encontrarEquipo(actualHomeName, código de competición),
         findTeam(actualAwayName, competitionCode)
       ]);
-      if (hObj) homeTeamObj = hObj;
-      if (aObj) awayTeamObj = aObj;
+      si (hObj) homeTeamObj = hObj;
+      si (aObj) awayTeamObj = aObj;
     }
 
-    const homeId = homeTeamObj?.id || null;
+    const homeId = homeTeamObj?.id || nulo;
     const awayId = awayTeamObj?.id || null;
 
-    if (!homeId || !awayId) {
+    si (!homeId || !awayId) {
       return res.status(503).json({
-        ok: false,
-        error: 'Football-Data no pudo identificar uno de los equipos para estad\u00edsticas.',
-        modelVersion: MODEL_VERSION
+        ok: falso,
+        error: 'Football-Data no pudo identificar uno de los equipos para estadísticas.',
+        Versión del modelo: VERSIÓN_DEL_MODELO
       });
     }
 
     const [homeMatches, awayMatches] = await Promise.all([
-      getTeamRecentMatches(homeId),
-      getTeamRecentMatches(awayId)
+      obtenerPartidosRecientesDelEquipo(homeId),
+      obtenerPartidosRecientesDelEquipo(awayId)
     ]);
 
     let homeStats = calculateRecentTeamStats(homeId, homeMatches);
@@ -1620,7 +1620,7 @@ app.get('/api/analyze', async (req, res) => {
 
     // Shrinkage hacia la media
     const attackBaseline = 1.35;
-    const defenseBaseline = 1.20;
+    const defensaBaseline = 1.20;
     const homeGF = shrinkToMean(homeStats.avgGoalsFor, attackBaseline, homeStats.matches);
     const homeGA = shrinkToMean(homeStats.avgGoalsAgainst, defenseBaseline, homeStats.matches);
     const awayGF = shrinkToMean(awayStats.avgGoalsFor, attackBaseline, awayStats.matches);
@@ -1628,17 +1628,17 @@ app.get('/api/analyze', async (req, res) => {
 
     homeStats = {
       ...homeStats,
-      avgGoalsFor: homeGF,
-      avgGoalsAgainst: homeGA,
+      promedioGolesPara: homeGF,
+      promedio de goles en contra: homeGA,
       attackStrength: clamp(homeGF / attackBaseline, 0.45, 1.8),
-      defenseStrength: clamp(attackBaseline / Math.max(homeGA, 0.25), 0.45, 1.8)
+      defensaFuerza: clamp(ataqueBaseline / Math.max(homeGA, 0.25), 0.45, 1.8)
     };
     awayStats = {
       ...awayStats,
-      avgGoalsFor: awayGF,
-      avgGoalsAgainst: awayGA,
+      promedioGolesPara: visitanteGF,
+      promedio de goles en contra: visitanteGA,
       attackStrength: clamp(awayGF / attackBaseline, 0.45, 1.8),
-      defenseStrength: clamp(attackBaseline / Math.max(awayGA, 0.25), 0.45, 1.8)
+      defensaFuerza: clamp(ataqueBaseline / Math.max(awayGA, 0.25), 0.45, 1.8)
     };
 
     // Lesionados (Big Balls)
@@ -1653,181 +1653,181 @@ app.get('/api/analyze', async (req, res) => {
     homeStats = restAdjusted.homeStats;
     awayStats = restAdjusted.awayStats;
 
-    // 2. Modelo con Ventaja de Local ajustada por Liga
+    // 2. Modelo con Ventaja de Local ajustado por Liga
     const modelInput = createModelInput(homeStats, awayStats, competitionCode);
-    let model = matchModel(modelInput.homeXg, modelInput.awayXg);
+    let modelo = matchModel(modelInput.homeXg, modelInput.awayXg);
 
-    // H2H
+    // Cara a cara
     const [bbHomeTeamId, bbAwayTeamId] = await Promise.all([
-      getBigBallsTeamId(actualHomeName, competitionCode),
-      getBigBallsTeamId(actualAwayName, competitionCode)
+      obtenerBigBallsTeamId(actualHomeName, competitionCode),
+      obtenerBigBallsTeamId(actualAwayName, competitionCode)
     ]);
     const h2hDrawRate = await getH2HDrawRate(bbHomeTeamId, bbAwayTeamId);
-    model = applyH2HAdjustment(model, h2hDrawRate);
+    modelo = aplicarH2HAdjustment(modelo, h2hDrawRate);
 
-    // 3. Predicci\u00f3n Big Balls (Segunda Opini\u00f3n)
+    // 3. Predicción Big Balls (Segunda Opinión)
     const bbPrediction = await getBigBallsPrediction(actualHomeName, actualAwayName, competitionCode);
     const bbComparison = evaluateSecondOpinion(model, bbPrediction);
 
-    // Confianza base matem\u00e1tica aut\u00f3noma
-    let modelConfidence = 50;
-    try {
-      const bestProbability = Math.max(model.homeWin, model.draw, model.awayWin);
+    // Confianza base matemática autónoma
+    sea ​​modelConfidence = 50;
+    intentar {
+      const mejorProbabilidad = Math.max(modelo.victoriaencasa, modelo.draw, modelo.victoriafuera);
       const confidenceSampleSize = Math.min(homeStats.matches, awayStats.matches);
-      modelConfidence = confidence(bestProbability, confidenceSampleSize);
-    } catch (e) {
-      modelConfidence = 50;
+      confianza del modelo = confianza(mejor probabilidad, tamaño de la muestra de confianza);
+    } capturar (e) {
+      confianza del modelo = 50;
     }
 
-    const confidenceAdjusted = clamp(Math.round(modelConfidence), 20, 95);
+    const confianzaAjustada = clamp(Math.round(confianzaModelo), 20, 95);
 
     // Actualizar ventaja de local aprendida
-    updateLearnedHomeAdvantage(competitionCode, (homeMatches || []).concat(awayMatches || []));
+    actualizarVentajaLocalAprendida(códigoCompetición, (partidosLocales || []).concatenar(partidosAfuera || []));
 
     // Cuotas reales
     const odds = await getOdds(actualHomeName, actualAwayName, competitionCode);
     const markets = buildMarkets(model, odds, actualHomeName, actualAwayName);
-    const value = bestValue(markets, confidenceAdjusted);
+    const valor = mejorValor(mercados, confianzaAjustada);
 
-    const betEligible = Boolean(value);
-    const recommendation = betEligible ? value.name : 'NO BET';
-    const reason = betEligible
+    const betEligible = Boolean(valor);
+    const recomendación = betEligible ? valor.nombre : 'NO APUESTA';
+    const razón = betEligible
       ? `El modelo detecta valor respaldado por el mercado con ${Number(value.probability).toFixed(1)}% de probabilidad y EV de mercado de ${Number(value.referenceEvPct).toFixed(1)}%.`
-      : 'No existe una oportunidad de valor positiva que cumpla los filtros actuales de probabilidad, EV, confianza y respaldo del mercado.';
+      : 'No existe una oportunidad de valor positiva que cumpla los actuales filtros de probabilidad, EV, confianza y respaldo del mercado.';
 
     const confidenceLevel = confidenceAdjusted >= 75 ? 'Alta' : (confidenceAdjusted >= 60 ? 'Media' : 'Baja');
-    const confidenceExplanation = confidenceAdjusted >= 75
-      ? 'Se\u00f1al estad\u00edstica fuerte respaldada por m\u00e9tricas s\u00f3lidas.'
-      : (confidenceAdjusted >= 60 ? 'Se\u00f1al moderada. Recomendada gesti\u00f3n de banca disciplinada.' : 'Se\u00f1al insuficiente para recomendar apuesta de alto riesgo.');
+    const confianzaExplicación = confianzaAjustada >= 75
+      ? 'Señal estadística fuerte respaldada por métricas sólidas.'
+      : (confidenceAdjusted >= 60 ? 'Seal moderada. Recomendada gestión de banca disciplinada.' : 'Seal insuficiente para recomendar apuesta de alto riesgo.');
 
     const score = mostLikelyScore(modelInput.homeXg, modelInput.awayXg);
 
     return res.json({
-      ok: true,
-      modelVersion: MODEL_VERSION,
-      match: {
+      ok: verdadero,
+      Versión del modelo: VERSIÓN_DEL_MODELO,
+      fósforo: {
         id: selected.id || null,
-        home: actualHomeName,
+        casa: nombredecasaactual,
         homeCrest: homeTeamObj?.crest || selected.homeTeam?.crest || null,
-        away: actualAwayName,
+        fuera: nombreactualdefuera,
         awayCrest: awayTeamObj?.crest || selected.awayTeam?.crest || null,
-        date,
-        kickoff: selected.utcDate || null,
-        competition: selected.competitionName || selected.competition?.name || competitionCode,
-        competitionCode
+        fecha,
+        inicio: seleccionado.utcDate || nulo,
+        competición: selected.competitionName || selected.competition?.name || competitionCode,
+        Código de competición
       },
-      recommendation,
-      reason,
-      betEligible,
-      strength: value?.valueLevel || 'Sin valor',
-      homeAdvantage: {
+      recomendación,
+      razón,
+      Elegible para apuestas,
+      fuerza: valor?.valorNivel || 'Sin valor',
+      homeVentaja: {
         factor: modelInput.homeAdvantage,
-        league: competitionCode,
-        description: `Ventaja de local ajustada para ${competitionName(competitionCode)} (${modelInput.homeAdvantage}x)`
+        liga: código de competición,
+        descripción: `Ventaja de local ajustada para ${competitionName(competitionCode)} (${modelInput.homeAdvantage}x)`
       },
-      rest: {
-        home: restAdjusted.homeRest,
-        away: restAdjusted.awayRest
+      descansar: {
+        inicio: restAjustado.homeDescanso,
+        lejos: restAjustado.lejosRest
       },
-      recentForm: { home: homeStats, away: awayStats },
-      averages: {
-        home: { goalsFor: Number(homeStats.avgGoalsFor.toFixed(2)), goalsAgainst: Number(homeStats.avgGoalsAgainst.toFixed(2)) },
-        away: { goalsFor: Number(awayStats.avgGoalsFor.toFixed(2)), goalsAgainst: Number(awayStats.avgGoalsAgainst.toFixed(2)) }
+      formulario reciente: { home: homeStats, away: awayStats },
+      promedios: {
+        inicio: { golesA favor: Número(homeStats.avgGoalsA favor.toFixed(2)), goles en contra: Número(homeStats.avgGoalsAgainst.toFixed(2)) },
+        fuera: { golesA favor: Número(awayStats.avgGoalsFor.toFixed(2)), golesEn contra: Número(awayStats.avgGoalsAgainst.toFixed(2)) }
       },
       xG: {
-        home: Number(modelInput.homeXg.toFixed(2)),
-        away: Number(modelInput.awayXg.toFixed(2)),
+        inicio: Número(modelInput.homeXg.toFixed(2)),
+        lejos: Número(modelInput.awayXg.toFixed(2)),
         total: Number((modelInput.homeXg + modelInput.awayXg).toFixed(2))
       },
-      mostLikelyScore: score,
-      probabilities: {
-        homeWin: Number((model.homeWin * 100).toFixed(1)),
-        draw: Number((model.draw * 100).toFixed(1)),
-        awayWin: Number((model.awayWin * 100).toFixed(1)),
-        over25: Number((model.over25 * 100).toFixed(1)),
-        under25: Number((model.under25 * 100).toFixed(1)),
-        btts: Number((model.btts * 100).toFixed(1))
+      Puntuación más probable: puntuación,
+      probabilidades: {
+        homeWin: Número((modelo.homeWin * 100).toFixed(1)),
+        dibujar: Número((modelo.dibujar * 100).toFixed(1)),
+        awayWin: Número((modelo.awayWin * 100).toFixed(1)),
+        mayores de 25: Número((modelo.mayores de 25 * 100).toFijo(1)),
+        menores de 25: Número((modelo.menores de 25 * 100).toFijo(1)),
+        btts: Número((model.btts * 100).toFixed(1))
       },
-      markets,
+      mercados,
       oddsAvailable: Boolean(odds?.available),
       oddsReason: odds?.available ? null : (odds?.reason || null),
-      bestValue: value || null,
-      confidence: confidenceAdjusted,
-      confidenceLevel,
-      confidenceExplanation,
+      mejorValor: valor || nulo,
+      confianza: confianzaAjustada,
+      Nivel de confianza,
+      ConfianzaExplicación,
       bigBallsComparison: bbComparison,
       stakeEur: STAKE_EUR,
-      diagnostics: {
+      diagnóstico: {
         fixtureSource: selected.source || 'football-data',
-        competitionCode,
+        Código de competición,
         homeTeamId: homeId,
         awayTeamId: awayId,
-        homeInjuries: injuryAdjusted.homeInjuries,
-        awayInjuries: injuryAdjusted.awayInjuries,
-        homeRestDays,
-        awayRestDays,
+        homeLesiones: lesiónAjustada.homeLesiones,
+        Lesiones fuera de casa: lesiónAjustada.Lesiones fuera de casa,
+        Días de descanso en casa,
+        días de descanso fuera,
         homeAdvantageFactor: modelInput.homeAdvantage
       }
     });
   } catch (error) {
-    console.error('ANALYZE ERROR:', error);
+    console.error('ERROR DE ANÁLISIS:', error);
     return res.status(500).json({ ok: false, error: error.message, modelVersion: MODEL_VERSION });
   }
 });
 
 /* =========================================================
-   BACKTESTING & CALIBRACI\u00d3N ESTAD\u00cdSTICA (V8.1 Foundation)
-   Calcula Brier Score, Log Loss, precisi\u00f3n 1X2 y calibraci\u00f3n
+   BACKTESTING & CALIBRACIÑN ESTADÚSTICA (V8.1 Foundation)
+   Calcular la puntuación de Brier, pérdida logarítmica, precisión 1X2 y calibración
    por tramos con resultados reales de Football-Data.
-========================================================= */
+========================================================== */
 app.get('/api/backtest', async (req, res) => {
   const comp = String(req.query.competition || 'PD').trim().toUpperCase();
   const limit = Math.min(50, Math.max(10, Number(req.query.limit) || 25));
   const cacheKey = `backtest:${comp}:${limit}`;
   const cached = cacheGet(cacheKey);
-  if (cached) return res.json(cached);
+  si (cached) devuelve res.json(cached);
 
-  try {
-    const today = new Date().toISOString().slice(0, 10);
+  intentar {
+    const hoy = new Date().toISOString().slice(0, 10);
     const pastFrom = addDaysToDateStr(today, -35);
     const data = await footballData(`/competitions/${comp}/matches?dateFrom=${pastFrom}&dateTo=${today}&status=FINISHED`);
     const matches = (Array.isArray(data?.matches) ? data.matches : []).slice(-limit);
 
-    if (matches.length < 5) {
+    Si (matches.length < 5) {
       return res.json({
-        ok: true,
-        modelVersion: MODEL_VERSION,
-        competition: comp,
-        evaluatedMatches: matches.length,
-        message: 'No hay suficientes partidos hist\u00f3ricos finalizados en este periodo para calcular m\u00e9tricas.',
-        metrics: null
+        ok: verdadero,
+        Versión del modelo: VERSIÓN_DEL_MODELO,
+        competición: comp,
+        EvaluadosCoincidencias: coincidencias.longitud,
+        mensaje: 'No hay suficientes partidos históricos finalizados en este período para calcular métricas.',
+        métricas: nulo
       });
     }
 
-    let brierSum = 0;
-    let logLossSum = 0;
-    let correct1X2 = 0;
-    let totalEvaluated = 0;
-    let simulatedPnl = 0;
+    sea ​​zarzasSum = 0;
+    sea ​​logLossSum = 0;
+    sea ​​correct1X2 = 0;
+    sea ​​totalEvaluado = 0;
+    sea ​​simulatedPnl = 0;
 
-    const bins = {
+    const contenedores = {
       '40-55': { count: 0, predictedSum: 0, actualWins: 0 },
       '55-65': { count: 0, predictedSum: 0, actualWins: 0 },
       '65-75': { count: 0, predictedSum: 0, actualWins: 0 },
       '75+': { count: 0, predictedSum: 0, actualWins: 0 }
     };
 
-    for (const m of matches) {
+    para (const m de coincidencias) {
       const hGoals = Number(m.score?.fullTime?.home);
       const aGoals = Number(m.score?.fullTime?.away);
-      if (!Number.isFinite(hGoals) || !Number.isFinite(aGoals)) continue;
+      Si (!Number.isFinite(hGoals) || !Number.isFinite(aGoals)) continuar;
 
-      const actualResult = hGoals > aGoals ? 'home' : (hGoals === aGoals ? 'draw' : 'away');
+      const actualResult = hGoals > aGoals ? 'local' : (hGoals === aGoals ? 'empate' : 'visitante');
       const yH = actualResult === 'home' ? 1 : 0;
       const yD = actualResult === 'draw' ? 1 : 0;
       const yA = actualResult === 'away' ? 1 : 0;
 
-      const hAdv = getHomeAdvantage(comp);
+      const hAdv = obtenerVentajaHome(comp);
       const estimatedHXg = clamp(1.4 * hAdv, 0.4, 3.2);
       const estimatedAXg = clamp(1.15, 0.3, 2.8);
       const pred = matchModel(estimatedHXg, estimatedAXg);
@@ -1836,176 +1836,176 @@ app.get('/api/backtest', async (req, res) => {
       const pD = pred.draw;
       const pA = pred.awayWin;
 
-      // Multi-class Brier Score: (pH - yH)^2 + (pD - yD)^2 + (pA - yA)^2
+      // Puntuación Brier multiclase: (pH - yH)^2 + (pD - yD)^2 + (pA - yA)^2
       const brier = Math.pow(pH - yH, 2) + Math.pow(pD - yD, 2) + Math.pow(pA - yA, 2);
-      brierSum += brier;
+      zarzaSuma += zarza;
 
-      // Log Loss
+      // Pérdida de registro
       const probTarget = actualResult === 'home' ? pH : (actualResult === 'draw' ? pD : pA);
       logLossSum += -Math.log(Math.max(0.001, probTarget));
 
-      // Pron\u00f3stico favorito del modelo
-      const predictedWinner = (pH > pD && pH > pA) ? 'home' : (pA > pH && pA > pD ? 'away' : 'draw');
+      // Pronóstico favorito del modelo
+      const predictedWinner = (pH > pD && pH > pA) ? 'local' : (pA > pH && pA > pD ? 'visitante' : 'empate');
       const maxP = Math.max(pH, pD, pA);
       const maxPPct = maxP * 100;
 
-      if (predictedWinner === actualResult) {
-        correct1X2++;
+      si (ganador_predicho === resultado_actual) {
+        correcto1X2++;
       }
 
       let binKey = '40-55';
-      if (maxPPct >= 75) binKey = '75+';
+      Si (maxPPct >= 75) binKey = '75+';
       else if (maxPPct >= 65) binKey = '65-75';
       else if (maxPPct >= 55) binKey = '55-65';
 
-      bins[binKey].count++;
+      contenedores[claveBin].count++;
       bins[binKey].predictedSum += maxPPct;
-      if (predictedWinner === actualResult) {
-        bins[binKey].actualWins++;
+      si (ganador_predicho === resultado_actual) {
+        contenedores[binKey].victorias++;
       }
 
       const fairOdds = 1 / Math.max(0.05, maxP);
-      if (predictedWinner === actualResult) {
-        simulatedPnl += (fairOdds - 1) * 10;
-      } else {
-        simulatedPnl -= 10;
+      si (ganador_predicho === resultado_actual) {
+        ganancias simuladas += (probabilidades justas - 1) * 10;
+      } demás {
+        Pnl simulado -= 10;
       }
 
-      totalEvaluated++;
+      totalEvaluado++;
     }
 
-    const avgBrier = totalEvaluated > 0 ? Number((brierSum / totalEvaluated).toFixed(4)) : null;
+    const avgBrier = totalEvaluado > 0? Número((brierSum / totalEvaluated).toFixed(4)): nulo;
     const avgLogLoss = totalEvaluated > 0 ? Number((logLossSum / totalEvaluated).toFixed(4)) : null;
     const accuracyPct = totalEvaluated > 0 ? Number(((correct1X2 / totalEvaluated) * 100).toFixed(1)) : null;
     const roiPct = totalEvaluated > 0 ? Number(((simulatedPnl / (totalEvaluated * 10)) * 100).toFixed(1)) : null;
 
     const calibrationReport = Object.entries(bins).map(([binName, b]) => ({
-      range: binName,
-      matches: b.count,
+      rango: binName,
+      coincidencias: b.count,
       avgPredictedPct: b.count > 0 ? Number((b.predictedSum / b.count).toFixed(1)) : 0,
       actualWinRatePct: b.count > 0 ? Number(((b.actualWins / b.count) * 100).toFixed(1)) : 0,
-      gap: b.count > 0 ? Number(((b.actualWins / b.count) * 100 - (b.predictedSum / b.count)).toFixed(1)) : 0
+      brecha: b.count > 0 ? Number(((b.actualWins / b.count) * 100 - (b.predictedSum / b.count)).toFixed(1)) : 0
     }));
 
-    const result = {
-      ok: true,
-      modelVersion: MODEL_VERSION,
-      competition: comp,
-      evaluatedMatches: totalEvaluated,
-      metrics: {
-        brierScore: avgBrier,
-        logLoss: avgLogLoss,
-        accuracy1X2Pct: accuracyPct,
-        simulatedPnlEur: Number(simulatedPnl.toFixed(2)),
-        simulatedRoiPct: roiPct,
-        calibration: calibrationReport
+    const resultado = {
+      ok: verdadero,
+      Versión del modelo: VERSIÓN_DEL_MODELO,
+      competición: comp,
+      Partidos evaluados: totalEvaluado,
+      métricas: {
+        Puntuación de brier: promedio de brier,
+        Pérdida de registro: Pérdida de registro promedio,
+        precisión1X2Pct: precisiónPct,
+        simuladoPnlEur: Número(simulatedPnl.toFixed(2)),
+        Porcentaje de ROI simulado: porcentaje de ROI,
+        calibración: informe de calibración
       }
     };
 
     cacheSet(cacheKey, result, 'analysis');
-    res.json(result);
-  } catch (err) {
+    res.json(resultado);
+  } capturar (error) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
 /* =========================================================
    SIMULADOR DE APUESTAS & AUTO-SETTLE
-========================================================= */
-function requireDb(res) {
-  if (!pool) {
+========================================================== */
+función requireDb(res) {
+  si (!pool) {
     res.status(503).json({
-      ok: false,
-      error: 'La base de datos PostgreSQL no est\u00e1 configurada (DATABASE_URL).'
+      ok: falso,
+      error: 'La base de datos PostgreSQL no está configurada (DATABASE_URL).'
     });
-    return false;
+    devolver falso;
   }
-  return true;
+  devolver verdadero;
 }
 
-function computeProfit(status, stakeEur, oddsValue) {
+función computeProfit(estado, stakeEur, oddsValue) {
   const stake = Number(stakeEur) || 0;
   const odds = Number(oddsValue) || 0;
   if (status === 'won') return Number((stake * (odds - 1)).toFixed(2));
   if (status === 'lost') return Number((-stake).toFixed(2));
-  return 0;
+  devolver 0;
 }
 
-function evaluateMarketResult(market, outcome, homeGoals, awayGoals) {
-  if (market === 'h2h') {
-    if (outcome === 'home') return homeGoals > awayGoals ? 'won' : 'lost';
-    if (outcome === 'draw') return homeGoals === awayGoals ? 'won' : 'lost';
-    if (outcome === 'away') return awayGoals > homeGoals ? 'won' : 'lost';
+función evaluarResultadoMercado(mercado, resultado, goleslocales, golesafuera) {
+  si (mercado === 'h2h') {
+    si (resultado === 'local') devolver homeGoals > awayGoals ? 'ganado' : 'perdido';
+    if (resultado === 'empate') return homeGoals === awayGoals ? 'ganado' : 'perdido';
+    si (resultado === 'fuera') devolver Golesfuera > Goleslocales ? 'ganado' : 'perdido';
   }
-  if (market === 'totals') {
-    const total = homeGoals + awayGoals;
-    if (outcome === 'over') return total >= 3 ? 'won' : 'lost';
-    if (outcome === 'under') return total < 3 ? 'won' : 'lost';
+  si (mercado === 'totales') {
+    const total = Goleslocales + Golesvisitantes;
+    if (resultado === 'over') return total >= 3 ? 'ganado' : 'perdido';
+    if (resultado === 'menos de') return total < 3 ? 'ganó' : 'perdió';
   }
-  return null;
+  devolver nulo;
 }
 
-async function getMatchResult(home, away, dateStr) {
-  if (!dateStr) return null;
-  try {
+función asíncrona getMatchResult(home, away, dateStr) {
+  Si (!dateStr) devuelve null;
+  intentar {
     const matches = await getFixturesFootballData(dateStr);
-    const found = matches.find(m => namesMatch(m?.homeTeam?.name, home) && namesMatch(m?.awayTeam?.name, away));
-    if (!found || found.status !== 'FINISHED') return null;
+    const encontrado = coincidencias.find(m => namesMatch(m?.homeTeam?.name, home) && namesMatch(m?.awayTeam?.name, away));
+    Si (!encontrado || encontrado.estado !== 'FINALIZADO') devolver null;
     const hg = Number(found?.score?.fullTime?.home);
     const ag = Number(found?.score?.fullTime?.away);
-    if (!Number.isFinite(hg) || !Number.isFinite(ag)) return null;
+    Si (!Number.isFinite(hg) || !Number.isFinite(ag)) devuelve null;
     return { finished: true, homeGoals: hg, awayGoals: ag };
-  } catch (e) {
-    return null;
+  } capturar (e) {
+    devolver nulo;
   }
 }
 
-async function autoSettlePendingBets() {
-  if (!pool) return { settled: 0 };
-  let settledCount = 0;
-  try {
+función asíncrona autoSettlePendingBets() {
+  si (!pool) devuelve { settle: 0 };
+  sea ​​settleCount = 0;
+  intentar {
     const pendingResult = await pool.query(
       `SELECT * FROM simulated_bets WHERE status = 'pending' AND market != 'parlay' AND match_date IS NOT NULL LIMIT 200`
     );
-    for (const bet of pendingResult.rows) {
+    para (const bet de pendingResult.rows) {
       const matchDate = bet.match_date instanceof Date ? bet.match_date.toISOString().slice(0, 10) : String(bet.match_date).slice(0, 10);
       const res = await getMatchResult(bet.home, bet.away, matchDate);
-      if (!res) continue;
+      si (!res) continuar;
       const st = evaluateMarketResult(bet.market, bet.outcome, res.homeGoals, res.awayGoals);
-      if (!st) continue;
+      si (!st) continuar;
       const profit = computeProfit(st, bet.stake_eur, bet.odds);
-      await pool.query(`UPDATE simulated_bets SET status = $1, profit_eur = $2, settled_at = now() WHERE id = $3`, [st, profit, bet.id]);
-      settledCount++;
+      await pool.query(`UPDATE simulated_bets SET status = $1, profit_eur = $2, settle_at = now() WHERE id = $3`, [st, profit, bet.id]);
+      recuento establecido++;
     }
-  } catch (e) {}
-  return { settled: settledCount };
+  } capturar (e) {}
+  devolver { settle: settleCount };
 }
 
 app.post('/api/bets/auto-settle', async (req, res) => {
-  if (!requireDb(res)) return;
-  try {
-    const result = await autoSettlePendingBets();
-    return res.json({ ok: true, ...result });
+  si (!requireDb(res)) regresar;
+  intentar {
+    const resultado = await autoSettlePendingBets();
+    return res.json({ ok: true, ...resultado });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
   }
 });
 
 app.post('/api/bets', async (req, res) => {
-  if (!requireDb(res)) return;
-  try {
+  si (!requireDb(res)) regresar;
+  intentar {
     const { home, away, date, competition, market, outcome, marketName, odds, probability, legs, stakeEur } = req.body || {};
-    if (!home || !away || !market || !outcome || !odds) {
+    si (!casa || !fuera || !mercado || !resultado || !probabilidades) {
       return res.status(400).json({ ok: false, error: 'Faltan datos de la apuesta.' });
     }
     const legsJson = Array.isArray(legs) && legs.length ? JSON.stringify(legs) : null;
     const finalStake = Number.isFinite(Number(stakeEur)) ? clamp(Number(stakeEur), STAKE_EUR * 0.5, STAKE_EUR * 3) : STAKE_EUR;
 
-    const result = await pool.query(
-      `INSERT INTO simulated_bets
-        (match_date, home, away, competition, market, outcome, market_name, odds, model_probability, stake_eur, status, legs_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11) RETURNING *`,
-      [date || null, home, away, competition || null, market, outcome, marketName || market, Number(odds), probability != null ? Number(probability) : null, finalStake, legsJson]
+    const resultado = esperar pool.consulta(
+      `INSERTAR EN apuestas_simuladas
+        (fecha_partido, local, visitante, competición, mercado, resultado, nombre_mercado, probabilidades, probabilidad_modelo, apuesta_eur, estado, piernas_json)
+       VALORES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pendiente',$11) DEVOLVIENDO *`,
+      [fecha || nulo, local, visitante, competición || nulo, mercado, resultado, nombremercado || mercado, Número(probabilidades), probabilidad != nulo ? Número(probabilidad) : nulo, apuestafinal, piernasJson]
     );
     return res.json({ ok: true, bet: result.rows[0] });
   } catch (error) {
@@ -2014,8 +2014,8 @@ app.post('/api/bets', async (req, res) => {
 });
 
 app.get('/api/bets', async (req, res) => {
-  if (!requireDb(res)) return;
-  try {
+  si (!requireDb(res)) regresar;
+  intentar {
     const period = String(req.query.period || '').trim();
     const conds = [];
     if (period === 'week') conds.push(`created_at >= now() - interval '7 days'`);
@@ -2029,20 +2029,20 @@ app.get('/api/bets', async (req, res) => {
 });
 
 app.post('/api/bets/:id/settle', async (req, res) => {
-  if (!requireDb(res)) return;
-  try {
+  si (!requireDb(res)) regresar;
+  intentar {
     const id = Number(req.params.id);
-    const result = Array.isArray(req.body?.result) ? req.body.result[0] : req.body?.result;
-    if (!['won', 'lost', 'void'].includes(result)) {
-      return res.status(400).json({ ok: false, error: "El resultado debe ser 'won', 'lost' o 'void'." });
+    const resultado = Array.isArray(req.body?.resultado) ? req.body.resultado[0] : req.body?.resultado;
+    if (!['ganó', 'perdió', 'vacío'].includes(resultado)) {
+      return res.status(400).json({ ok: false, error: "El resultado debe ser 'ganado', 'perdido' o 'void'." });
     }
     const existing = await pool.query('SELECT * FROM simulated_bets WHERE id = $1', [id]);
     if (!existing.rows.length) return res.status(404).json({ ok: false, error: 'Apuesta no encontrada.' });
     const bet = existing.rows[0];
-    const profit = computeProfit(result, bet.stake_eur, bet.odds);
-    const updated = await pool.query(
-      `UPDATE simulated_bets SET status = $1, profit_eur = $2, settled_at = now() WHERE id = $3 RETURNING *`,
-      [result, profit, id]
+    const beneficio = calcularBeneficio(resultado, apuesta.apuesta_eur, apuesta.probabilidades);
+    const actualizado = esperar pool.query(
+      `ACTUALIZAR apuestas_simuladas ESTABLECER estado = $1, beneficio_eur = $2, liquidado_en = ahora() DONDE id = $3 DEVOLVER *`,
+      [resultado, beneficio, id]
     );
     return res.json({ ok: true, bet: updated.rows[0] });
   } catch (error) {
@@ -2051,33 +2051,33 @@ app.post('/api/bets/:id/settle', async (req, res) => {
 });
 
 app.get('/api/bets/summary', async (req, res) => {
-  if (!requireDb(res)) return;
-  try {
+  si (!requireDb(res)) regresar;
+  intentar {
     const period = String(req.query.period || 'month').trim();
-    const interval = period === 'week' ? '7 days' : '30 days';
+    const intervalo = período === 'semana' ? '7 días' : '30 días';
 
-    const result = await pool.query(
+    const resultado = esperar pool.consulta(
       `SELECT status, COUNT(*)::int AS count, COALESCE(SUM(profit_eur), 0)::float AS profit, COALESCE(SUM(stake_eur), 0)::float AS staked
        FROM simulated_bets WHERE created_at >= now() - interval '${interval}' GROUP BY status`
     );
 
-    const summary = { pending: 0, won: 0, lost: 0, void: 0, totalProfitEur: 0, totalStakedEur: 0 };
-    for (const r of result.rows) {
+    const resumen = { pendiente: 0, ganado: 0, perdido: 0, vacío: 0, beneficio totalEur: 0, totalApostadoEur: 0 };
+    para (const r de result.rows) {
       if (summary[r.status] !== undefined) summary[r.status] = r.count;
-      summary.totalProfitEur += r.profit;
-      summary.totalStakedEur += r.staked;
+      resumen.totalProfitEur += r.profit;
+      resumen.totalStakedEur += r.staked;
     }
-    const settled = summary.won + summary.lost;
-    const accuracy = settled > 0 ? Number(((summary.won / settled) * 100).toFixed(1)) : null;
+    const settle = summary.won + summary.lost;
+    const accuracy = settlement > 0 ? Number(((summary.won / settlement) * 100).toFixed(1)) : null;
 
     return res.json({
-      ok: true,
-      period,
-      ...summary,
-      settledCount: settled,
-      accuracyPct: accuracy,
-      totalProfitEur: Number(summary.totalProfitEur.toFixed(2)),
-      totalStakedEur: Number(summary.totalStakedEur.toFixed(2))
+      ok: verdadero,
+      período,
+      ...resumen,
+      recuento de asentamientos: asentamientos,
+      precisión%: precisión,
+      totalProfitEur: Número(summary.totalProfitEur.toFixed(2)),
+      totalStakedEur: Número(summary.totalStakedEur.toFixed(2))
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
@@ -2085,252 +2085,252 @@ app.get('/api/bets/summary', async (req, res) => {
 });
 
 /* =========================================================
-   FRONTEND - RENDER PAGE (V7.17.0)
+   FRONTEND - RENDERIZADO DE PÁGINA (V7.17.0)
    Incluye:
    - Banner VS con escudos grandes
    - Medidor circular SVG de confianza
    - Skeletons animados de carga
    - Descanso propio gratis
-   - Ventaja local ajustada
-   - Segunda opini\u00f3n Big Balls
-   - Favicon embebido e \u00edcono
-========================================================= */
-function renderPage() {
-  return `<!DOCTYPE html>
+   - Ventaja local ajustado
+   - Segunda opinión Big Balls
+   - Favicon embebido e ícono
+========================================================== */
+función renderPage() {
+  devolver `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
-<title>MK Bets V8.0.0 - Pron&#243;sticos Deportivos</title>
+<title>MK Bets V8.0.0 - Prónicos Deportivos</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 90' style='background:%23080b10'%3E%3Cpolyline points='10,80 10,10 45,55 80,10 80,80' fill='none' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='8' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='82' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3C/svg%3E">
 
 <style>
 *{box-sizing:border-box;}
-body{
-  margin:0;
+cuerpo{
+  margen:0;
   font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  background:#080b10;
+  fondo:#080b10;
   color:#f5f7fa;
 }
-button,input{font:inherit;}
+botón,input{font:inherit;}
 .app{
-  max-width:760px;
-  margin:auto;
-  padding:calc(85px + env(safe-area-inset-top, 0px)) 14px 100px;
+  ancho máximo: 760px;
+  margen:automático;
+  relleno:calc(85px + env(safe-area-inset-top, 0px)) 14px 100px;
 }
 .header{padding:10px 4px 18px;}
-.version{
+.versión{
   display:inline-flex;
-  align-items:center;
-  gap:6px;
-  padding:5px 12px;
-  border-radius:999px;
-  background:#171c25;
-  border:1px solid #283344;
-  font-size:12px;
-  font-weight:800;
+  alinear-elementos:centro;
+  espacio: 6px;
+  relleno: 5px 12px;
+  radio de borde: 999px;
+  fondo:#171c25;
+  borde:1px sólido #283344;
+  tamaño de fuente: 12px;
+  peso de fuente: 800;
   color:#ffb45d;
 }
 .logo-row{display:flex;align-items:center;gap:12px;margin-top:12px;}
 .logo-text{font-size:32px;font-weight:900;letter-spacing:2px;color:#fff;}
-.card{
-  background:#10151d;
-  border:1px solid #242b36;
-  border-radius:18px;
-  padding:16px;
-  margin-top:14px;
+.tarjeta{
+  fondo:#10151d;
+  borde:1px sólido #242b36;
+  radio de borde: 18px;
+  relleno: 16px;
+  margen superior: 14px;
 }
-.card-title{
-  font-size:12px;
-  text-transform:uppercase;
-  letter-spacing:1px;
+.título-tarjeta{
+  tamaño de fuente: 12px;
+  transformación de texto: mayúsculas;
+  espaciado entre letras: 1px;
   color:#929ba9;
-  margin-bottom:12px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
+  margen inferior: 12px;
+  pantalla:flex;
+  alinear-elementos:centro;
+  justificar-contenido:espacio-entre;
 }
-.subtitle,.muted{color:#9da5b2;font-size:14px;line-height:1.45;}
+.subtítulo,.silenciado{color:#9da5b2;font-size:14px;line-height:1.45;}
 .chips{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0;}
 .chip{
-  background:#151a22;
-  border:1px solid #252c37;
-  border-radius:999px;
-  padding:6px 10px;
-  font-size:11px;
-  font-weight:600;
+  fondo:#151a22;
+  borde:1px sólido #252c37;
+  radio de borde: 999px;
+  relleno: 6px 10px;
+  tamaño de fuente: 11px;
+  peso de fuente: 600;
 }
 .league-chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px;}
-.league-chip{
-  background:#151a22;
-  border:1px solid #303846;
-  border-radius:999px;
-  padding:8px 12px;
-  font-size:12px;
-  font-weight:700;
+.ficha-liga{
+  fondo:#151a22;
+  borde:1px sólido #303846;
+  radio de borde: 999px;
+  relleno: 8px 12px;
+  tamaño de fuente: 12px;
+  peso de fuente: 700;
   color:#c7ccd4;
-  cursor:pointer;
-  transition:all .15s ease;
+  cursor:puntero;
+  transición:todos .15s de facilidad;
 }
 .league-chip.active{background:#f4f5f7;color:#080b10;border-color:#f4f5f7;}
 .league-chip-priority{border-color:#ffb45d;color:#ffb45d;}
 .league-chip-priority.active{background:#ffb45d;color:#080b10;border-color:#ffb45d;}
 
-input{
-  width:100%;
-  background:#090d13;
-  border:1px solid #303846;
-  color:white;
-  border-radius:12px;
-  padding:13px;
-  margin-bottom:10px;
-  outline:none;
+aporte{
+  ancho:100%;
+  fondo:#090d13;
+  borde:1px sólido #303846;
+  color:blanco;
+  radio de borde: 12px;
+  relleno: 13px;
+  margen inferior: 10px;
+  esquema:ninguno;
 }
-.primary{
-  width:100%;
-  border:0;
-  border-radius:13px;
-  padding:14px;
-  background:#f4f5f7;
+.primario{
+  ancho:100%;
+  borde:0;
+  radio de borde: 13px;
+  relleno: 14px;
+  fondo:#f4f5f7;
   color:#080b10;
-  font-weight:900;
-  cursor:pointer;
-  transition:opacity .2s;
+  peso de fuente: 900;
+  cursor:puntero;
+  transición:opacidad .2s;
 }
 .primary:disabled{opacity:.55;cursor:not-allowed;}
 .btn-download{
   display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:8px;
-  width:100%;
-  border:1px solid #ffb45d;
-  border-radius:12px;
-  padding:11px;
-  background:#1c170d;
+  alinear-elementos:centro;
+  justificar-contenido:centro;
+  espacio: 8px;
+  ancho:100%;
+  borde:1px sólido #ffb45d;
+  radio de borde: 12px;
+  relleno: 11px;
+  fondo:#1c170d;
   color:#ffb45d;
-  font-size:13px;
-  font-weight:800;
-  text-decoration:none;
-  margin-top:10px;
-  cursor:pointer;
+  tamaño de fuente: 13px;
+  peso de fuente: 800;
+  decoración de texto: ninguna;
+  margen superior: 10px;
+  cursor:puntero;
 }
 
-/* 6. ANIMACIONES DE CARGA TIPO ESQUELETO (SKELETON) */
+/* 6. ANIMACIONES DE CARGA TIPO ESQUELETO */
 @keyframes shimmerWave {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
-.skeleton-shimmer {
-  background: linear-gradient(90deg, #131924 0%, #202b3d 50%, #131924 100%);
-  background-size: 200% 100%;
-  animation: shimmerWave 1.6s infinite ease-in-out;
-  border-radius: 8px;
+.esqueleto-brillo {
+  fondo: gradiente lineal(90 grados, #131924 0%, #202b3d 50%, #131924 100%);
+  tamaño de fondo: 200% 100%;
+  animación: shimmerWave 1.6s de entrada y salida infinitas;
+  radio de borde: 8px;
 }
-.skeleton-card {
-  background: #090d13;
-  border: 1px solid #252c37;
-  border-radius: 15px;
-  padding: 14px;
-  margin-bottom: 9px;
+.tarjeta-esqueleto {
+  fondo: #090d13;
+  borde: 1px sólido #252c37;
+  radio de borde: 15px;
+  relleno: 14px;
+  margen inferior: 9px;
 }
 .skeleton-row { display: flex; align-items: center; gap: 10px; }
-.skeleton-circle { width: 34px; height: 34px; border-radius: 50%; }
-.skeleton-pill { height: 16px; border-radius: 999px; }
-.skeleton-text { height: 14px; width: 60%; margin: 6px 0; }
-.loading-status-text {
-  text-align: center;
+.skeleton-circle { ancho: 34px; alto: 34px; radio de borde: 50%; }
+.skeleton-pill { altura: 16px; radio de borde: 999px; }
+.skeleton-text { altura: 14px; ancho: 60%; margen: 6px 0; }
+.texto-estado-de-carga {
+  alineación de texto: centro;
   color: #ffb45d;
-  font-weight: 700;
-  font-size: 13px;
-  margin-bottom: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+  grosor de fuente: 700;
+  tamaño de fuente: 13px;
+  margen inferior: 12px;
+  pantalla: flexible;
+  alinear-elementos: centro;
+  justificar-contenido: centro;
+  espacio: 8px;
 }
 
-/* 4. BANNER "VS" EN EL AN&#193;LISIS */
+/* 4. BANNER "VS" EN EL ANÁLISIS */
 .match-banner {
-  background: linear-gradient(180deg, #131a26 0%, #0d121a 100%);
-  border: 1px solid #2a3547;
-  border-radius: 16px;
-  padding: 18px 12px;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 10px;
-  text-align: center;
-  margin-bottom: 16px;
-  position: relative;
-  overflow: hidden;
+  fondo: gradiente lineal(180 grados, #131a26 0%, #0d121a 100%);
+  borde: 1px sólido #2a3547;
+  radio de borde: 16px;
+  relleno: 18px 12px;
+  mostrar: cuadrícula;
+  columnas-de-plantilla-de-cuadrícula: 1fr auto 1fr;
+  alinear-elementos: centro;
+  espacio: 10px;
+  alineación de texto: centro;
+  margen inferior: 16px;
+  posición: relativa;
+  desbordamiento: oculto;
 }
 .match-banner::before {
-  content: "";
-  position: absolute;
-  top: 0; left: 0; right: 0; height: 2px;
-  background: linear-gradient(90deg, transparent, #ffb45d, transparent);
+  contenido: "";
+  posición: absoluta;
+  arriba: 0; izquierda: 0; derecha: 0; altura: 2px;
+  fondo: gradiente lineal(90 grados, transparente, #ffb45d, transparente);
 }
 .banner-team {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  pantalla: flexible;
+  flex-direction: columna;
+  alinear-elementos: centro;
+  espacio: 8px;
 }
 .banner-crest {
-  width: 62px;
-  height: 62px;
-  object-fit: contain;
-  filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5));
+  ancho: 62px;
+  altura: 62px;
+  objeto-ajustar: contener;
+  filtro: drop-shadow(0 4px 10px rgba(0,0,0,0.5));
 }
 .crest-fallback {
-  width: 58px;
-  height: 58px;
-  border-radius: 50%;
-  background: #1d2533;
-  border: 2px solid #36445c;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  font-weight: 900;
+  ancho: 58px;
+  altura: 58px;
+  radio de borde: 50%;
+  fondo: #1d2533;
+  borde: 2px sólido #36445c;
+  pantalla: flexible;
+  alinear-elementos: centro;
+  justificar-contenido: centro;
+  tamaño de fuente: 20px;
+  grosor de fuente: 900;
   color: #ffb45d;
 }
 .banner-team-name {
-  font-size: 15px;
-  font-weight: 900;
-  line-height: 1.2;
+  tamaño de fuente: 15px;
+  grosor de fuente: 900;
+  interlineado: 1,2;
   color: #fff;
-  max-width: 140px;
+  ancho máximo: 140px;
 }
 .banner-role-pill {
-  font-size: 9px;
-  font-weight: 900;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: #17202d;
+  tamaño de fuente: 9px;
+  grosor de fuente: 900;
+  espaciado entre letras: 1px;
+  transformación de texto: mayúsculas;
+  relleno: 2px 7px;
+  radio de borde: 999px;
+  fondo: #17202d;
   color: #9da5b2;
 }
 .banner-vs-center {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
+  pantalla: flexible;
+  flex-direction: columna;
+  alinear-elementos: centro;
+  espacio: 4px;
 }
 .banner-vs-circle {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: radial-gradient(circle, #293448 0%, #10151f 100%);
-  border: 2px solid #ffb45d;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  font-weight: 900;
+  ancho: 44px;
+  altura: 44px;
+  radio de borde: 50%;
+  fondo: gradiente radial(círculo, #293448 0%, #10151f 100%);
+  borde: 2px sólido #ffb45d;
+  pantalla: flexible;
+  alinear-elementos: centro;
+  justificar-contenido: centro;
+  tamaño de fuente: 15px;
+  grosor de fuente: 900;
   color: #ffb45d;
   box-shadow: 0 0 16px rgba(255,180,93,0.3);
 }
@@ -2338,103 +2338,103 @@ input{
 .banner-meta-comp { font-size: 10px; color: #8e97a5; }
 
 /* 7. MEDIDOR CIRCULAR DE CONFIANZA */
-.confidence-card {
-  background: #090d13;
-  border: 1px solid #283344;
-  border-radius: 16px;
-  padding: 16px;
-  margin: 14px 0;
-  display: flex;
-  align-items: center;
-  gap: 16px;
+.tarjeta-de-confianza {
+  fondo: #090d13;
+  borde: 1px sólido #283344;
+  radio de borde: 16px;
+  relleno: 16px;
+  margen: 14px 0;
+  pantalla: flexible;
+  alinear-elementos: centro;
+  espacio: 16px;
 }
 .confidence-gauge-wrap {
-  position: relative;
-  width: 90px;
-  height: 90px;
+  posición: relativa;
+  ancho: 90px;
+  altura: 90px;
   flex-shrink: 0;
 }
-.confidence-svg { width: 90px; height: 90px; transform: rotate(-90deg); }
+.confidence-svg { ancho: 90px; alto: 90px; transformar: rotar(-90deg); }
 .gauge-bg { stroke: #1a222e; stroke-width: 8; fill: none; }
-.gauge-bar {
-  stroke-width: 8;
-  fill: none;
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.8s ease-in-out;
+.barra-de-indicador {
+  grosor del trazo: 8;
+  relleno: ninguno;
+  remate de línea de trazo: redondo;
+  transición: stroke-dashoffset 0.8s ease-in-out;
 }
 .gauge-bar.high { stroke: #7ee787; filter: drop-shadow(0 0 6px rgba(126,231,135,0.4)); }
 .gauge-bar.medium { stroke: #ffb45d; filter: drop-shadow(0 0 6px rgba(255,180,93,0.4)); }
 .gauge-bar.low { stroke: #ff7b72; filter: drop-shadow(0 0 6px rgba(255,123,114,0.4)); }
-.gauge-content {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+.contenido-de-gauge {
+  posición: absoluta;
+  recuadro: 0;
+  pantalla: flexible;
+  flex-direction: columna;
+  alinear-elementos: centro;
+  justificar-contenido: centro;
 }
 .gauge-num { font-size: 22px; font-weight: 900; line-height: 1; }
 .gauge-label { font-size: 10px; font-weight: 800; text-transform: uppercase; margin-top: 2px; }
-.confidence-details { flex: 1; }
+.detalles-de-confianza { flex: 1; }
 .confidence-badge-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.badge-tag {
-  font-size: 11px;
-  font-weight: 800;
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: #17202d;
+.etiqueta-insignia {
+  tamaño de fuente: 11px;
+  grosor de fuente: 800;
+  relleno: 3px 8px;
+  radio de borde: 6px;
+  fondo: #17202d;
   color: #c7ccd4;
   display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  alinear-elementos: centro;
+  espacio: 4px;
 }
 .badge-consensus-agree { background: #0f2c1a; color: #7ee787; border: 1px solid #1a5230; }
 .badge-consensus-disagree { background: #2f1712; color: #ff7b72; border: 1px solid #5a261c; }
 
-/* FIXTURES & GENERAL */
-.fixture{
-  background:#090d13;
-  border:1px solid #252c37;
-  border-radius:15px;
-  padding:14px;
-  margin-bottom:9px;
-  transition:border-color .15s;
+/* INSTALACIONES Y GENERALIDADES */
+.artículos fijos{
+  fondo:#090d13;
+  borde:1px sólido #252c37;
+  radio de borde: 15px;
+  relleno: 14px;
+  margen inferior: 9px;
+  transición:color de borde .15s;
 }
 .fixture-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
 .fixture-teams{font-size:15px;font-weight:800;line-height:1.35;display:flex;align-items:center;flex-wrap:wrap;gap:4px;}
 .team-crest{width:22px;height:22px;object-fit:contain;vertical-align:middle;}
 .fixture-meta{color:#8e97a5;font-size:12px;margin-top:5px;}
-.analyze-small{
-  border:0;
-  border-radius:10px;
-  padding:9px 12px;
-  background:#f4f5f7;
+.analiza-pequeño{
+  borde:0;
+  radio de borde: 10px;
+  relleno: 9px 12px;
+  fondo:#f4f5f7;
   color:#080b10;
-  font-size:11px;
-  font-weight:900;
-  white-space:nowrap;
-  cursor:pointer;
+  tamaño de fuente: 11px;
+  peso de fuente: 900;
+  espacio en blanco:nowrap;
+  cursor:puntero;
 }
-.analysis-panel{
-  display:grid;
-  grid-template-rows:0fr;
-  transition:grid-template-rows .28s ease, margin-top .28s ease;
-  border-top:0 solid #252c37;
-  margin-top:0;
+.panel-de-análisis{
+  mostrar:cuadrícula;
+  filas-de-plantilla-de-cuadrícula:0fr;
+  transición:grid-template-rows .28s ease, margin-top .28s ease;
+  borde superior:0 sólido #252c37;
+  margen superior:0;
 }
 .analysis-panel.open{grid-template-rows:1fr;margin-top:12px;border-top:1px solid #252c37;}
 .analysis-inner{overflow:hidden;min-height:0;padding-top:0;}
-.analysis-panel.open .analysis-inner{padding-top:12px;}
-.analysis-close{
-  width:100%;
-  border:1px solid #303846;
-  border-radius:10px;
-  padding:10px;
-  background:#151a22;
+.panel-de-análisis.abrir .análisis-interior{padding-top:12px;}
+.análisis-cerrar{
+  ancho:100%;
+  borde:1px sólido #303846;
+  radio de borde: 10px;
+  relleno: 10px;
+  fondo:#151a22;
   color:#fff;
-  font-weight:800;
-  margin-bottom:10px;
-  cursor:pointer;
+  peso de fuente: 800;
+  margen inferior: 10px;
+  cursor:puntero;
 }
 .section-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#929ba9;margin:14px 0 8px;}
 .fixture-decision{text-align:center;background:#10151d;border-radius:13px;padding:14px;}
@@ -2450,43 +2450,43 @@ input{
 .market-details{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;color:#8e97a5;font-size:12px;}
 .market-details b{color:white;}
 .value-box{border:1px solid #33414d;border-radius:13px;padding:13px;margin-top:10px;}
-.simulate-bet-btn{
-  width:100%;
-  border:0;
-  border-radius:11px;
-  padding:12px;
-  margin-top:10px;
-  background:#7ee787;
+.simular-apuesta-btn{
+  ancho:100%;
+  borde:0;
+  radio de borde: 11px;
+  relleno: 12px;
+  margen superior: 10px;
+  fondo:#7ee787;
   color:#080b10;
-  font-weight:900;
-  cursor:pointer;
+  peso de fuente: 900;
+  cursor:puntero;
 }
 .nav{
-  position:fixed;
-  top:0;left:0;right:0;
-  max-width:760px;
-  margin:auto;
-  background:rgba(10,13,18,.98);
-  border-bottom:1px solid #252c37;
-  display:flex;
-  justify-content:space-around;
-  padding:calc(16px + env(safe-area-inset-top, 0px)) 8px 14px;
-  font-size:13px;
+  posición:fija;
+  arriba:0;izquierda:0;derecha:0;
+  ancho máximo: 760px;
+  margen:automático;
+  fondo:rgba(10,13,18,.98);
+  borde inferior: 1px sólido #252c37;
+  pantalla:flex;
+  justificar-contenido:espacio-alrededor;
+  relleno:calc(16px + env(safe-area-inset-top, 0px)) 8px 14px;
+  tamaño de fuente: 13px;
   color:#929ba9;
-  z-index:30;
+  índice z:30;
 }
 .nav span{cursor:pointer;padding:4px;text-align:center;}
 .nav span.active-nav{color:white;font-weight:800;}
 .empty{text-align:center;color:#9da5b2;padding:22px 8px;}
 </style>
 </head>
-<body>
+<cuerpo>
 
 <div class="app">
 
 <header class="header">
   <div>
-    <span class="version">&#9679; V8.0.0 ANALYST</span>
+    <span class="version">● V8.0.0 ANALYST</span>
   </div>
 
   <div class="logo-row">
@@ -2495,18 +2495,18 @@ input{
       <line x1="80" y1="45" x2="118" y2="8" stroke="#ffb45d" stroke-width="11" stroke-linecap="round"/>
       <line x1="80" y1="45" x2="118" y2="82" stroke="#ffb45d" stroke-width="11" stroke-linecap="round"/>
     </svg>
-    <span class="logo-text">BETS</span>
+    <span class="logo-text">APUESTAS</span>
   </div>
 
   <h1 style="margin:14px 0 6px;font-size:28px;line-height:1.1">Analiza antes de apostar.</h1>
-  <div class="subtitle">Motor Estad&#237;stico V8.0 + Local&#237;a Aprendida + Fatiga Suave + Lesiones Ponderadas + 2&#170; Opini&#243;n Desacoplada.</div>
+  <div class="subtitle">Motor Estadístico V8.0 + Localía Aprendida + Fatiga Suave + Lesiones Ponderadas + 2ª Opinión Desacoplada.</div>
 
   <div class="chips">
-    <span class="chip">&#127967;&#65039; Local&#237;a Aprendida</span>
-    <span class="chip">&#9201;&#65039; Fatiga Asim&#233;trica</span>
-    <span class="chip">&#127973; Lesiones Ponderadas</span>
-    <span class="chip">&#128302; 2&#170; Opini&#243;n Externa</span>
-    <span class="chip">&#128202; Calibraci&#243;n V8.1</span>
+    <span class="chip">️ Localía Aprendida</span>
+    <span class="chip">⏱️ Fatiga Asimétrica</span>
+    <span class="chip"> Lesiones Ponderadas</span>
+    <span class="chip"> 2ª Opinión Externa</span>
+    <span class="chip"> Calibraciónón V8.1</span>
   </div>
 </header>
 
@@ -2515,27 +2515,27 @@ input{
 
   <div class="league-chips" id="leagueChips">
     <button type="button" class="league-chip active" data-competition="">Todas</button>
-    <button type="button" class="league-chip league-chip-priority" data-competition="PD">&#127466;&#127480; LaLiga</button>
-    <button type="button" class="league-chip league-chip-priority" data-competition="CL">&#11088; Champions</button>
-    <button type="button" class="league-chip" data-competition="PL">&#127988; Premier League</button>
-    <button type="button" class="league-chip" data-competition="FL1">&#127467;&#127479; Ligue 1</button>
-    <button type="button" class="league-chip" data-competition="SA">&#127470;&#127481; Serie A</button>
-    <button type="button" class="league-chip" data-competition="BL1">&#127465;&#127466; Bundesliga</button>
-    <button type="button" class="league-chip" data-competition="EL">&#129352; Europa League</button>
+    <button type="button" class="league-chip league-chip-priority" data-competition="PD"> LaLiga</button>
+    <button type="button" class="league-chip league-chip-priority" data-competition="CL">⭐ Campeones</button>
+    <button type="button" class="league-chip" data-competition="PL"> Premier League</button>
+    <button type="button" class="league-chip" data-competition="FL1"> Ligue 1</button>
+    <button type="button" class="league-chip" data-competition="SA"> Serie A</button>
+    <button type="button" class="league-chip" data-competition="BL1"> Bundesliga</button>
+    <button type="button" class="league-chip" data-competition="EL">賂 Europa League</button>
   </div>
 
   <input id="date" type="date">
 
-  <button class="primary" id="searchBtn" type="button">&#128270; BUSCAR PARTIDOS</button>
-  <button class="analysis-close" id="nextFixtureBtn" type="button" style="margin-top:8px">&#9197;&#65039; Buscar pr&#243;ximo partido disponible</button>
+  <button class="primary" id="searchBtn" type="button"> BUSCAR PARTIDOS</button>
+  <button class="analysis-close" id="nextFixtureBtn" type="button" style="margin-top:8px">⏭️ Buscar próximo partido disponible</button>
 
   <div id="searchSummary" style="color:#9da5b2;font-size:13px;margin-top:10px"></div>
 </section>
 
-<!-- 6. SKELETON LOADER CONTAINER -->
+<!-- 6. CONTENEDOR CARGADOR ESQUELETO -->
 <div id="loadingSkeleton" style="display:none;margin-top:14px">
   <div class="loading-status-text">
-    <span>&#9917;</span>
+    <span>⚽</span>
     <span id="loadingStatusText">Consultando partidos y calculando descanso...</span>
   </div>
   <div class="skeleton-card">
@@ -2564,7 +2564,7 @@ input{
   <div class="card-title">Partidos de la fecha</div>
   <div id="fixtureList"></div>
 
-  <button class="primary" id="parlayBtn" type="button" style="margin-top:12px">&#127920; GENERAR PARLAY SUGERIDO</button>
+  <button class="primary" id="parlayBtn" type="button" style="margin-top:12px"> GENERAR PARLAY SUGERIDO</button>
   <div id="parlayLoading" style="display:none;margin-top:12px">
     <div class="loading-status-text">Buscando picks fuertes y errores de cuota...</div>
   </div>
@@ -2574,17 +2574,17 @@ input{
 <!-- VISTA INICIO -->
 <section id="homeCard" class="card">
   <div style="text-align:center;padding:16px 0;border-bottom:1px solid #242b36;margin-bottom:14px">
-    <div style="font-size:52px;line-height:1">&#9917;</div>
-    <div style="font-style:italic;color:#c7ccd4;margin-top:8px">"El bal&#243;n no miente. Los n&#250;meros tampoco."</div>
+    <div style="font-size:52px;line-height:1">⚽</div>
+    <div style="font-style:italic;color:#c7ccd4;margin-top:8px">"El balón no miente. Los números tampoco."</div>
   </div>
 
   <div class="card-title">Novedades V8.0.0</div>
   <div class="muted">
-    1. <b>Ventaja Local Aprendida:</b> Estimaci&#243;n bayesiana con regresi&#243;n a la media seg&#250;n goles hist&#243;ricos reales por liga.<br>
-    2. <b>Lesiones Ponderadas:</b> Impacto espec&#237;fico por posici&#243;n (portero/defensa/delantera) y acotado al 8% m&#225;ximo.<br>
-    3. <b>Fatiga Asim&#233;trica y Suave:</b> Diferencia fatiga defensiva de ofensiva con curvas suaves continuas.<br>
-    4. <b>2&#170; Opini&#243;n Desacoplada:</b> Big Balls como referencia externa independiente sin alterar la confianza matem&#225;tica propia.<br>
-    5. <b>Favoritos &gt;10d:</b> Chunking seguro de peticiones sin error HTTP 400.
+    1. <b>Ventaja Local Aprendida:</b> Estimación bayesiana con regresióna la media según goles históricos reales por liga.<br>
+    2. <b>Lesiones Ponderadas:</b> Impacto específico por posición (portero/defensa/delantera) y acotado al 8% máximo.<br>
+    3. <b>Fatiga Asimétrica y Suave:</b> Diferencia fatiga defensiva de ofensiva con curvas suaves continuas.<br>
+    4. <b>2ª Opinión Desacoplada:</b> Big Balls como referencia externa independiente sin alterar la confianza matemática propia.<br>
+    5. <b>Favoritos >10d:</b> Chunking seguro de peticiones sin error HTTP 400.
   </div>
 </section>
 
@@ -2592,7 +2592,7 @@ input{
 <section id="betsCard" class="card" style="display:none">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid #242b36;padding-bottom:10px">
     <div>
-      <div class="card-title" style="margin:0">&#128202; Mis apuestas</div>
+      <div class="card-title" style="margin:0"> Mis apuestas</div>
       <div class="muted" style="font-size:11px">Simulador para recoger datos y medir el % de acierto real</div>
     </div>
     <div style="display:flex;gap:6px">
@@ -2621,127 +2621,127 @@ input{
 </div>
 
 <nav class="nav">
-  <span id="navHome">&#8962;<br>Inicio</span>
-  <span id="navAnalyst" class="active-nav"><strong>&#129504;<br>Analyst</strong></span>
-  <span id="navBets"><strong>&#128202;<br>Mis apuestas</strong></span>
+  <span id="navHome">⌂<br>Inicio</span>
+  <span id="navAnalyst" class="active-nav"><strong>易<br>Analista</strong></span>
+  <span id="navBets"><strong><br>Mis apuestas</strong></span>
 </nav>
 
 <script>
-(function(){
-'use strict';
+(función(){
+'usar estricto';
 
 let selectedCompetition = '';
 
-function esc(val){
+función esc(val){
   return String(val == null ? '' : val)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+    .replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>')
+    .replace(/"/g,'"').replace(/'/g,''');
 }
 
-function pct(v){
+función pct(v){
   const n = Number(v);
   return Number.isFinite(n) ? n.toFixed(1) + '%' : '-';
 }
 
-function localDateValue(){
+función localDateValue(){
   const d = new Date();
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0,10);
 }
 
-function formatTime(v){
-  if (!v) return '--:--';
+función formatTime(v){
+  si (!v) devolver '--:--';
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
 }
 
-function formatDate(v){
-  if (!v) return '';
+función formatDate(v){
+  si (!v) devuelve '';
   const p = v.split('-');
   return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : v;
 }
 
-function crestImg(url, name){
-  if (url) {
-    return '<img src="' + esc(url) + '" alt="' + esc(name) + '" class="banner-crest" onerror="this.outerHTML=\\'<div class=\\\\\\'crest-fallback\\\\\\'>' + esc(name.charAt(0)) + '</div>\\'">';
+función crestImg(url, nombre){
+  si (url) {
+    return '<img src="' + esc(url) + '" alt="' + esc(name) + '" class="banner-crest" onerror="this.remove()">';
   }
   return '<div class="crest-fallback">' + esc((name || 'T').charAt(0)) + '</div>';
 }
 
 /* 7. GENERADOR DEL MEDIDOR CIRCULAR DE CONFIANZA */
-function renderCircularConfidence(conf, level, explanation, bbComp, restData) {
+función renderCircularConfidence(conf, nivel, explicación, bbComp, restData) {
   const c = Math.max(0, Math.min(100, Number(conf) || 50));
-  const r = 38;
-  const circum = 2 * Math.PI * r; // ~238.76
-  const offset = circum - (circum * c / 100);
+  constante r = 38;
+  circunferencia constante = 2 * Math.PI * r; // ~238,76
+  desplazamiento constante = circun - (circun * c / 100);
 
   const colorClass = c >= 75 ? 'high' : (c >= 60 ? 'medium' : 'low');
 
   let consensusBadge = '';
-  if (bbComp && bbComp.available) {
+  si (bbComp && bbComp.available) {
     const badgeCls = bbComp.agrees ? 'badge-consensus-agree' : 'badge-consensus-disagree';
-    const icon = bbComp.agrees ? '\u{1f91d}' : '\u26a0\ufe0f';
+    const icon = bbComp.agrees ? 'ðŸ¤ ' : 'âš ï¸ ';
     consensusBadge = '<div class="badge-tag ' + badgeCls + '">' + icon + ' ' + esc(bbComp.status) + '</div>';
   }
 
   let restBadge = '';
-  if (restData) {
-    restBadge = '<div class="badge-tag">\u23f1\ufe0f Descanso: Loc ' + esc(restData.home?.days != null ? restData.home.days + 'd' : '?') + ' vs Vis ' + esc(restData.away?.days != null ? restData.away.days + 'd' : '?') + '</div>';
+  si (restData) {
+    restBadge = '<div class="badge-tag">â ±ï¸ Descanso: Loc ' + esc(restData.home?.days != null ? restData.home.days + 'd' : '?') + ' vs Vis ' + esc(restData.away?.days != null ? restData.away.days + 'd' : '?') + '</div>';
   }
 
-  return \`
-    <div class="confidence-card">
+  devolver \`
+    <div class="tarjeta-de-confianza">
       <div class="confidence-gauge-wrap">
         <svg class="confidence-svg" viewBox="0 0 90 90">
           <circle class="gauge-bg" cx="45" cy="45" r="\${r}"></circle>
           <circle class="gauge-bar \${colorClass}" cx="45" cy="45" r="\${r}"
             stroke-dasharray="\${circum}"
             stroke-dashoffset="\${offset}">
-          </circle>
+          </círculo>
         </svg>
         <div class="gauge-content">
           <span class="gauge-num">\${c}%</span>
           <span class="gauge-label \${colorClass}">\${esc(level)}</span>
         </div>
       </div>
-      <div class="confidence-details">
-        <strong style="display:block;font-size:14px;color:#fff">Confianza del An\u00e1lisis: \${esc(level)}</strong>
+      <div class="detalles-de-confianza">
+        <strong style="display:block;font-size:14px;color:#fff">Confianza del Análisis: \${esc(level)}</strong>
         <div class="muted" style="font-size:12px;margin-top:3px">\${esc(explanation)}</div>
-        <div class="confidence-badge-row">
-          \${consensusBadge}
-          \${restBadge}
+        <div class="fila-insignia-de-confianza">
+          ${insignia de consenso}
+          ${restBadge}
         </div>
       </div>
     </div>
-  \`;
+  `;
 }
 
-function fixtureHtml(f, idx, date){
+función fixtureHtml(f, idx, fecha){
   const panelId = 'analysis-' + idx + '-' + String(f.id || idx);
-  return \`
+  devolver \`
     <article class="fixture">
       <div class="fixture-head">
         <div>
           <div class="fixture-teams">
-            \${f.homeCrest ? '<img src="' + esc(f.homeCrest) + '" class="team-crest" alt="">' : ''}
-            \${esc(f.home)}
+            ${f.homeCrest ? '<img src="' + esc(f.homeCrest) + '" class="team-crest" alt="">' : ''}
+            ${esc(f.home)}
             <span style="color:#8e97a5;font-weight:400">vs</span>
-            \${f.awayCrest ? '<img src="' + esc(f.awayCrest) + '" class="team-crest" alt="">' : ''}
-            \${esc(f.away)}
+            ${f.awayCrest ? '<img src="' + esc(f.awayCrest) + '" class="team-crest" alt="">' : ''}
+            ${esc(f.away)}
           </div>
           <div class="fixture-meta">
-            \u{1f550} \${formatTime(f.kickoff)} \u00b7 \u{1f3c6} \${esc(f.competition || 'Liga')}
+            ðŸ• \${formatTime(f.kickoff)} Â· ðŸ † \${esc(f.competition || 'Liga')}
           </div>
         </div>
         <button class="analyze-small" type="button" data-panel="\${panelId}" data-home="\${esc(f.home)}" data-away="\${esc(f.away)}" data-date="\${esc(date)}">
-          \u{1f9e0} ANALIZAR
+          ANALIZADOR
         </button>
       </div>
 
       <div id="\${panelId}" class="analysis-panel">
         <div class="analysis-inner">
-          <button class="analysis-close" type="button" data-close="\${panelId}">\u25b2 CERRAR AN\u00c1LISIS</button>
+          <button class="analysis-close" type="button" data-close="\${panelId}">â–² CERRAR ANÃ LISIS</button>
 
-          <!-- Skeleton interno del an\u00e1lisis -->
+          <!-- Esqueleto interno del análisis -->
           <div id="\${panelId}-loading" style="display:none;padding:10px 0">
             <div class="loading-status-text">Analizando xG, descanso de jugadores y cuotas...</div>
             <div class="skeleton-shimmer" style="height:90px;border-radius:14px;margin-bottom:10px"></div>
@@ -2752,59 +2752,54 @@ function fixtureHtml(f, idx, date){
           <div id="\${panelId}-content" style="display:none"></div>
         </div>
       </div>
-    </article>
-  \`;
+    </artículo>
+  `;
 }
 
-async function searchFixtures(){
-  const date = document.getElementById('date').value;
+función asíncrona searchFixtures(){
+  const fecha = document.getElementById('fecha').value;
   const skeleton = document.getElementById('loadingSkeleton');
   const error = document.getElementById('error');
-  const card = document.getElementById('fixturesCard');
-  const list = document.getElementById('fixtureList');
+  const tarjeta = document.getElementById('fixturesCard');
+  const lista = document.getElementById('fixtureList');
   const summary = document.getElementById('searchSummary');
 
-  if (!date) return;
+  si (!fecha) regresar;
 
-  error.style.display = 'none';
-  skeleton.style.display = 'block';
-  card.style.display = 'none';
-  list.innerHTML = '';
-  summary.textContent = '';
+  error.style.display = 'ninguno';
+  esqueleto.estilo.visualización = 'bloque';
+  tarjeta.style.display = 'ninguno';
+  lista.innerHTML = '';
+  resumen.textoContenido = '';
 
-  try {
+  intentar {
     const res = await fetch('/api/fixtures?date=' + encodeURIComponent(date) + (selectedCompetition ? '&competition=' + encodeURIComponent(selectedCompetition) : ''), { cache:'no-store' });
-    let data;
-    try {
-      data = await res.json();
-    } catch (jsonErr) {
-      throw new Error('Error de conexi\u00f3n con el servidor (HTTP ' + res.status + '). Espera 30 segundos mientras Render inicializa.');
-    }
+    const data = await res.json();
 
     if (!res.ok || !data.ok) throw new Error(data.error || 'Error cargando partidos.');
 
-    card.style.display = 'block';
+    tarjeta.style.display = 'block';
     const fixtures = Array.isArray(data.fixtures) ? data.fixtures : [];
 
-    if (!fixtures.length) {
-      summary.textContent = 'No se encontraron partidos para ' + formatDate(date) + '.';
+    si (!fixtures.length) {
+      resumen.textContent = 'No se encontraron partidos para ' + formatDate(date) + '.';
       list.innerHTML = '<div class="empty">No hay partidos programados para esta fecha.</div>';
-      return;
+      devolver;
     }
 
-    summary.textContent = fixtures.length + ' partidos encontrados.';
-    list.innerHTML = fixtures.map((f, i) => fixtureHtml(f, i, date)).join('');
-  } catch (err) {
+    resumen.textContent = fixtures.length + 'partidos encontrados.';
+    lista.innerHTML = fixtures.map((f, i) => fixtureHtml(f, i, date)).join('');
+  } capturar (error) {
     error.style.display = 'block';
     error.textContent = err.message || 'Error al buscar partidos.';
-  } finally {
-    skeleton.style.display = 'none';
+  } finalmente {
+    esqueleto.estilo.visualización = 'ninguno';
   }
 }
 
-async function openAnalysis(panelId, home, away, date){
+función asíncrona openAnalysis(panelId, home, away, date){
   const panel = document.getElementById(panelId);
-  if (!panel) return;
+  si (!panel) regresar;
 
   panel.classList.add('open');
   const loading = document.getElementById(panelId + '-loading');
@@ -2812,136 +2807,132 @@ async function openAnalysis(panelId, home, away, date){
   const content = document.getElementById(panelId + '-content');
 
   loading.style.display = 'block';
-  error.style.display = 'none';
+  error.style.display = 'ninguno';
   content.style.display = 'none';
-  content.innerHTML = '';
+  contenido.innerHTML = '';
 
-  try {
+  intentar {
     const res = await fetch('/api/analyze?home=' + encodeURIComponent(home) + '&away=' + encodeURIComponent(away) + '&date=' + encodeURIComponent(date), { cache:'no-store' });
-    let data;
-    try {
-      data = await res.json();
-    } catch (jsonErr) {
-      throw new Error('Error al conectar con la API de an\u00e1lisis (HTTP ' + res.status + ').');
-    }
+    const data = await res.json();
 
     if (!res.ok || !data.ok) throw new Error(data.error || 'No se pudo analizar el partido.');
 
-    // RENDERIZAR AN\u00c1LISIS COMPLETO
-    content.innerHTML = renderAnalysisContent(data);
+    // RENDERIZAR ANÁLISIS COMPLETO
+    contenido.innerHTML = renderAnalysisContent(datos);
     content.style.display = 'block';
-  } catch (err) {
+  } capturar (error) {
     error.style.display = 'block';
     error.textContent = err.message || 'Error analizando partido.';
-  } finally {
+  } finalmente {
     loading.style.display = 'none';
   }
 }
 
-function renderAnalysisContent(data){
+función renderAnalysisContent(datos){
   const m = data.match;
 
   // 4. BANNER VS CON ESCUDOS GRANDES
   const bannerHtml = \`
     <div class="match-banner">
       <div class="banner-team">
-        \${crestImg(m.homeCrest, m.home)}
+        ${crestImg(m.homeCrest, m.home)}
         <div class="banner-team-name">\${esc(m.home)}</div>
         <div class="banner-role-pill">LOCAL</div>
       </div>
       <div class="banner-vs-center">
-        <div class="banner-meta-comp">\u{1f3c6} \${esc(m.competition || 'Competici\u00f3n')}</div>
+        <div class="banner-meta-comp">ðŸ † \${esc(m.competition || 'Competición')}</div>
         <div class="banner-vs-circle">VS</div>
-        <div class="banner-meta-time">\u{1f550} \${formatTime(m.kickoff)}</div>
+        <div class="banner-meta-time">ðŸ• \${formatTime(m.kickoff)}</div>
       </div>
       <div class="banner-team">
-        \${crestImg(m.awayCrest, m.away)}
+        ${crestImg(m.awayCrest, m.away)}
         <div class="banner-team-name">\${esc(m.away)}</div>
         <div class="banner-role-pill">VISITANTE</div>
       </div>
     </div>
-  \`;
+  `;
 
   // 7. MEDIDOR CIRCULAR DE CONFIANZA
   const confidenceGaugeHtml = renderCircularConfidence(
-    data.confidence,
-    data.confidenceLevel,
-    data.confidenceExplanation,
-    data.bigBallsComparison,
-    data.rest
+    confianza en los datos,
+    Nivel de confianza de los datos,
+    datos.confianzaExplicación,
+    data.bigBallsComparación,
+    datos.rest
   );
 
-  // DECISI\u00d3N VALUE BET
-  const decisionClass = data.betEligible ? 'bet' : 'noBet';
+  // DECISIÓN VALOR APUESTA
+  window.__activeAnalysis = { match: m, data: data, recOdds: recOdds, recProb: recProb };
+  const decisionClass = data.betEligible? 'apuesta' : 'noApuesta';
   const recMarket = (Array.isArray(data.markets) ? data.markets.find(mk => mk.name === data.recommendation) : null) || (Array.isArray(data.markets) ? data.markets[0] : null);
-  const recOdds = recMarket && recMarket.bestOdds ? Number(recMarket.bestOdds) : 1.95;
+  const recOdds = recMarket && recMarket.bestOdds? Número (recMarket.bestOdds): 1,95;
   const recProb = recMarket && recMarket.probability ? Number(recMarket.probability) : (data.probabilities?.homeWin || 50);
   const isEligible = data.recommendation && data.recommendation !== 'NO BET';
 
   let simulateBtnHtml = '';
-  if (isEligible) {
+  si (eselegible) {
     simulateBtnHtml = '<div style="margin-top:12px">' +
-      '<button type="button" class="simulate-bet-btn" onclick="saveSimulatedBet(\'' + esc(m.home) + '\', \'' + esc(m.homeCrest||'') + '\', \'' + esc(m.away) + '\', \'' + esc(m.awayCrest||'') + '\', \'' + esc(m.competition||'') + '\', \'' + esc(data.recommendation) + '\', ' + recOdds + ', ' + recProb + ', ' + data.confidence + ', \'' + esc(data.confidenceLevel) + '\')">' +
-        '\u{1f4cc} Simular esta apuesta (Guardar en Mis apuestas)' +
+      '<button type="button" class="simulate-bet-btn" onclick="saveCurrentSimulatedRec()">' +
+        'ðŸ“Œ Simular esta apuesta (Guardar en Mis apuestas)' +
       '</button>' +
     '</div>';
   }
 
   let marketsHtml = '';
-  if (Array.isArray(data.markets) && data.markets.length > 0) {
-    marketsHtml = '<div class="section-label">\u{1f4b5} Cuotas & Mercados Disponibles</div>' +
-      data.markets.map(function(mk){
+  Si (Array.isArray(data.markets) && data.markets.length > 0) {
+    marketsHtml = '<div class="section-label">ðŸ'μ Cuotas & Mercados Disponibles</div>' +
+      datos.mercados.mapa(función(mk, _mkIdx){
         const o = mk.bestOdds ? Number(mk.bestOdds).toFixed(2) : '-';
         const ev = mk.referenceEvPct ? (mk.referenceEvPct > 0 ? '+' : '') + mk.referenceEvPct + '%' : '-';
         return '<div class="market" style="display:flex;justify-content:space-between;align-items:center">' +
           '<div>' +
             '<b>' + esc(mk.name) + '</b>' +
-            '<div class="muted" style="font-size:11px">Prob: ' + pct(mk.probability) + ' \u2022 EV: ' + ev + '</div>' +
+            '<div class="muted" style="font-size:11px">Prob: ' + pct(mk.probability) + ' • EV: ' + ev + '</div>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px">' +
             '<span style="font-weight:900;color:#ffb45d;font-size:14px">@' + o + '</span>' +
-            '<button type="button" class="league-chip" style="padding:4px 8px;font-size:11px;background:#ffb45d;color:#080b10;font-weight:800;border:0;cursor:pointer" onclick="saveSimulatedBet(\'' + esc(m.home) + '\', \'' + esc(m.homeCrest||'') + '\', \'' + esc(m.away) + '\', \'' + esc(m.awayCrest||'') + '\', \'' + esc(m.competition||'') + '\', \'' + esc(mk.name) + '\', ' + (mk.bestOdds||1.90) + ', ' + (mk.probability||50) + ', ' + data.confidence + ', \'' + esc(data.confidenceLevel) + '\')">' +
-              '+ Simular' +
+            '<button type="button" class="league-chip" style="padding:4px 8px;font-size:11px;background:#ffb45d;color:#080b10;font-weight:800;border:0;cursor:pointer" onclick="saveCurrentSimulatedMarket(' + _mkIdx + ')">' +
+              '+ Simultáneo' +
             '</button>' +
           '</div>' +
         '</div>';
-      }).join('');
+      }).unirse('');
   }
 
   let bbHtml = '';
-  if (data.bigBallsComparison && data.bigBallsComparison.available) {
+  Si (data.bigBallsComparison && data.bigBallsComparison.available) {
     const borderColor = data.bigBallsComparison.agrees ? '#1a5230' : '#5a261c';
     const bgColor = data.bigBallsComparison.agrees ? '#0b1f14' : '#1e110f';
     const textColor = data.bigBallsComparison.agrees ? '#7ee787' : '#ff7b72';
-    const textTitle = data.bigBallsComparison.agrees ? '\u{1f91d} Consenso Big Balls' : '\u26a0\ufe0f Alerta de Divergencia Big Balls';
+    const textTitle = data.bigBallsComparison.agrees? 'ðŸ¤ Consenso Big Balls' : 'âš ï¸ Alerta de Divergencia Big Balls';
     bbHtml = '<div class="value-box" style="border-color:' + borderColor + ';background:' + bgColor + '">' +
-      '<b style="color:' + textColor + '">' + textTitle + '</b>' +
+      '<b estilo="color:' + colortexto + '">' + títulotexto + '</b>' +
       '<div class="muted" style="margin-top:4px">' + esc(data.bigBallsComparison.message) + '</div>' +
     '</div>';
   }
 
-  return bannerHtml +
+  devolver bannerHtml +
     '<div class="fixture-decision">' +
-      '<div class="section-label">Decisi\u00f3n del modelo</div>' +
+      '<div class="section-label">Decisión del modelo</div>' +
       '<h3 class="' + decisionClass + '">' + esc(data.recommendation) + '</h3>' +
       '<div class="muted">' + esc(data.reason) + '</div>' +
-      simulateBtnHtml +
+      simularBtnHtml +
     '</div>' +
-    confidenceGaugeHtml +
+    indicador de confianzaHtml +
     bbHtml +
-    '<div class="section-label">\u{1f4ca} Probabilidades 1X2</div>' +
+    '<div class="section-label">ðŸ“Š Probabilidades 1X2</div>' +
     '<div class="prob-grid">' +
-      '<div class="prob"><span>\u{1f3e0} LOCAL</span><b>' + pct(data.probabilities?.homeWin) + '</b></div>' +
-      '<div class="prob"><span>\u{1f91d} EMPATE</span><b>' + pct(data.probabilities?.draw) + '</b></div>' +
-      '<div class="prob"><span>\u2708\ufe0f VISITANTE</span><b>' + pct(data.probabilities?.awayWin) + '</b></div>' +
+      '<div class="prob"><span>ðŸ LOCAL</span><b>' + pct(data.probabilities?.homeWin) + '</b></div>' +
+      '<div class="prob"><span>ðŸ¤ EMPATE</b>' + pct(data.probabilities?.draw) + '</b></div>' +
+      '<div class="prob"><span>âœˆï¸ VISITANTE</b>' + pct(data.probabilities?.awayWin) + '</b></div>' +
     '</div>' +
-    '<div class="section-label">\u26bd xG Esperados (Local\u00eda ' + (data.homeAdvantage?.factor || 1.08) + 'x)</div>' +
+    '<div class="section-label">âš½ xG Esperados (Localía ' + (data.homeAdvantage?.factor || 1.08) + 'x)</div>' +
     '<div class="xg-grid">' +
       '<div class="xg"><span>LOCAL</span><b>' + (data.xG?.home || '-') + '</b></div>' +
       '<div class="xg"><span>VISITANTE</span><b>' + (data.xG?.away || '-') + '</b></div>' +
       '<div class="xg"><span>TOTAL</span><b>' + (data.xG?.total || '-') + '</b></div>' +
     '</div>' +
-    '<div class="section-label">\u23f1\ufe0f Descanso Calculado (Football-Data)</div>' +
+    '<div class="section-label">â ±ï¸ Descanso Calculado (Football-Data)</div>' +
     '<div class="market">' +
       '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
         '<span><b>' + esc(m.home) + ':</b> ' + esc(data.rest?.home?.status || 'Sin datos') + '</span>' +
@@ -2952,12 +2943,12 @@ function renderAnalysisContent(data){
         '<span>' + (data.rest?.away?.impactPct ? data.rest.away.impactPct + '%' : '0%') + '</span>' +
       '</div>' +
     '</div>' +
-    '<div class="section-label">\u{1f3af} Marcador M\u00e1s Probable</div>' +
+    '<div class="section-label">ðŸŽ¯ Marcador MÃ¡s Probable</div>' +
     '<div class="market" style="text-align:center">' +
       '<div style="font-size:32px;font-weight:900">' + esc(data.mostLikelyScore?.score) + '</div>' +
       '<div class="muted">Probabilidad: ' + pct(data.mostLikelyScore?.probability) + '</div>' +
     '</div>' +
-    marketsHtml;
+    mercadosHtml;
 }
 
 // ==========================================
@@ -2965,215 +2956,268 @@ function renderAnalysisContent(data){
 // ==========================================
 const STORAGE_BETS_KEY = 'mkbets_my_bets_v1';
 
-function getSavedBets() {
-  try {
+función obtenerApuestasSavadas() {
+  intentar {
     const raw = localStorage.getItem(STORAGE_BETS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    return [];
+    devolver raw ? JSON.parse(raw) : [];
+  } capturar (e) {
+    devolver [];
   }
 }
 
-function saveBets(bets) {
-  try {
+función saveBets(apuestas) {
+  intentar {
     localStorage.setItem(STORAGE_BETS_KEY, JSON.stringify(bets));
-  } catch (e) {}
+  } capturar (e) {}
 }
+
+
+ventana.guardarCurrentSimulatedRec = función() {
+  si (!window.__activeAnalysis) regresar;
+  var a = window.__activeAnalysis;
+  ventana.guardarApuestaSimulada(
+    un.partido.casa,
+    a.match.homeCrest || '',
+    a.partido.de.
+    a.match.awayCrest || '',
+    una.competición || '',
+    a.recomendación.de.datos,
+    a.recOdds,
+    a.recProb,
+    a.confianza.de.datos,
+    Nivel de confianza de los datos
+  );
+};
+
+ventana.guardarMercadoSimuladoActual = función(idx) {
+  si (!window.__activeAnalysis || !window.__activeAnalysis.data.markets) devolver;
+  var a = window.__activeAnalysis;
+  var mk = a.data.markets[idx];
+  si (!mk) regresar;
+  ventana.guardarApuestaSimulada(
+    un.partido.casa,
+    a.match.homeCrest || '',
+    a.partido.de.
+    a.match.awayCrest || '',
+    una.competición || '',
+    mk.nombre,
+    mk.bestOdds || 1.90,
+    mk.probabilidad || 50,
+    a.confianza.de.datos,
+    Nivel de confianza de los datos
+  );
+};
+
+document.addEventListener('click', function(ev) {
+  var sBtn = ev.target.closest('[data-action="settle"]');
+  si (sBtn) {
+    var id = sBtn.getAttribute('data-bet-id');
+    var st = sBtn.getAttribute('data-status');
+    Si (id && st) window.settleBet(id, st);
+    devolver;
+  }
+  var dBtn = ev.target.closest('[data-action="delete"]');
+  si (dBtn) {
+    var id = dBtn.getAttribute('data-bet-id');
+    Si (id) window.deleteBet(id);
+    devolver;
+  }
+});
 
 window.saveSimulatedBet = function(home, homeCrest, away, awayCrest, competition, marketName, odds, probability, confidence, confidenceLevel) {
-  const bets = getSavedBets();
+  const apuestas = obtenerApuestasGuardadas();
   const exists = bets.some(function(b){ return b.home === home && b.away === away && b.marketName === marketName && b.status === 'pending'; });
-  if (exists) {
-    alert('Esta apuesta ya est\u00e1 guardada en Mis apuestas como pendiente.');
-    return;
+  si (existe) {
+    alert('Esta apuesta ya está guardada en Mis apuestas como pendiente.');
+    devolver;
   }
   const dateInput = document.getElementById('date');
-  const newBet = {
+  const nuevaApuesta = {
     id: 'bet_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-    createdAt: new Date().toISOString(),
+    creadoEn: nuevo Date().toISOString(),
     matchDate: (dateInput && dateInput.value) || new Date().toISOString().slice(0, 10),
-    home: home,
+    hogar: hogar,
     homeCrest: homeCrest,
-    away: away,
+    lejos: lejos,
     awayCrest: awayCrest,
-    competition: competition,
-    marketName: marketName,
-    odds: Number(odds) || 1.95,
-    probability: Number(probability) || 50,
-    stakeEur: 10,
-    confidence: Number(confidence) || 75,
-    confidenceLevel: confidenceLevel || 'Alta',
-    status: 'pending',
-    profitEur: 0
+    competencia: competencia,
+    Nombre del mercado: nombre del mercado,
+    probabilidades: Número(probabilidades) || 1.95,
+    probabilidad: Número(probabilidad) || 50,
+    participaciónEur: 10,
+    confianza: Número(confianza) || 75,
+    Nivel de confianza: nivel de confianza || 'Alta',
+    estado: 'pendiente',
+    beneficioEur: 0
   };
-  bets.unshift(newBet);
-  saveBets(bets);
-  alert('\u00a1Apuesta guardada en "Mis apuestas"! Puedes ver las m\u00e9tricas de acierto y rentabilidad en la pesta\u00f1a Mis apuestas.');
+  apuestas.unshift(nuevaApuesta);
+  guardarApuestas(apuestas);
+  alert('¡Apuesta guardada en "Mis apuestas"! Puedes ver las métricas de acierto y rentabilidad en la pestaña Mis apuestas.');
   renderBetsView();
 };
 
-window.settleBet = function(id, status) {
-  const bets = getSavedBets();
+ventana.settleBet = función(id, estado) {
+  const apuestas = obtenerApuestasGuardadas();
   const bet = bets.find(function(b){ return b.id === id; });
-  if (!bet) return;
+  si (!apuesta) regresar;
   bet.status = status;
-  if (status === 'won') {
+  si (estado === 'ganó') {
     bet.profitEur = Number((bet.stakeEur * (bet.odds - 1)).toFixed(2));
-  } else if (status === 'lost') {
+  } else if (estado === 'perdido') {
     bet.profitEur = -bet.stakeEur;
-  } else {
+  } demás {
     bet.profitEur = 0;
   }
   bet.settledAt = status === 'pending' ? null : new Date().toISOString();
-  saveBets(bets);
+  guardarApuestas(apuestas);
   renderBetsView();
 };
 
-window.deleteBet = function(id) {
-  let bets = getSavedBets();
-  bets = bets.filter(function(b){ return b.id !== id; });
-  saveBets(bets);
+ventana.eliminarApuesta = función(id) {
+  let apuestas = obtenerApuestasGuardadas();
+  apuestas = apuestas.filter(function(b){ return b.id !== id; });
+  guardarApuestas(apuestas);
   renderBetsView();
 };
 
-window.clearAllBets = function() {
-  if (confirm('\u00bfDeseas vaciar todas tus apuestas simuladas?')) {
-    saveBets([]);
+ventana.clearAllBets = función() {
+  if (confirm('Â¿Quieres vaciar todas tus apuestas simuladas?')) {
+    guardarApuestas([]);
     renderBetsView();
   }
 };
 
-window.seedDemoBets = function() {
+ventana.seedDemoBets = función() {
   const d = new Date();
   const yesterday = new Date(d.getTime() - 86400000).toISOString().slice(0, 10);
-  const demo = [
+  const demostración = [
     {
       id: 'demo_1',
       createdAt: new Date(d.getTime() - 86400000).toISOString(),
-      matchDate: yesterday,
-      home: 'Real Madrid',
+      Fecha del partido: ayer,
+      Inicio: 'Real Madrid',
       homeCrest: 'https://crests.football-data.org/86.png',
-      away: 'FC Barcelona',
+      visitante: 'FC Barcelona',
       awayCrest: 'https://crests.football-data.org/81.png',
-      competition: 'LaLiga EA Sports',
-      marketName: 'Gana local',
-      odds: 1.95,
-      probability: 58.4,
-      stakeEur: 10,
-      confidence: 82,
-      confidenceLevel: 'Alta',
-      status: 'won',
-      profitEur: 9.50,
-      settledAt: new Date().toISOString()
+      competición: 'LaLiga EA Sports',
+      Nombre del mercado: 'Gana local',
+      probabilidades: 1,95,
+      probabilidad: 58,4,
+      participaciónEur: 10,
+      confianza: 82,
+      Nivel de confianza: 'Alta',
+      estado: 'ganó',
+      beneficioEur: 9,50,
+      establecidoEn: new Date().toISOString()
     },
     {
       id: 'demo_2',
       createdAt: new Date(d.getTime() - 172800000).toISOString(),
       matchDate: new Date(d.getTime() - 172800000).toISOString().slice(0, 10),
-      home: 'Arsenal FC',
+      Inicio: 'Arsenal FC',
       homeCrest: 'https://crests.football-data.org/57.png',
-      away: 'Chelsea FC',
+      visitante: 'Chelsea FC',
       awayCrest: 'https://crests.football-data.org/61.png',
-      competition: 'Premier League',
-      marketName: 'Over 2.5',
-      odds: 1.92,
-      probability: 56.2,
-      stakeEur: 10,
-      confidence: 76,
-      confidenceLevel: 'Alta',
-      status: 'won',
-      profitEur: 9.20,
-      settledAt: new Date().toISOString()
+      competición: 'Premier League',
+      Nombre del mercado: 'Más de 2.5',
+      probabilidades: 1,92
+      probabilidad: 56,2,
+      participaciónEur: 10,
+      confianza: 76,
+      Nivel de confianza: 'Alta',
+      estado: 'ganó',
+      beneficioEur: 9,20,
+      establecidoEn: new Date().toISOString()
     },
     {
       id: 'demo_3',
       createdAt: new Date(d.getTime() - 259200000).toISOString(),
       matchDate: new Date(d.getTime() - 259200000).toISOString().slice(0, 10),
-      home: 'Inter de Mil\u00e1n',
+      Inicio: 'Inter de Milán',
       homeCrest: 'https://crests.football-data.org/108.png',
-      away: 'Juventus FC',
+      visitante: 'Juventus FC',
       awayCrest: 'https://crests.football-data.org/109.png',
-      competition: 'Serie A',
-      marketName: 'Gana local',
-      odds: 2.10,
-      probability: 49.0,
-      stakeEur: 10,
-      confidence: 65,
-      confidenceLevel: 'Media',
-      status: 'lost',
-      profitEur: -10.00,
-      settledAt: new Date().toISOString()
+      competición: 'Serie A',
+      Nombre del mercado: 'Gana local',
+      Probabilidades: 2.10,
+      probabilidad: 49,0,
+      participaciónEur: 10,
+      confianza: 65,
+      Nivel de confianza: 'Medios de comunicación',
+      estado: 'perdido',
+      beneficioEur: -10,00,
+      establecidoEn: new Date().toISOString()
     },
     {
       id: 'demo_4',
-      createdAt: new Date().toISOString(),
+      creadoEn: nuevo Date().toISOString(),
       matchDate: new Date().toISOString().slice(0, 10),
-      home: 'Manchester City',
-      homeCrest: 'https://crests.football-data.org/65.png',
-      away: 'Liverpool FC',
+      casa: 'Manchester City',
+      HomeCrest: 'https://crests.football-data.org/65.png',
+      visitante: 'Liverpool FC',
       awayCrest: 'https://crests.football-data.org/64.png',
-      competition: 'Premier League',
-      marketName: 'Gana local',
-      odds: 1.88,
-      probability: 60.5,
-      stakeEur: 10,
-      confidence: 84,
-      confidenceLevel: 'Alta',
-      status: 'pending',
-      profitEur: 0
+      competición: 'Premier League',
+      Nombre del mercado: 'Gana local',
+      probabilidades: 1,88
+      probabilidad: 60,5,
+      participaciónEur: 10,
+      confianza: 84,
+      Nivel de confianza: 'Alta',
+      estado: 'pendiente',
+      beneficioEur: 0
     }
   ];
-  saveBets(demo);
+  guardarApuestas(demo);
   renderBetsView();
 };
 
-let currentBetsFilter = 'all';
+sea ​​currentBetsFilter = 'all';
 
-function renderBetsView() {
+función renderBetsView() {
   const container = document.getElementById('betsList');
   const statsContainer = document.getElementById('betsStatsGrid');
-  if (!container || !statsContainer) return;
+  si (!contenedor || !statsContainer) regresar;
 
-  const bets = getSavedBets();
-  const resolved = bets.filter(function(b){ return b.status === 'won' || b.status === 'lost'; });
+  const apuestas = obtenerApuestasGuardadas();
+  const resolved = bets.filter(function(b){ return b.status === 'ganó' || b.status === 'perdió'; });
   const won = bets.filter(function(b){ return b.status === 'won'; }).length;
   const lost = bets.filter(function(b){ return b.status === 'lost'; }).length;
   const pending = bets.filter(function(b){ return b.status === 'pending'; }).length;
 
-  const accuracy = resolved.length > 0 ? ((won / resolved.length) * 100).toFixed(1) + '%' : '\u2014';
+  const accuracy = resolved.length > 0 ? ((won / resolved.length) * 100).toFixed(1) + '%' : 'â€—';
   const totalProfit = resolved.reduce(function(acc, b){ return acc + (b.profitEur || 0); }, 0);
   const totalStaked = resolved.reduce(function(acc, b){ return acc + (b.stakeEur || 10); }, 0);
-  const roi = totalStaked > 0 ? ((totalProfit / totalStaked) * 100).toFixed(1) + '%' : '\u2014';
+  const roi = totalStaked > 0 ? ((totalProfit / totalStaked) * 100).toFixed(1) + '%' : 'â€—';
 
-  let streakCount = 0;
+  sea ​​streakCount = 0;
   let streakType = null;
-  for (let i = 0; i < resolved.length; i++) {
+  para (let i = 0; i < resolved.length; i++) {
     const b = resolved[i];
-    if (streakType === null) {
-      streakType = b.status;
-      streakCount = 1;
+    si (streakType === null) {
+      Tipo de racha = b.estado;
+      Contador de rachas = 1;
     } else if (b.status === streakType) {
-      streakCount++;
-    } else {
-      break;
+      Contador de rachas++;
+    } demás {
+      romper;
     }
   }
 
-  const profitColor = totalProfit > 0 ? '#7ee787' : totalProfit < 0 ? '#ff7b72' : 'white';
-  const profitSign = totalProfit > 0 ? '+' : '';
-  const streakText = streakType === 'won' ? ('\u{1f525} ' + streakCount + 'G') : streakType === 'lost' ? ('\u2744\ufe0f ' + streakCount + 'P') : (pending + ' pend.');
+  Color de beneficio constante = beneficio total > 0? '#7ee787': ¿Beneficio total < 0? '#ff7b72' : 'blanco';
+  signo de beneficio constante = beneficio total > 0? '+': '';
+  const streakText = streakType === 'won' ? ('ðŸ”¥ ' + streakCount + 'G') : streakType === 'lost' ? ('â „ï¸ ' + streakCount + 'P') : (pending + ' pend.');
   const streakColor = streakType === 'won' ? '#7ee787' : streakType === 'lost' ? '#ff7b72' : '#ffb45d';
 
   statsContainer.innerHTML =
     '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
       '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Acierto</div>' +
-      '<div style="font-size:16px;font-weight:900;color:white;margin:2px 0">' + accuracy + '</div>' +
-      '<div style="font-size:9px;color:#9da5b2">' + won + 'G / ' + lost + 'P</div>' +
+      '<div style="font-size:16px;font-weight:900;color:white;margin:2px 0">' + precisión + '</div>' +
+      '<div style="font-size:9px;color:#9da5b2">' + ganó + 'G ​​/ ' + perdió + 'P</div>' +
     '</div>' +
     '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
       '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Beneficio</div>' +
-      '<div style="font-size:16px;font-weight:900;color:' + profitColor + ';margin:2px 0">' + profitSign + totalProfit.toFixed(2) + '\u20ac</div>' +
-      '<div style="font-size:9px;color:#9da5b2">10\u20ac stake</div>' +
+      '<div style="font-size:16px;font-weight:900;color:' + profitColor + ';margin:2px 0">' + profitSign + totalProfit.toFixed(2) + 'â‚¬</div>' +
+      '<div style="font-size:9px;color:#9da5b2">10â‚¬ apuesta</div>' +
     '</div>' +
     '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
       '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">ROI</div>' +
@@ -3183,56 +3227,56 @@ function renderBetsView() {
     '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
       '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Racha</div>' +
       '<div style="font-size:15px;font-weight:900;color:' + streakColor + ';margin:2px 0">' + streakText + '</div>' +
-      '<div style="font-size:9px;color:#9da5b2">' + pending + ' en juego</div>' +
+      '<div style="font-size:9px;color:#9da5b2">' + pendiente + ' en juego</div>' +
     '</div>';
 
-  const filtered = bets.filter(function(b){
-    if (currentBetsFilter === 'all') return true;
-    return b.status === currentBetsFilter;
+  const filtrado = apuestas.filtro(función(b){
+    Si (currentBetsFilter === 'all') devuelve verdadero;
+    devolver b.status === currentBetsFilter;
   });
 
-  if (filtered.length === 0) {
-    container.innerHTML =
+  Si (filtered.length === 0) {
+    contenedor.innerHTML =
       '<div class="empty" style="padding:24px 10px;border:1px dashed #283344;border-radius:12px">' +
-        '<div style="font-size:28px;margin-bottom:6px">\u{1f4ca}</div>' +
+        '<div style="font-size:28px;margin-bottom:6px">ðŸ“Š</div>' +
         '<div style="font-weight:bold;color:white;margin-bottom:4px">No hay apuestas en esta vista</div>' +
-        '<div style="font-size:11px;color:#8e97a5;margin-bottom:12px">Abre cualquier partido en "Analyst" y haz clic en "\u{1f4cc} Simular esta apuesta" para medir los resultados.</div>' +
+        '<div style="font-size:11px;color:#8e97a5;margin-bottom:12px">Abre cualquier partido en "Analyst" y haz clic en "ðŸ“Œ Simular esta apuesta" para medir los resultados.</div>' +
         '<button type="button" class="league-chip active" onclick="seedDemoBets()">+ Cargar 4 apuestas de ejemplo</button>' +
       '</div>';
-    return;
+    devolver;
   }
 
-  container.innerHTML = filtered.map(function(b){
+  contenedor.innerHTML = filtrado.map(function(b){
     const isWon = b.status === 'won';
     const isLost = b.status === 'lost';
     const isPending = b.status === 'pending';
 
     let badgeHtml = '';
-    if (isPending) {
-      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ffb45d;background:#282114;border:1px solid #ffb45d55;padding:2px 8px;border-radius:12px">\u23f3 Pendiente</span>';
+    si (estáPendiente) {
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ffb45d;background:#282114;border:1px solid #ffb45d55;padding:2px 8px;border-radius:12px">â ³ Pendiente</span>';
     } else if (isWon) {
-      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#7ee787;background:#0d2a1b;border:1px solid #1d5b38;padding:2px 8px;border-radius:12px">\u2705 Gan\u00f3 (+' + b.profitEur.toFixed(2) + '\u20ac)</span>';
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#7ee787;background:#0d2a1b;border:1px solid #1d5b38;padding:2px 8px;border-radius:12px">âœ… GanÃ³ (+' + b.profitEur.toFixed(2) + 'â‚¬)</span>';
     } else if (isLost) {
-      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ff7b72;background:#2a1314;border:1px solid #5d2225;padding:2px 8px;border-radius:12px">\u274c Perdi\u00f3 (' + b.profitEur.toFixed(2) + '\u20ac)</span>';
-    } else {
-      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#c7ccd4;background:#1f2633;border:1px solid #37455d;padding:2px 8px;border-radius:12px">\u2796 Anulada</span>';
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ff7b72;background:#2a1314;border:1px solid #5d2225;padding:2px 8px;border-radius:12px">â Œ PerdiÃ³ (' + b.profitEur.toFixed(2) + 'â‚¬)</span>';
+    } demás {
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#c7ccd4;background:#1f2633;border:1px solid #37455d;padding:2px 8px;border-radius:12px">âž– Anulada</span>';
     }
 
     const wonAmount = (b.stakeEur * (b.odds - 1)).toFixed(2);
     const actionsHtml = isPending ?
       '<div style="display:flex;gap:6px">' +
-        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'won\')" style="background:#103320;color:#7ee787;border:1px solid #22633d;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">\u2705 Gan\u00f3 (+' + wonAmount + '\u20ac)</button>' +
-        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'lost\')" style="background:#2e1315;color:#ff7b72;border:1px solid #5d2327;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">\u274c Perdi\u00f3 (-' + b.stakeEur + '\u20ac)</button>' +
-        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'void\')" style="background:#1b2330;color:#9da5b2;border:1px solid #2a374c;border-radius:8px;padding:6px 8px;font-size:11px;cursor:pointer" title="Anular">\u2796</button>' +
+        '<button type="button" data-action="settle" data-status="won" data-bet-id="' + b.id + '" style="background:#103320;color:#7ee787;border:1px solid #22633d;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">âœ… GanÃ³ (+' + wonAmount + 'â‚¬)</button>' +
+        '<button type="button" data-action="settle" data-status="lost" data-bet-id="' + b.id + '" style="background:#2e1315;color:#ff7b72;border:1px solid #5d2327;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">â Œ PerdiÃ³ (-' + b.stakeEur + 'â‚¬)</button>' +
+        '<button type="button" data-action="settle" data-status="void" data-bet-id="' + b.id + '" style="background:#1b2330;color:#9da5b2;border:1px solid #2a374c;border-radius:8px;padding:6px 8px;font-size:11px;cursor:pointer" title="Anular">âž–</button>' +
       '</div>' :
       '<div>' +
-        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'pending\')" style="background:transparent;border:0;color:#8e97a5;text-decoration:underline;font-size:11px;cursor:pointer">Modificar resultado</button>' +
+        '<button type="button" data-action="settle" data-status="pending" data-bet-id="' + b.id + '" style="background:transparent;border:0;color:#8e97a5;text-decoration:underline;font-size:11px;cursor:pointer">Modificar resultado</button>' +
       '</div>';
 
     return '<div style="background:#0b0f16;border:1px solid #202b3a;border-radius:12px;padding:12px;margin-bottom:8px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#8e97a5;margin-bottom:6px">' +
-        '<span>\u{1f3c6} ' + esc(b.competition || '') + ' \u2022 \u{1f4c5} ' + esc(b.matchDate || '') + '</span>' +
-        badgeHtml +
+        '<span>ðŸ † ' + esc(b.competition || '') + ' â€¢ ðŸ“… ' + esc(b.matchDate || '') + '</span>' +
+        insigniaHtml +
       '</div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
         '<div style="font-size:13px;font-weight:bold;color:white;display:flex;align-items:center;gap:6px">' +
@@ -3240,24 +3284,24 @@ function renderBetsView() {
           '<span style="color:#8e97a5;font-size:10px">vs</span>' +
           '<span>' + esc(b.away) + '</span>' +
         '</div>' +
-        '<button type="button" onclick="deleteBet(\'' + b.id + '\')" style="background:transparent;border:0;color:#64748b;font-size:12px;cursor:pointer" title="Eliminar">\u{1f5d1}\ufe0f</button>' +
+        '<button type="button" data-action="delete" data-bet-id="' + b.id + '" style="background:transparent;border:0;color:#64748b;font-size:12px;cursor:pointer" title="Eliminar">ðŸ—'ï¸ </button>' +
       '</div>' +
       '<div style="background:#121824;border:1px solid #212d40;border-radius:10px;padding:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">' +
         '<div>' +
-          '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Pron\u00f3stico Simulado</div>' +
+          '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">PronÃ³stico Simulado</div>' +
           '<div style="font-size:13px;font-weight:900;color:white">' + esc(b.marketName) + ' <span style="color:#ffb45d;font-size:11px">@' + Number(b.odds).toFixed(2) + '</span></div>' +
-          '<div style="font-size:10px;color:#9da5b2">Confianza: ' + esc(b.confidenceLevel || 'Alta') + ' (' + b.confidence + '%) \u2022 Stake: ' + b.stakeEur + '\u20ac</div>' +
+          '<div style="font-size:10px;color:#9da5b2">Confianza: ' + esc(b.confidenceLevel || 'Alta') + ' (' + b.confidence + '%) • Stake: ' + b.stakeEur + 'â‚¬</div>' +
         '</div>' +
-        actionsHtml +
+        accionesHtml +
       '</div>' +
     '</div>';
-  }).join('');
+  }).unirse('');
 }
 
-// INICIALIZACI\u00d3N
+// INICIALIZACIÃ“N
 document.addEventListener('DOMContentLoaded', () => {
   const dateInput = document.getElementById('date');
-  if (dateInput) dateInput.value = localDateValue();
+  si (fechaInput) fechaInput.value = localDateValue();
 
   document.getElementById('searchBtn')?.addEventListener('click', searchFixtures);
 
@@ -3266,23 +3310,23 @@ document.addEventListener('DOMContentLoaded', () => {
     c.addEventListener('click', () => {
       chips.forEach(x => x.classList.remove('active'));
       c.classList.add('active');
-      selectedCompetition = c.dataset.competition || '';
+      competencia seleccionada = c.conjunto de datos.competencia || '';
       searchFixtures();
     });
   });
 
   document.addEventListener('click', e => {
     const btn = e.target.closest('[data-panel]');
-    if (btn) {
+    si (btn) {
       openAnalysis(btn.dataset.panel, btn.dataset.home, btn.dataset.away, btn.dataset.date);
     }
     const closeBtn = e.target.closest('[data-close]');
-    if (closeBtn) {
+    si (closeBtn) {
       document.getElementById(closeBtn.dataset.close)?.classList.remove('open');
     }
   });
 
-  function showTab(name) {
+  función mostrarPestaña(nombre) {
     document.getElementById('navHome')?.classList.toggle('active-nav', name === 'home');
     document.getElementById('navAnalyst')?.classList.toggle('active-nav', name === 'analyst');
     document.getElementById('navBets')?.classList.toggle('active-nav', name === 'bets');
@@ -3297,14 +3341,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fixturesCard) fixturesCard.style.display = name === 'analyst' ? 'block' : 'none';
     if (betsCard) betsCard.style.display = name === 'bets' ? 'block' : 'none';
 
-    if (name === 'bets') {
+    si (nombre === 'apuestas') {
       renderBetsView();
     }
   }
 
   document.getElementById('navHome')?.addEventListener('click', () => showTab('home'));
   document.getElementById('navAnalyst')?.addEventListener('click', () => {
-    showTab('analyst');
+    mostrarTab('analista');
     searchFixtures();
   });
   document.getElementById('navBets')?.addEventListener('click', () => showTab('bets'));
@@ -3337,7 +3381,7 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, modelVersion: MODEL_VERSION, uptime: process.uptime() });
 });
 
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`MK Bets ${MODEL_VERSION} running on port ${PORT} (0.0.0.0)`);
-  await ensureSchema();
+app.listen(PORT, async () => {
+  console.log(`MK Bets ${MODEL_VERSION} ejecutándose en el puerto ${PORT}`);
+  esperar ensureSchema();
 });
