@@ -21,25 +21,15 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # NOTA: quitamos "android-actions/setup-android@v3" â€” tiene un bug
-      # conocido: descarga una versiÃ³n de cmdline-tools que no coincide
-      # con la preinstalada en el runner, y su propio paso interno de
-      # licencias falla de forma no interactiva ("6 of 7 SDK package
-      # licenses not accepted"). En su lugar usamos el SDK que Ubuntu
-      # ya trae preinstalado (en $ANDROID_HOME) y aceptamos las
-      # licencias nosotros mismos.
-
       - name: Add Android cmdline-tools to PATH
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           SDKMANAGER_PATH=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" -iname sdkmanager -type f 2>/dev/null | head -n1)
           if [ -z "$SDKMANAGER_PATH" ]; then
-            echo "No se encontrÃ³ sdkmanager. Contenido de ANDROID_HOME:"
-            find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" -maxdepth 4 2>/dev/null
+            echo "No se encontro sdkmanager."
             exit 1
           fi
           CMDLINE_TOOLS_BIN=$(dirname "$SDKMANAGER_PATH")
-          echo "sdkmanager encontrado en: $CMDLINE_TOOLS_BIN"
           echo "$CMDLINE_TOOLS_BIN" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
@@ -59,9 +49,99 @@ jobs:
           unzip -q gradle-8.9-bin.zip
           echo "$GITHUB_WORKSPACE/gradle-8.9/bin" >> "$GITHUB_PATH"
 
-      - name: Check Gradle
+      - name: Ensure Android resources and manifest exist
         run: |
-          gradle --version
+          mkdir -p android/app/src/main/res/drawable
+          mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+          mkdir -p android/app/src/main/res/values
+
+          cat << 'EOF' > android/app/src/main/res/drawable/ic_launcher_background.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#0f172a"
+                  android:pathData="M0,0h108v108h-108z"/>
+          </vector>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/res/drawable/ic_launcher_foreground.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:pathData="M 24,76 L 24,32 L 48,60 L 72,32 L 72,76"
+                  android:strokeColor="#ffb45d"
+                  android:strokeWidth="7"
+                  android:strokeLineCap="round"
+                  android:strokeLineJoin="round" />
+              <path
+                  android:pathData="M 72,54 L 94,31"
+                  android:strokeColor="#ffb45d"
+                  android:strokeWidth="7"
+                  android:strokeLineCap="round" />
+              <path
+                  android:pathData="M 72,54 L 94,77"
+                  android:strokeColor="#ffb45d"
+                  android:strokeWidth="7"
+                  android:strokeLineCap="round" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_background"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_background"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/res/values/colors.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#0f172a</color>
+          </resources>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/res/values/themes.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.MiPronosticoDeportivo" parent="@android:style/Theme.NoTitleBar">
+              </style>
+          </resources>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:allowBackup="true"
+                  android:label="MK Bets"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.MiPronosticoDeportivo">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
 
       - name: Build Android APK
         working-directory: android
