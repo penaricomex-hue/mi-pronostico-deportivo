@@ -9,7 +9,7 @@ try {
   Pool = null;
 }
 
-// Importar motor o usar fallback interno autónomo
+// Importar motor o usar fallback interno autÃ³nomo
 let engine;
 try {
   engine = require('./engine');
@@ -67,7 +67,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 /* =========================================================
-   ACCESO PRIVADO (usuario/contraseña)
+   ACCESO PRIVADO (usuario/contraseÃ±a)
 ========================================================= */
 const APP_USERNAME = process.env.APP_USERNAME || '';
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
@@ -84,7 +84,7 @@ function timingSafeEqual(a, b) {
 
 if (APP_USERNAME && APP_PASSWORD) {
   app.use((req, res, next) => {
-    // Permitir health check y descargas públicas
+    // Permitir health check y descargas pÃºblicas
     if (req.path === '/health' || req.path === '/api/download-server') return next();
 
     const header = req.headers.authorization || '';
@@ -101,7 +101,7 @@ if (APP_USERNAME && APP_PASSWORD) {
     res.set('WWW-Authenticate', 'Basic realm="Mi Pronostico Deportivo"');
     return res.status(401).send('Acceso restringido.');
   });
-  console.log('[AUTH] Acceso protegido con usuario/contraseña activado.');
+  console.log('[AUTH] Acceso protegido con usuario/contraseÃ±a activado.');
 }
 
 const MODEL_VERSION = 'V8.0.0';
@@ -122,14 +122,14 @@ const BIGBALLS_LEAGUE_MAP = {
 };
 
 /* =========================================================
-   1. VENTAJA DE LOCAL DINÁMICA Y APRENDIDA (V8.0)
-   Home Advantage = promedio histórico de goles local / goles visitante
-   de esa competición, suavizado (shrinkage) hacia la media global (1.09x).
+   1. VENTAJA DE LOCAL DINÃMICA Y APRENDIDA (V8.0)
+   Home Advantage = promedio histÃ³rico de goles local / goles visitante
+   de esa competiciÃ³n, suavizado (shrinkage) hacia la media global (1.09x).
 ========================================================= */
 const GLOBAL_HOME_ADVANTAGE_BASELINE = 1.09;
 const learnedHomeAdvantage = new Map();
 
-// Priors iniciales calibrados estadísticamente
+// Priors iniciales calibrados estadÃ­sticamente
 const HOME_ADVANTAGE_PRIORS = {
   PD: 1.13,  // LaLiga
   SA: 1.12,  // Serie A
@@ -180,13 +180,13 @@ function getHomeAdvantage(competitionCode) {
 }
 
 /* =========================================================
-   CACHÉ MULTINIVEL CON TTLs INDEPENDIENTES (V8.0)
+   CACHÃ‰ MULTINIVEL CON TTLs INDEPENDIENTES (V8.0)
    Evita que cuotas o partidos se congelen 24 horas.
 ========================================================= */
 const CACHE_TTLS = {
   odds: 3,         // Cuotas de casas de apuestas: 3 minutos
-  analysis: 15,    // Análisis recalculable: 15 minutos
-  fixtures: 25,    // Fixtures del día y favoritos: 25 minutos
+  analysis: 15,    // AnÃ¡lisis recalculable: 15 minutos
+  fixtures: 25,    // Fixtures del dÃ­a y favoritos: 25 minutos
   injuries: 90,    // Bajas y lesiones: 90 minutos (1.5 horas)
   history: 240,    // Historial y H2H: 4 horas
   teams: 1440,     // Nombres de equipos y ligas: 24 horas
@@ -400,11 +400,11 @@ async function getInjuryDataForTeam(teamName, competitionCode) {
 }
 
 /* =========================================================
-   2. CÁLCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0)
+   2. CÃLCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0)
    - Portero titular: afecta defensa (+vulnerabilidad)
    - Delanteros / goleadores: afecta ataque
    - Defensas / medios: impacto repartido
-   - Impacto máximo global acotado al 8% (clamp 0.92 .. 1.0)
+   - Impacto mÃ¡ximo global acotado al 8% (clamp 0.92 .. 1.0)
 ========================================================= */
 async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, competitionCode) {
   try {
@@ -432,13 +432,13 @@ async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, c
         }
       }
 
-      // Si no tenemos desglose por posición, aplicar estimación suave de 0.015 por baja
+      // Si no tenemos desglose por posiciÃ³n, aplicar estimaciÃ³n suave de 0.015 por baja
       if (!data.details || !data.details.length) {
         attackPenalty = data.count * 0.018;
         defensePenalty = data.count * 0.018;
       }
 
-      // Acotamos el impacto máximo a un 8% (0.92) para evitar sobreajuste destructivo
+      // Acotamos el impacto mÃ¡ximo a un 8% (0.92) para evitar sobreajuste destructivo
       const attackFactor = clamp(1 - attackPenalty, 0.92, 1.0);
       const defenseFactor = clamp(1 - defensePenalty, 0.92, 1.0);
 
@@ -468,8 +468,8 @@ async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, c
 }
 
 /* =========================================================
-   3. DESCANSO Y FATIGA ASIMÉTRICA Y SUAVE (V8.0)
-   - Fatiga defensiva (desajuste táctico/repliegue) > fatiga ofensiva
+   3. DESCANSO Y FATIGA ASIMÃ‰TRICA Y SUAVE (V8.0)
+   - Fatiga defensiva (desajuste tÃ¡ctico/repliegue) > fatiga ofensiva
    - Curva continua y acotada, sin saltos binarios irreales
 ========================================================= */
 function calculateRestDaysFromMatches(matches, matchUtcDate) {
@@ -491,23 +491,23 @@ function getRestFatigaImpact(restDays) {
   if (restDays == null) {
     return { attackFactor: 1.0, defenseFactor: 1.0, label: 'Sin datos', impactPct: 0 };
   }
-  // ≤2 días: fatiga severa (defensa sufre más: -4.5%, ataque pierde frescura: -3.5%)
+  // â‰¤2 dÃ­as: fatiga severa (defensa sufre mÃ¡s: -4.5%, ataque pierde frescura: -3.5%)
   if (restDays <= 2) {
-    return { attackFactor: 0.965, defenseFactor: 0.955, label: 'Fatiga severa (≤2 días)', impactPct: -4 };
+    return { attackFactor: 0.965, defenseFactor: 0.955, label: 'Fatiga severa (â‰¤2 dÃ­as)', impactPct: -4 };
   }
-  // 3 días: descanso ajustado
+  // 3 dÃ­as: descanso ajustado
   if (restDays === 3) {
-    return { attackFactor: 0.98, defenseFactor: 0.975, label: 'Descanso justo (3 días)', impactPct: -2.5 };
+    return { attackFactor: 0.98, defenseFactor: 0.975, label: 'Descanso justo (3 dÃ­as)', impactPct: -2.5 };
   }
-  // 4 días: ritmo competitivo casi pleno
+  // 4 dÃ­as: ritmo competitivo casi pleno
   if (restDays === 4) {
-    return { attackFactor: 0.99, defenseFactor: 0.99, label: 'Descanso adecuado (4 días)', impactPct: -1 };
+    return { attackFactor: 0.99, defenseFactor: 0.99, label: 'Descanso adecuado (4 dÃ­as)', impactPct: -1 };
   }
-  // 5 a 12 días: óptimo
+  // 5 a 12 dÃ­as: Ã³ptimo
   if (restDays >= 5 && restDays <= 12) {
-    return { attackFactor: 1.0, defenseFactor: 1.0, label: `Óptimo (${restDays}d)`, impactPct: 0 };
+    return { attackFactor: 1.0, defenseFactor: 1.0, label: `Ã“ptimo (${restDays}d)`, impactPct: 0 };
   }
-  // > 12 días: leve falta de ritmo competitivo
+  // > 12 dÃ­as: leve falta de ritmo competitivo
   return { attackFactor: 0.985, defenseFactor: 0.99, label: `Inactividad prolongada (${restDays}d)`, impactPct: -1.5 };
 }
 
@@ -532,7 +532,7 @@ function applyCalculatedRestAdjustment(homeStats, awayStats, homeRestDays, awayR
 }
 
 /* =========================================================
-   4. PREDICCIONES BIG BALLS - SEGUNDA OPINIÓN PURAMENTE EXTERNA
+   4. PREDICCIONES BIG BALLS - SEGUNDA OPINIÃ“N PURAMENTE EXTERNA
    Ya no modifica el score de confianza ni la probabilidad del modelo.
 ========================================================= */
 async function getBigBallsPrediction(homeName, awayName, competitionCode) {
@@ -596,16 +596,16 @@ function evaluateSecondOpinion(model, bbPred) {
   return {
     available: true,
     agrees: agreement,
-    status: agreement ? 'Coincidencia con 2ª opinión' : 'Divergencia (Alerta externa)',
+    status: agreement ? 'Coincidencia con 2Âª opiniÃ³n' : 'Divergencia (Alerta externa)',
     mkPick: labels[mkWinner],
     mkProb: mkProbPct,
     bbPick: labels[bbPred.predictedWinner] || 'Otro resultado',
     bbProb: bbProbPct,
     diffPts: diffPts > 0 ? `+${diffPts}` : `${diffPts}`,
-    confidenceDelta: 0, // V8: ¡0% de contaminación al modelo propio!
+    confidenceDelta: 0, // V8: Â¡0% de contaminaciÃ³n al modelo propio!
     message: agreement
-      ? `Segunda opinión externa coincide en ${labels[mkWinner]} (${bbProbPct}%).`
-      : `Segunda opinión externa proyecta ${labels[bbPred.predictedWinner] || 'opuesto'} (${bbProbPct}%). Discrepancia entre fuentes.`
+      ? `Segunda opiniÃ³n externa coincide en ${labels[mkWinner]} (${bbProbPct}%).`
+      : `Segunda opiniÃ³n externa proyecta ${labels[bbPred.predictedWinner] || 'opuesto'} (${bbProbPct}%). Discrepancia entre fuentes.`
   };
 }
 
@@ -922,7 +922,7 @@ function findOddsEvent(events, homeName, awayName) {
 async function getOdds(homeName, awayName, competitionCode) {
   if (!ODDS_API_KEY) return { available: false, reason: 'ODDS_API_KEY no configurada' };
   const sport = ODDS_SPORT_BY_COMPETITION[competitionCode];
-  if (!sport) return { available: false, reason: 'Competición no soportada' };
+  if (!sport) return { available: false, reason: 'CompeticiÃ³n no soportada' };
 
   const events = await getOddsEvents(competitionCode);
   const found = findOddsEvent(events, homeName, awayName);
@@ -1047,7 +1047,7 @@ function buildMarket(type, outcome, probability, prices) {
     referenceEvPct > 0;
 
   let valueLevel = 'Sin valor';
-  if (info.isOutlier) valueLevel = 'Precio atípico';
+  if (info.isOutlier) valueLevel = 'Precio atÃ­pico';
   else if (referenceEvPct >= 10) valueLevel = 'Valor fuerte';
   else if (referenceEvPct >= 5) valueLevel = 'Valor';
   else if (referenceEvPct > 0) valueLevel = 'Valor leve';
@@ -1221,9 +1221,9 @@ app.get('/api/fixtures/favorites', async (req, res) => {
   if (cached) return res.json(cached);
 
   try {
-    // Football-Data rechaza periodos superiores a 10 días:
+    // Football-Data rechaza periodos superiores a 10 dÃ­as:
     // "Specified period must not exceed 10 days" (HTTP 400).
-    // Consultamos en 2 bloques seguros de 7 días: [0..7] y [8..14]
+    // Consultamos en 2 bloques seguros de 7 dÃ­as: [0..7] y [8..14]
     const b1From = todayStr;
     const b1To = addDaysToDateStr(todayStr, 7);
     const b2From = addDaysToDateStr(todayStr, 8);
@@ -1274,7 +1274,7 @@ app.get('/api/fixtures/favorites', async (req, res) => {
 app.get('/api/fixtures/next', async (req, res) => {
   const comp = String(req.query.competition || '').trim().toUpperCase();
   if (!comp) {
-    return res.status(400).json({ ok: false, error: 'Debes indicar una liga específica.' });
+    return res.status(400).json({ ok: false, error: 'Debes indicar una liga especÃ­fica.' });
   }
 
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -1301,7 +1301,7 @@ app.get('/api/fixtures/next', async (req, res) => {
 
     const result = foundDate
       ? { ok: true, found: true, date: foundDate, count: foundCount }
-      : { ok: true, found: false, message: 'No se encontraron partidos próximos en 45 días.' };
+      : { ok: true, found: false, message: 'No se encontraron partidos prÃ³ximos en 45 dÃ­as.' };
 
     cacheSet(cacheKey, result);
     return res.json(result);
@@ -1346,7 +1346,7 @@ app.get('/api/fixtures', async (req, res) => {
 });
 
 /* =========================================================
-   ANÁLISIS DE UN PARTIDO (con Descanso Propio + Home Advantage + Big Balls)
+   ANÃLISIS DE UN PARTIDO (con Descanso Propio + Home Advantage + Big Balls)
 ========================================================= */
 async function analyzeOneFixture(fixture) {
   const homeName = fixture.homeTeam?.name;
@@ -1378,7 +1378,7 @@ async function analyzeOneFixture(fixture) {
   let homeStats = calculateRecentTeamStats(homeId, homeMatches);
   let awayStats = calculateRecentTeamStats(awayId, awayMatches);
 
-  // Estabilización
+  // EstabilizaciÃ³n
   const attackBase = 1.35;
   const defBase = 1.20;
   const hGF = shrinkToMean(homeStats.avgGoalsFor, attackBase, homeStats.matches);
@@ -1417,7 +1417,7 @@ async function analyzeOneFixture(fixture) {
   const modelInput = createModelInput(homeStats, awayStats, compCode);
   let model = matchModel(modelInput.homeXg, modelInput.awayXg);
 
-  // H2H Histórico
+  // H2H HistÃ³rico
   const [bbHomeTeamId, bbAwayTeamId] = await Promise.all([
     getBigBallsTeamId(homeName, compCode),
     getBigBallsTeamId(awayName, compCode)
@@ -1425,11 +1425,11 @@ async function analyzeOneFixture(fixture) {
   const h2hDrawRate = await getH2HDrawRate(bbHomeTeamId, bbAwayTeamId);
   model = applyH2HAdjustment(model, h2hDrawRate);
 
-  // 3. Predicción Big Balls (Segunda Opinión)
+  // 3. PredicciÃ³n Big Balls (Segunda OpiniÃ³n)
   const bbPred = await getBigBallsPrediction(homeName, awayName, compCode);
   const bbComparison = evaluateSecondOpinion(model, bbPred);
 
-  // Confianza propia matemática pura (sin adulteración externa)
+  // Confianza propia matemÃ¡tica pura (sin adulteraciÃ³n externa)
   let modelConf = 50;
   try {
     const bestP = Math.max(model.homeWin, model.draw, model.awayWin);
@@ -1441,7 +1441,7 @@ async function analyzeOneFixture(fixture) {
 
   const confidenceAdjusted = clamp(Math.round(modelConf), 20, 95);
 
-  // Aprendizaje empírico de ventaja de local de la liga
+  // Aprendizaje empÃ­rico de ventaja de local de la liga
   updateLearnedHomeAdvantage(compCode, (homeMatches || []).concat(awayMatches || []));
 
   const odds = await getOdds(homeName, awayName, compCode);
@@ -1580,7 +1580,7 @@ app.get('/api/analyze', async (req, res) => {
     }
 
     if (!selected) {
-      return res.status(404).json({ ok: false, error: 'No se encontró el partido solicitado.', modelVersion: MODEL_VERSION });
+      return res.status(404).json({ ok: false, error: 'No se encontrÃ³ el partido solicitado.', modelVersion: MODEL_VERSION });
     }
 
     const actualHomeName = selected.homeTeam?.name || requestedHome;
@@ -1605,7 +1605,7 @@ app.get('/api/analyze', async (req, res) => {
     if (!homeId || !awayId) {
       return res.status(503).json({
         ok: false,
-        error: 'Football-Data no pudo identificar uno de los equipos para estadísticas.',
+        error: 'Football-Data no pudo identificar uno de los equipos para estadÃ­sticas.',
         modelVersion: MODEL_VERSION
       });
     }
@@ -1665,11 +1665,11 @@ app.get('/api/analyze', async (req, res) => {
     const h2hDrawRate = await getH2HDrawRate(bbHomeTeamId, bbAwayTeamId);
     model = applyH2HAdjustment(model, h2hDrawRate);
 
-    // 3. Predicción Big Balls (Segunda Opinión)
+    // 3. PredicciÃ³n Big Balls (Segunda OpiniÃ³n)
     const bbPrediction = await getBigBallsPrediction(actualHomeName, actualAwayName, competitionCode);
     const bbComparison = evaluateSecondOpinion(model, bbPrediction);
 
-    // Confianza base matemática autónoma
+    // Confianza base matemÃ¡tica autÃ³noma
     let modelConfidence = 50;
     try {
       const bestProbability = Math.max(model.homeWin, model.draw, model.awayWin);
@@ -1697,8 +1697,8 @@ app.get('/api/analyze', async (req, res) => {
 
     const confidenceLevel = confidenceAdjusted >= 75 ? 'Alta' : (confidenceAdjusted >= 60 ? 'Media' : 'Baja');
     const confidenceExplanation = confidenceAdjusted >= 75
-      ? 'Señal estadística fuerte respaldada por métricas sólidas.'
-      : (confidenceAdjusted >= 60 ? 'Señal moderada. Recomendada gestión de banca disciplinada.' : 'Señal insuficiente para recomendar apuesta de alto riesgo.');
+      ? 'SeÃ±al estadÃ­stica fuerte respaldada por mÃ©tricas sÃ³lidas.'
+      : (confidenceAdjusted >= 60 ? 'SeÃ±al moderada. Recomendada gestiÃ³n de banca disciplinada.' : 'SeÃ±al insuficiente para recomendar apuesta de alto riesgo.');
 
     const score = mostLikelyScore(modelInput.homeXg, modelInput.awayXg);
 
@@ -1776,8 +1776,8 @@ app.get('/api/analyze', async (req, res) => {
 });
 
 /* =========================================================
-   BACKTESTING & CALIBRACIÓN ESTADÍSTICA (V8.1 Foundation)
-   Calcula Brier Score, Log Loss, precisión 1X2 y calibración
+   BACKTESTING & CALIBRACIÃ“N ESTADÃSTICA (V8.1 Foundation)
+   Calcula Brier Score, Log Loss, precisiÃ³n 1X2 y calibraciÃ³n
    por tramos con resultados reales de Football-Data.
 ========================================================= */
 app.get('/api/backtest', async (req, res) => {
@@ -1799,7 +1799,7 @@ app.get('/api/backtest', async (req, res) => {
         modelVersion: MODEL_VERSION,
         competition: comp,
         evaluatedMatches: matches.length,
-        message: 'No hay suficientes partidos históricos finalizados en este periodo para calcular métricas.',
+        message: 'No hay suficientes partidos histÃ³ricos finalizados en este periodo para calcular mÃ©tricas.',
         metrics: null
       });
     }
@@ -1844,7 +1844,7 @@ app.get('/api/backtest', async (req, res) => {
       const probTarget = actualResult === 'home' ? pH : (actualResult === 'draw' ? pD : pA);
       logLossSum += -Math.log(Math.max(0.001, probTarget));
 
-      // Pronóstico favorito del modelo
+      // PronÃ³stico favorito del modelo
       const predictedWinner = (pH > pD && pH > pA) ? 'home' : (pA > pH && pA > pD ? 'away' : 'draw');
       const maxP = Math.max(pH, pD, pA);
       const maxPPct = maxP * 100;
@@ -1916,7 +1916,7 @@ function requireDb(res) {
   if (!pool) {
     res.status(503).json({
       ok: false,
-      error: 'La base de datos PostgreSQL no está configurada (DATABASE_URL).'
+      error: 'La base de datos PostgreSQL no estÃ¡ configurada (DATABASE_URL).'
     });
     return false;
   }
@@ -2092,8 +2092,8 @@ app.get('/api/bets/summary', async (req, res) => {
    - Skeletons animados de carga
    - Descanso propio gratis
    - Ventaja local ajustada
-   - Segunda opinión Big Balls
-   - Favicon embebido e ícono
+   - Segunda opiniÃ³n Big Balls
+   - Favicon embebido e Ã­cono
 ========================================================= */
 function renderPage() {
   return `<!DOCTYPE html>
@@ -2102,7 +2102,7 @@ function renderPage() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
-<title>MK Bets V7.17.0 - Pronósticos Deportivos</title>
+<title>MK Bets V8.0.0 - PronÃ³sticos Deportivos</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 90' style='background:%23080b10'%3E%3Cpolyline points='10,80 10,10 45,55 80,10 80,80' fill='none' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='8' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='82' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3C/svg%3E">
 
 <style>
@@ -2251,7 +2251,7 @@ input{
   gap: 8px;
 }
 
-/* 4. BANNER "VS" EN EL ANÁLISIS */
+/* 4. BANNER "VS" EN EL ANÃLISIS */
 .match-banner {
   background: linear-gradient(180deg, #131a26 0%, #0d121a 100%);
   border: 1px solid #2a3547;
@@ -2486,7 +2486,7 @@ input{
 
 <header class="header">
   <div>
-    <span class="version">● V7.17.0 ANALYST</span>
+    <span class="version">â— V8.0.0 ANALYST</span>
   </div>
 
   <div class="logo-row">
@@ -2499,13 +2499,14 @@ input{
   </div>
 
   <h1 style="margin:14px 0 6px;font-size:28px;line-height:1.1">Analiza antes de apostar.</h1>
-  <div class="subtitle">Modelo estadístico + Descanso gratis + Ventaja local por liga + 2ª opinión Big Balls + Cuotas reales.</div>
+  <div class="subtitle">Motor EstadÃ­stico V8.0 + LocalÃ­a Aprendida + Fatiga Suave + Lesiones Ponderadas + 2Âª OpiniÃ³n Desacoplada.</div>
 
   <div class="chips">
-    <span class="chip">⏱️ Descanso propio</span>
-    <span class="chip">🏟️ Localía x Liga</span>
-    <span class="chip">🔮 Big Balls Opinion</span>
-    <span class="chip">🛡️ Value Bets</span>
+    <span class="chip">ðŸŸï¸ LocalÃ­a Aprendida</span>
+    <span class="chip">â±ï¸ Fatiga AsimÃ©trica</span>
+    <span class="chip">ðŸ¥ Lesiones Ponderadas</span>
+    <span class="chip">ðŸ”® 2Âª OpiniÃ³n Externa</span>
+    <span class="chip">ðŸ“Š CalibraciÃ³n V8.1</span>
   </div>
 </header>
 
@@ -2514,19 +2515,19 @@ input{
 
   <div class="league-chips" id="leagueChips">
     <button type="button" class="league-chip active" data-competition="">Todas</button>
-    <button type="button" class="league-chip league-chip-priority" data-competition="PD">🇪🇸 LaLiga</button>
-    <button type="button" class="league-chip league-chip-priority" data-competition="CL">⭐ Champions</button>
-    <button type="button" class="league-chip" data-competition="PL">🏴 Premier League</button>
-    <button type="button" class="league-chip" data-competition="FL1">🇫🇷 Ligue 1</button>
-    <button type="button" class="league-chip" data-competition="SA">🇮🇹 Serie A</button>
-    <button type="button" class="league-chip" data-competition="BL1">🇩🇪 Bundesliga</button>
-    <button type="button" class="league-chip" data-competition="EL">🥈 Europa League</button>
+    <button type="button" class="league-chip league-chip-priority" data-competition="PD">ðŸ‡ªðŸ‡¸ LaLiga</button>
+    <button type="button" class="league-chip league-chip-priority" data-competition="CL">â­ Champions</button>
+    <button type="button" class="league-chip" data-competition="PL">ðŸ´ Premier League</button>
+    <button type="button" class="league-chip" data-competition="FL1">ðŸ‡«ðŸ‡· Ligue 1</button>
+    <button type="button" class="league-chip" data-competition="SA">ðŸ‡®ðŸ‡¹ Serie A</button>
+    <button type="button" class="league-chip" data-competition="BL1">ðŸ‡©ðŸ‡ª Bundesliga</button>
+    <button type="button" class="league-chip" data-competition="EL">ðŸ¥ˆ Europa League</button>
   </div>
 
   <input id="date" type="date">
 
-  <button class="primary" id="searchBtn" type="button">🔎 BUSCAR PARTIDOS</button>
-  <button class="analysis-close" id="nextFixtureBtn" type="button" style="margin-top:8px">⏭️ Buscar próximo partido disponible</button>
+  <button class="primary" id="searchBtn" type="button">ðŸ”Ž BUSCAR PARTIDOS</button>
+  <button class="analysis-close" id="nextFixtureBtn" type="button" style="margin-top:8px">â­ï¸ Buscar prÃ³ximo partido disponible</button>
 
   <div id="searchSummary" style="color:#9da5b2;font-size:13px;margin-top:10px"></div>
 </section>
@@ -2534,7 +2535,7 @@ input{
 <!-- 6. SKELETON LOADER CONTAINER -->
 <div id="loadingSkeleton" style="display:none;margin-top:14px">
   <div class="loading-status-text">
-    <span>⚽</span>
+    <span>âš½</span>
     <span id="loadingStatusText">Consultando partidos y calculando descanso...</span>
   </div>
   <div class="skeleton-card">
@@ -2563,7 +2564,7 @@ input{
   <div class="card-title">Partidos de la fecha</div>
   <div id="fixtureList"></div>
 
-  <button class="primary" id="parlayBtn" type="button" style="margin-top:12px">🎰 GENERAR PARLAY SUGERIDO</button>
+  <button class="primary" id="parlayBtn" type="button" style="margin-top:12px">ðŸŽ° GENERAR PARLAY SUGERIDO</button>
   <div id="parlayLoading" style="display:none;margin-top:12px">
     <div class="loading-status-text">Buscando picks fuertes y errores de cuota...</div>
   </div>
@@ -2573,29 +2574,17 @@ input{
 <!-- VISTA INICIO -->
 <section id="homeCard" class="card">
   <div style="text-align:center;padding:16px 0;border-bottom:1px solid #242b36;margin-bottom:14px">
-    <div style="font-size:52px;line-height:1">⚽</div>
-    <div style="font-style:italic;color:#c7ccd4;margin-top:8px">"El balón no miente. Los números tampoco."</div>
+    <div style="font-size:52px;line-height:1">âš½</div>
+    <div style="font-style:italic;color:#c7ccd4;margin-top:8px">"El balÃ³n no miente. Los nÃºmeros tampoco."</div>
   </div>
 
-  <div class="card-title">Novedades V7.17.0</div>
+  <div class="card-title">Novedades V8.0.0</div>
   <div class="muted">
-    1. <b>Descanso Gratis:</b> Calculado automáticamente del historial de partidos de Football-Data (días desde el último juego).<br>
-    2. <b>Ventaja Local por Liga:</b> Ponderación dinámica (LaLiga 1.14x, Serie A 1.13x, Premier 1.07x).<br>
-    3. <b>Big Balls 2ª Opinión:</b> Contraste automático contra predicciones externas.<br>
-    4. <b>Banner VS y Medidor Circular:</b> Interfaz visual de alta gama con escudos reales y medidor de confianza.
-  </div>
-
-  <!-- Zona de descarga directa para Render y GitHub -->
-  <div style="margin-top:18px;padding-top:14px;border-top:1px solid #242b36">
-    <div style="font-weight:800;color:white;font-size:12px;margin-bottom:8px">📥 Archivos para actualizar tu Render y GitHub:</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <a href="/api/download-server" style="flex:1;text-align:center;padding:8px 12px;background:#1b2432;color:#ffb45d;border:1px solid #ffb45d55;border-radius:10px;text-decoration:none;font-weight:bold;font-size:11px;display:flex;align-items:center;justify-content:center;gap:6px">
-        ⬇️ Descargar server.js
-      </a>
-      <a href="/api/download-zip" style="flex:1;text-align:center;padding:8px 12px;background:#ffb45d;color:#080b10;border-radius:10px;text-decoration:none;font-weight:bold;font-size:11px;display:flex;align-items:center;justify-content:center;gap:6px">
-        📦 Descargar ZIP Completo
-      </a>
-    </div>
+    1. <b>Ventaja Local Aprendida:</b> EstimaciÃ³n bayesiana con regresiÃ³n a la media segÃºn goles histÃ³ricos reales por liga.<br>
+    2. <b>Lesiones Ponderadas:</b> Impacto especÃ­fico por posiciÃ³n (portero/defensa/delantera) y acotado al 8% mÃ¡ximo.<br>
+    3. <b>Fatiga AsimÃ©trica y Suave:</b> Diferencia fatiga defensiva de ofensiva con curvas suaves continuas.<br>
+    4. <b>2Âª OpiniÃ³n Desacoplada:</b> Big Balls como referencia externa independiente sin alterar la confianza matemÃ¡tica propia.<br>
+    5. <b>Favoritos &gt;10d:</b> Chunking seguro de peticiones sin error HTTP 400.
   </div>
 </section>
 
@@ -2603,7 +2592,7 @@ input{
 <section id="betsCard" class="card" style="display:none">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid #242b36;padding-bottom:10px">
     <div>
-      <div class="card-title" style="margin:0">📊 Mis apuestas</div>
+      <div class="card-title" style="margin:0">ðŸ“Š Mis apuestas</div>
       <div class="muted" style="font-size:11px">Simulador para recoger datos y medir el % de acierto real</div>
     </div>
     <div style="display:flex;gap:6px">
@@ -2632,9 +2621,9 @@ input{
 </div>
 
 <nav class="nav">
-  <span id="navHome">⌂<br>Inicio</span>
-  <span id="navAnalyst" class="active-nav"><strong>🧠<br>Analyst</strong></span>
-  <span id="navBets"><strong>📊<br>Mis apuestas</strong></span>
+  <span id="navHome">âŒ‚<br>Inicio</span>
+  <span id="navAnalyst" class="active-nav"><strong>ðŸ§ <br>Analyst</strong></span>
+  <span id="navBets"><strong>ðŸ“Š<br>Mis apuestas</strong></span>
 </nav>
 
 <script>
@@ -2690,13 +2679,13 @@ function renderCircularConfidence(conf, level, explanation, bbComp, restData) {
   let consensusBadge = '';
   if (bbComp && bbComp.available) {
     const badgeCls = bbComp.agrees ? 'badge-consensus-agree' : 'badge-consensus-disagree';
-    const icon = bbComp.agrees ? '🤝' : '⚠️';
+    const icon = bbComp.agrees ? 'ðŸ¤' : 'âš ï¸';
     consensusBadge = '<div class="badge-tag ' + badgeCls + '">' + icon + ' ' + esc(bbComp.status) + '</div>';
   }
 
   let restBadge = '';
   if (restData) {
-    restBadge = '<div class="badge-tag">⏱️ Descanso: Loc ' + esc(restData.home?.days != null ? restData.home.days + 'd' : '?') + ' vs Vis ' + esc(restData.away?.days != null ? restData.away.days + 'd' : '?') + '</div>';
+    restBadge = '<div class="badge-tag">â±ï¸ Descanso: Loc ' + esc(restData.home?.days != null ? restData.home.days + 'd' : '?') + ' vs Vis ' + esc(restData.away?.days != null ? restData.away.days + 'd' : '?') + '</div>';
   }
 
   return \`
@@ -2715,7 +2704,7 @@ function renderCircularConfidence(conf, level, explanation, bbComp, restData) {
         </div>
       </div>
       <div class="confidence-details">
-        <strong style="display:block;font-size:14px;color:#fff">Confianza del Análisis: \${esc(level)}</strong>
+        <strong style="display:block;font-size:14px;color:#fff">Confianza del AnÃ¡lisis: \${esc(level)}</strong>
         <div class="muted" style="font-size:12px;margin-top:3px">\${esc(explanation)}</div>
         <div class="confidence-badge-row">
           \${consensusBadge}
@@ -2740,19 +2729,19 @@ function fixtureHtml(f, idx, date){
             \${esc(f.away)}
           </div>
           <div class="fixture-meta">
-            🕐 \${formatTime(f.kickoff)} · 🏆 \${esc(f.competition || 'Liga')}
+            ðŸ• \${formatTime(f.kickoff)} Â· ðŸ† \${esc(f.competition || 'Liga')}
           </div>
         </div>
         <button class="analyze-small" type="button" data-panel="\${panelId}" data-home="\${esc(f.home)}" data-away="\${esc(f.away)}" data-date="\${esc(date)}">
-          🧠 ANALIZAR
+          ðŸ§  ANALIZAR
         </button>
       </div>
 
       <div id="\${panelId}" class="analysis-panel">
         <div class="analysis-inner">
-          <button class="analysis-close" type="button" data-close="\${panelId}">▲ CERRAR ANÁLISIS</button>
+          <button class="analysis-close" type="button" data-close="\${panelId}">â–² CERRAR ANÃLISIS</button>
 
-          <!-- Skeleton interno del análisis -->
+          <!-- Skeleton interno del anÃ¡lisis -->
           <div id="\${panelId}-loading" style="display:none;padding:10px 0">
             <div class="loading-status-text">Analizando xG, descanso de jugadores y cuotas...</div>
             <div class="skeleton-shimmer" style="height:90px;border-radius:14px;margin-bottom:10px"></div>
@@ -2785,7 +2774,12 @@ async function searchFixtures(){
 
   try {
     const res = await fetch('/api/fixtures?date=' + encodeURIComponent(date) + (selectedCompetition ? '&competition=' + encodeURIComponent(selectedCompetition) : ''), { cache:'no-store' });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (jsonErr) {
+      throw new Error('Error de conexiÃ³n con el servidor (HTTP ' + res.status + '). Espera 30 segundos mientras Render inicializa.');
+    }
 
     if (!res.ok || !data.ok) throw new Error(data.error || 'Error cargando partidos.');
 
@@ -2824,11 +2818,16 @@ async function openAnalysis(panelId, home, away, date){
 
   try {
     const res = await fetch('/api/analyze?home=' + encodeURIComponent(home) + '&away=' + encodeURIComponent(away) + '&date=' + encodeURIComponent(date), { cache:'no-store' });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (jsonErr) {
+      throw new Error('Error al conectar con la API de anÃ¡lisis (HTTP ' + res.status + ').');
+    }
 
     if (!res.ok || !data.ok) throw new Error(data.error || 'No se pudo analizar el partido.');
 
-    // RENDERIZAR ANÁLISIS COMPLETO
+    // RENDERIZAR ANÃLISIS COMPLETO
     content.innerHTML = renderAnalysisContent(data);
     content.style.display = 'block';
   } catch (err) {
@@ -2851,9 +2850,9 @@ function renderAnalysisContent(data){
         <div class="banner-role-pill">LOCAL</div>
       </div>
       <div class="banner-vs-center">
-        <div class="banner-meta-comp">🏆 \${esc(m.competition || 'Competición')}</div>
+        <div class="banner-meta-comp">ðŸ† \${esc(m.competition || 'CompeticiÃ³n')}</div>
         <div class="banner-vs-circle">VS</div>
-        <div class="banner-meta-time">🕐 \${formatTime(m.kickoff)}</div>
+        <div class="banner-meta-time">ðŸ• \${formatTime(m.kickoff)}</div>
       </div>
       <div class="banner-team">
         \${crestImg(m.awayCrest, m.away)}
@@ -2872,7 +2871,7 @@ function renderAnalysisContent(data){
     data.rest
   );
 
-  // DECISIÓN VALUE BET
+  // DECISIÃ“N VALUE BET
   const decisionClass = data.betEligible ? 'bet' : 'noBet';
   const recMarket = (Array.isArray(data.markets) ? data.markets.find(mk => mk.name === data.recommendation) : null) || (Array.isArray(data.markets) ? data.markets[0] : null);
   const recOdds = recMarket && recMarket.bestOdds ? Number(recMarket.bestOdds) : 1.95;
@@ -2883,21 +2882,21 @@ function renderAnalysisContent(data){
   if (isEligible) {
     simulateBtnHtml = '<div style="margin-top:12px">' +
       '<button type="button" class="simulate-bet-btn" onclick="saveSimulatedBet(\'' + esc(m.home) + '\', \'' + esc(m.homeCrest||'') + '\', \'' + esc(m.away) + '\', \'' + esc(m.awayCrest||'') + '\', \'' + esc(m.competition||'') + '\', \'' + esc(data.recommendation) + '\', ' + recOdds + ', ' + recProb + ', ' + data.confidence + ', \'' + esc(data.confidenceLevel) + '\')">' +
-        '📌 Simular esta apuesta (Guardar en Mis apuestas)' +
+        'ðŸ“Œ Simular esta apuesta (Guardar en Mis apuestas)' +
       '</button>' +
     '</div>';
   }
 
   let marketsHtml = '';
   if (Array.isArray(data.markets) && data.markets.length > 0) {
-    marketsHtml = '<div class="section-label">💵 Cuotas & Mercados Disponibles</div>' +
+    marketsHtml = '<div class="section-label">ðŸ’µ Cuotas & Mercados Disponibles</div>' +
       data.markets.map(function(mk){
         const o = mk.bestOdds ? Number(mk.bestOdds).toFixed(2) : '-';
         const ev = mk.referenceEvPct ? (mk.referenceEvPct > 0 ? '+' : '') + mk.referenceEvPct + '%' : '-';
         return '<div class="market" style="display:flex;justify-content:space-between;align-items:center">' +
           '<div>' +
             '<b>' + esc(mk.name) + '</b>' +
-            '<div class="muted" style="font-size:11px">Prob: ' + pct(mk.probability) + ' • EV: ' + ev + '</div>' +
+            '<div class="muted" style="font-size:11px">Prob: ' + pct(mk.probability) + ' â€¢ EV: ' + ev + '</div>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px">' +
             '<span style="font-weight:900;color:#ffb45d;font-size:14px">@' + o + '</span>' +
@@ -2914,7 +2913,7 @@ function renderAnalysisContent(data){
     const borderColor = data.bigBallsComparison.agrees ? '#1a5230' : '#5a261c';
     const bgColor = data.bigBallsComparison.agrees ? '#0b1f14' : '#1e110f';
     const textColor = data.bigBallsComparison.agrees ? '#7ee787' : '#ff7b72';
-    const textTitle = data.bigBallsComparison.agrees ? '🤝 Consenso Big Balls' : '⚠️ Alerta de Divergencia Big Balls';
+    const textTitle = data.bigBallsComparison.agrees ? 'ðŸ¤ Consenso Big Balls' : 'âš ï¸ Alerta de Divergencia Big Balls';
     bbHtml = '<div class="value-box" style="border-color:' + borderColor + ';background:' + bgColor + '">' +
       '<b style="color:' + textColor + '">' + textTitle + '</b>' +
       '<div class="muted" style="margin-top:4px">' + esc(data.bigBallsComparison.message) + '</div>' +
@@ -2923,26 +2922,26 @@ function renderAnalysisContent(data){
 
   return bannerHtml +
     '<div class="fixture-decision">' +
-      '<div class="section-label">Decisión del modelo</div>' +
+      '<div class="section-label">DecisiÃ³n del modelo</div>' +
       '<h3 class="' + decisionClass + '">' + esc(data.recommendation) + '</h3>' +
       '<div class="muted">' + esc(data.reason) + '</div>' +
       simulateBtnHtml +
     '</div>' +
     confidenceGaugeHtml +
     bbHtml +
-    '<div class="section-label">📊 Probabilidades 1X2</div>' +
+    '<div class="section-label">ðŸ“Š Probabilidades 1X2</div>' +
     '<div class="prob-grid">' +
-      '<div class="prob"><span>🏠 LOCAL</span><b>' + pct(data.probabilities?.homeWin) + '</b></div>' +
-      '<div class="prob"><span>🤝 EMPATE</span><b>' + pct(data.probabilities?.draw) + '</b></div>' +
-      '<div class="prob"><span>✈️ VISITANTE</span><b>' + pct(data.probabilities?.awayWin) + '</b></div>' +
+      '<div class="prob"><span>ðŸ  LOCAL</span><b>' + pct(data.probabilities?.homeWin) + '</b></div>' +
+      '<div class="prob"><span>ðŸ¤ EMPATE</span><b>' + pct(data.probabilities?.draw) + '</b></div>' +
+      '<div class="prob"><span>âœˆï¸ VISITANTE</span><b>' + pct(data.probabilities?.awayWin) + '</b></div>' +
     '</div>' +
-    '<div class="section-label">⚽ xG Esperados (Localía ' + (data.homeAdvantage?.factor || 1.08) + 'x)</div>' +
+    '<div class="section-label">âš½ xG Esperados (LocalÃ­a ' + (data.homeAdvantage?.factor || 1.08) + 'x)</div>' +
     '<div class="xg-grid">' +
       '<div class="xg"><span>LOCAL</span><b>' + (data.xG?.home || '-') + '</b></div>' +
       '<div class="xg"><span>VISITANTE</span><b>' + (data.xG?.away || '-') + '</b></div>' +
       '<div class="xg"><span>TOTAL</span><b>' + (data.xG?.total || '-') + '</b></div>' +
     '</div>' +
-    '<div class="section-label">⏱️ Descanso Calculado (Football-Data)</div>' +
+    '<div class="section-label">â±ï¸ Descanso Calculado (Football-Data)</div>' +
     '<div class="market">' +
       '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
         '<span><b>' + esc(m.home) + ':</b> ' + esc(data.rest?.home?.status || 'Sin datos') + '</span>' +
@@ -2953,7 +2952,7 @@ function renderAnalysisContent(data){
         '<span>' + (data.rest?.away?.impactPct ? data.rest.away.impactPct + '%' : '0%') + '</span>' +
       '</div>' +
     '</div>' +
-    '<div class="section-label">🎯 Marcador Más Probable</div>' +
+    '<div class="section-label">ðŸŽ¯ Marcador MÃ¡s Probable</div>' +
     '<div class="market" style="text-align:center">' +
       '<div style="font-size:32px;font-weight:900">' + esc(data.mostLikelyScore?.score) + '</div>' +
       '<div class="muted">Probabilidad: ' + pct(data.mostLikelyScore?.probability) + '</div>' +
@@ -2985,7 +2984,7 @@ window.saveSimulatedBet = function(home, homeCrest, away, awayCrest, competition
   const bets = getSavedBets();
   const exists = bets.some(function(b){ return b.home === home && b.away === away && b.marketName === marketName && b.status === 'pending'; });
   if (exists) {
-    alert('Esta apuesta ya está guardada en Mis apuestas como pendiente.');
+    alert('Esta apuesta ya estÃ¡ guardada en Mis apuestas como pendiente.');
     return;
   }
   const dateInput = document.getElementById('date');
@@ -3009,7 +3008,7 @@ window.saveSimulatedBet = function(home, homeCrest, away, awayCrest, competition
   };
   bets.unshift(newBet);
   saveBets(bets);
-  alert('¡Apuesta guardada en "Mis apuestas"! Puedes ver las métricas de acierto y rentabilidad en la pestaña Mis apuestas.');
+  alert('Â¡Apuesta guardada en "Mis apuestas"! Puedes ver las mÃ©tricas de acierto y rentabilidad en la pestaÃ±a Mis apuestas.');
   renderBetsView();
 };
 
@@ -3038,7 +3037,7 @@ window.deleteBet = function(id) {
 };
 
 window.clearAllBets = function() {
-  if (confirm('¿Deseas vaciar todas tus apuestas simuladas?')) {
+  if (confirm('Â¿Deseas vaciar todas tus apuestas simuladas?')) {
     saveBets([]);
     renderBetsView();
   }
@@ -3090,7 +3089,7 @@ window.seedDemoBets = function() {
       id: 'demo_3',
       createdAt: new Date(d.getTime() - 259200000).toISOString(),
       matchDate: new Date(d.getTime() - 259200000).toISOString().slice(0, 10),
-      home: 'Inter de Milán',
+      home: 'Inter de MilÃ¡n',
       homeCrest: 'https://crests.football-data.org/108.png',
       away: 'Juventus FC',
       awayCrest: 'https://crests.football-data.org/109.png',
@@ -3141,10 +3140,10 @@ function renderBetsView() {
   const lost = bets.filter(function(b){ return b.status === 'lost'; }).length;
   const pending = bets.filter(function(b){ return b.status === 'pending'; }).length;
 
-  const accuracy = resolved.length > 0 ? ((won / resolved.length) * 100).toFixed(1) + '%' : '—';
+  const accuracy = resolved.length > 0 ? ((won / resolved.length) * 100).toFixed(1) + '%' : 'â€”';
   const totalProfit = resolved.reduce(function(acc, b){ return acc + (b.profitEur || 0); }, 0);
   const totalStaked = resolved.reduce(function(acc, b){ return acc + (b.stakeEur || 10); }, 0);
-  const roi = totalStaked > 0 ? ((totalProfit / totalStaked) * 100).toFixed(1) + '%' : '—';
+  const roi = totalStaked > 0 ? ((totalProfit / totalStaked) * 100).toFixed(1) + '%' : 'â€”';
 
   let streakCount = 0;
   let streakType = null;
@@ -3162,7 +3161,7 @@ function renderBetsView() {
 
   const profitColor = totalProfit > 0 ? '#7ee787' : totalProfit < 0 ? '#ff7b72' : 'white';
   const profitSign = totalProfit > 0 ? '+' : '';
-  const streakText = streakType === 'won' ? ('🔥 ' + streakCount + 'G') : streakType === 'lost' ? ('❄️ ' + streakCount + 'P') : (pending + ' pend.');
+  const streakText = streakType === 'won' ? ('ðŸ”¥ ' + streakCount + 'G') : streakType === 'lost' ? ('â„ï¸ ' + streakCount + 'P') : (pending + ' pend.');
   const streakColor = streakType === 'won' ? '#7ee787' : streakType === 'lost' ? '#ff7b72' : '#ffb45d';
 
   statsContainer.innerHTML =
@@ -3173,8 +3172,8 @@ function renderBetsView() {
     '</div>' +
     '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
       '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Beneficio</div>' +
-      '<div style="font-size:16px;font-weight:900;color:' + profitColor + ';margin:2px 0">' + profitSign + totalProfit.toFixed(2) + '€</div>' +
-      '<div style="font-size:9px;color:#9da5b2">10€ stake</div>' +
+      '<div style="font-size:16px;font-weight:900;color:' + profitColor + ';margin:2px 0">' + profitSign + totalProfit.toFixed(2) + 'â‚¬</div>' +
+      '<div style="font-size:9px;color:#9da5b2">10â‚¬ stake</div>' +
     '</div>' +
     '<div style="background:#090d13;border:1px solid #202938;border-radius:10px;padding:8px 4px;text-align:center">' +
       '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">ROI</div>' +
@@ -3195,9 +3194,9 @@ function renderBetsView() {
   if (filtered.length === 0) {
     container.innerHTML =
       '<div class="empty" style="padding:24px 10px;border:1px dashed #283344;border-radius:12px">' +
-        '<div style="font-size:28px;margin-bottom:6px">📊</div>' +
+        '<div style="font-size:28px;margin-bottom:6px">ðŸ“Š</div>' +
         '<div style="font-weight:bold;color:white;margin-bottom:4px">No hay apuestas en esta vista</div>' +
-        '<div style="font-size:11px;color:#8e97a5;margin-bottom:12px">Abre cualquier partido en "Analyst" y haz clic en "📌 Simular esta apuesta" para medir los resultados.</div>' +
+        '<div style="font-size:11px;color:#8e97a5;margin-bottom:12px">Abre cualquier partido en "Analyst" y haz clic en "ðŸ“Œ Simular esta apuesta" para medir los resultados.</div>' +
         '<button type="button" class="league-chip active" onclick="seedDemoBets()">+ Cargar 4 apuestas de ejemplo</button>' +
       '</div>';
     return;
@@ -3210,21 +3209,21 @@ function renderBetsView() {
 
     let badgeHtml = '';
     if (isPending) {
-      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ffb45d;background:#282114;border:1px solid #ffb45d55;padding:2px 8px;border-radius:12px">⏳ Pendiente</span>';
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ffb45d;background:#282114;border:1px solid #ffb45d55;padding:2px 8px;border-radius:12px">â³ Pendiente</span>';
     } else if (isWon) {
-      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#7ee787;background:#0d2a1b;border:1px solid #1d5b38;padding:2px 8px;border-radius:12px">✅ Ganó (+' + b.profitEur.toFixed(2) + '€)</span>';
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#7ee787;background:#0d2a1b;border:1px solid #1d5b38;padding:2px 8px;border-radius:12px">âœ… GanÃ³ (+' + b.profitEur.toFixed(2) + 'â‚¬)</span>';
     } else if (isLost) {
-      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ff7b72;background:#2a1314;border:1px solid #5d2225;padding:2px 8px;border-radius:12px">❌ Perdió (' + b.profitEur.toFixed(2) + '€)</span>';
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#ff7b72;background:#2a1314;border:1px solid #5d2225;padding:2px 8px;border-radius:12px">âŒ PerdiÃ³ (' + b.profitEur.toFixed(2) + 'â‚¬)</span>';
     } else {
-      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#c7ccd4;background:#1f2633;border:1px solid #37455d;padding:2px 8px;border-radius:12px">➖ Anulada</span>';
+      badgeHtml = '<span style="font-size:10px;font-weight:800;color:#c7ccd4;background:#1f2633;border:1px solid #37455d;padding:2px 8px;border-radius:12px">âž– Anulada</span>';
     }
 
     const wonAmount = (b.stakeEur * (b.odds - 1)).toFixed(2);
     const actionsHtml = isPending ?
       '<div style="display:flex;gap:6px">' +
-        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'won\')" style="background:#103320;color:#7ee787;border:1px solid #22633d;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">✅ Ganó (+' + wonAmount + '€)</button>' +
-        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'lost\')" style="background:#2e1315;color:#ff7b72;border:1px solid #5d2327;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">❌ Perdió (-' + b.stakeEur + '€)</button>' +
-        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'void\')" style="background:#1b2330;color:#9da5b2;border:1px solid #2a374c;border-radius:8px;padding:6px 8px;font-size:11px;cursor:pointer" title="Anular">➖</button>' +
+        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'won\')" style="background:#103320;color:#7ee787;border:1px solid #22633d;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">âœ… GanÃ³ (+' + wonAmount + 'â‚¬)</button>' +
+        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'lost\')" style="background:#2e1315;color:#ff7b72;border:1px solid #5d2327;border-radius:8px;padding:6px 10px;font-weight:900;font-size:11px;cursor:pointer">âŒ PerdiÃ³ (-' + b.stakeEur + 'â‚¬)</button>' +
+        '<button type="button" onclick="settleBet(\'' + b.id + '\', \'void\')" style="background:#1b2330;color:#9da5b2;border:1px solid #2a374c;border-radius:8px;padding:6px 8px;font-size:11px;cursor:pointer" title="Anular">âž–</button>' +
       '</div>' :
       '<div>' +
         '<button type="button" onclick="settleBet(\'' + b.id + '\', \'pending\')" style="background:transparent;border:0;color:#8e97a5;text-decoration:underline;font-size:11px;cursor:pointer">Modificar resultado</button>' +
@@ -3232,7 +3231,7 @@ function renderBetsView() {
 
     return '<div style="background:#0b0f16;border:1px solid #202b3a;border-radius:12px;padding:12px;margin-bottom:8px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#8e97a5;margin-bottom:6px">' +
-        '<span>🏆 ' + esc(b.competition || '') + ' • 📅 ' + esc(b.matchDate || '') + '</span>' +
+        '<span>ðŸ† ' + esc(b.competition || '') + ' â€¢ ðŸ“… ' + esc(b.matchDate || '') + '</span>' +
         badgeHtml +
       '</div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
@@ -3241,13 +3240,13 @@ function renderBetsView() {
           '<span style="color:#8e97a5;font-size:10px">vs</span>' +
           '<span>' + esc(b.away) + '</span>' +
         '</div>' +
-        '<button type="button" onclick="deleteBet(\'' + b.id + '\')" style="background:transparent;border:0;color:#64748b;font-size:12px;cursor:pointer" title="Eliminar">🗑️</button>' +
+        '<button type="button" onclick="deleteBet(\'' + b.id + '\')" style="background:transparent;border:0;color:#64748b;font-size:12px;cursor:pointer" title="Eliminar">ðŸ—‘ï¸</button>' +
       '</div>' +
       '<div style="background:#121824;border:1px solid #212d40;border-radius:10px;padding:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">' +
         '<div>' +
-          '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">Pronóstico Simulado</div>' +
+          '<div style="font-size:9px;color:#8e97a5;text-transform:uppercase;font-weight:bold">PronÃ³stico Simulado</div>' +
           '<div style="font-size:13px;font-weight:900;color:white">' + esc(b.marketName) + ' <span style="color:#ffb45d;font-size:11px">@' + Number(b.odds).toFixed(2) + '</span></div>' +
-          '<div style="font-size:10px;color:#9da5b2">Confianza: ' + esc(b.confidenceLevel || 'Alta') + ' (' + b.confidence + '%) • Stake: ' + b.stakeEur + '€</div>' +
+          '<div style="font-size:10px;color:#9da5b2">Confianza: ' + esc(b.confidenceLevel || 'Alta') + ' (' + b.confidence + '%) â€¢ Stake: ' + b.stakeEur + 'â‚¬</div>' +
         '</div>' +
         actionsHtml +
       '</div>' +
@@ -3255,7 +3254,7 @@ function renderBetsView() {
   }).join('');
 }
 
-// INICIALIZACIÓN
+// INICIALIZACIÃ“N
 document.addEventListener('DOMContentLoaded', () => {
   const dateInput = document.getElementById('date');
   if (dateInput) dateInput.value = localDateValue();
