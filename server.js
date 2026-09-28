@@ -2085,7 +2085,7 @@ app.get('/api/bets/summary', async (req, res) => {
 });
 
 /* =========================================================
-   FRONTEND - RENDER PAGE (V7.17.0)
+   FRONTEND - RENDER PAGE (V8.0.0)
    Incluye:
    - Banner VS con escudos grandes
    - Medidor circular SVG de confianza
