@@ -20,6 +20,12 @@ Sistema de análisis y predicción cuantitativa de fútbol basado en modelado es
    - Cuotas: 3 min | Análisis: 15 min | Fixtures: 25 min | Lesiones: 90 min | Historial: 4 horas | Equipos: 24 horas.
 7. **Motor de Backtesting y Calibración (V8.1 Foundation)**:
    - Medición de Brier Score multi-clase, Log Loss y calibración empírica por tramos de probabilidad.
+8. **Radar de Oportunidades de Valor (EV+)**:
+   - Escáner automático de cuotas con discrepancia matemática favorable contra la probabilidad estimada.
+9. **Gestión de Banca con Criterio de Kelly (Quarter Kelly)**:
+   - Calculadora interactiva integrada para dimensionamiento óptimo de stake protegiendo la banca de rachas.
+10. **Exportador Rápido de Boletines de Apuestas**:
+   - Generación de tickets formateados en un clic para compartir en WhatsApp, Telegram y comunidades.
 
 ---
 

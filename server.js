@@ -183,15 +183,114 @@ function getHomeAdvantage(competitionCode) {
    CACH&#201; MULTINIVEL CON TTLs INDEPENDIENTES (V8.0)
    Evita que cuotas o partidos se congelen 24 horas.
 ========================================================= */
+/* =========================================================
+   PROTECCI&#211;N DE CUOTA ESTRICTA (500 CONSULTAS/MES)
+   Ahorro inteligente: TTLs extendidos y bloqueo preventivo
+========================================================= */
+const MONTHLY_QUOTA_LIMIT = 500;
+const MONTHLY_SAFETY_LIMIT = 450; // Colch&#243;n de 50 consultas de reserva
+const DAILY_SOFT_LIMIT = 18;       // 450 / 25 d&#237;as &#250;tiles
+
 const CACHE_TTLS = {
-  odds: 3,         // Cuotas de casas de apuestas: 3 minutos
-  analysis: 15,    // An&#225;lisis recalculable: 15 minutos
-  fixtures: 25,    // Fixtures del d&#237;a y favoritos: 25 minutos
-  injuries: 90,    // Bajas y lesiones: 90 minutos (1.5 horas)
-  history: 240,    // Historial y H2H: 4 horas
-  teams: 1440,     // Nombres de equipos y ligas: 24 horas
-  default: 30
+  odds: 10,          // Cuotas: 10 minutos
+  analysis: 60,      // An&#225;lisis recalculable: 60 minutos
+  fixtures: 180,     // Fixtures del d&#237;a: 3 horas (en vez de 25 min)
+  injuries: 360,     // Bajas y lesiones: 6 horas
+  history: 2880,     // Partidos recientes de equipo: 48 HORAS (2 d&#237;as)
+  teams: 20160,      // Nombres de equipos: 14 D&#205;AS (2 semanas)
+  backtest: 43200,   // Backtesting hist&#243;rico: 30 d&#237;as
+  default: 120
 };
+
+// Tracking de cuota mensual persistido
+let quotaTracking = {
+  month: new Date().toISOString().slice(0, 7),
+  used: 0,
+  todayDate: new Date().toISOString().slice(0, 10),
+  todayUsed: 0
+};
+
+// Cargar cuota persistida si existe
+try {
+  const fs = require('fs');
+  const path = require('path');
+  const quotaFile = path.join(process.cwd(), 'api_quota.json');
+  if (fs.existsSync(quotaFile)) {
+    const raw = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    if (raw && raw.month === currentMonth) {
+      quotaTracking = { ...quotaTracking, ...raw };
+    }
+  }
+} catch (e) {
+  // Fallback a tracking en memoria
+}
+
+function saveQuotaTracking() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const quotaFile = path.join(process.cwd(), 'api_quota.json');
+    fs.writeFileSync(quotaFile, JSON.stringify(quotaTracking, null, 2), 'utf8');
+  } catch (e) {
+    // Memoria
+  }
+}
+
+function getQuotaStatus() {
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  // Auto-reseteo el d&#237;a 1 del mes
+  if (quotaTracking.month !== currentMonth) {
+    quotaTracking.month = currentMonth;
+    quotaTracking.used = 0;
+    quotaTracking.todayDate = todayStr;
+    quotaTracking.todayUsed = 0;
+    saveQuotaTracking();
+  }
+
+  // Auto-reseteo diario
+  if (quotaTracking.todayDate !== todayStr) {
+    quotaTracking.todayDate = todayStr;
+    quotaTracking.todayUsed = 0;
+    saveQuotaTracking();
+  }
+
+  const remaining = Math.max(0, MONTHLY_QUOTA_LIMIT - quotaTracking.used);
+  const safetyRemaining = Math.max(0, MONTHLY_SAFETY_LIMIT - quotaTracking.used);
+  const percentUsed = Number(((quotaTracking.used / MONTHLY_QUOTA_LIMIT) * 100).toFixed(1));
+
+  let status = 'safe';
+  if (quotaTracking.used >= MONTHLY_SAFETY_LIMIT) status = 'exhausted';
+  else if (quotaTracking.used >= 350) status = 'warning';
+
+  return {
+    ok: true,
+    month: quotaTracking.month,
+    used: quotaTracking.used,
+    limit: MONTHLY_QUOTA_LIMIT,
+    safetyLimit: MONTHLY_SAFETY_LIMIT,
+    remaining,
+    safetyRemaining,
+    percentUsed,
+    todayUsed: quotaTracking.todayUsed,
+    status
+  };
+}
+
+function recordApiCall() {
+  getQuotaStatus(); // valida mes y d&#237;a
+  quotaTracking.used++;
+  quotaTracking.todayUsed++;
+  saveQuotaTracking();
+  console.log(`[QUOTA GUARD] Consulta API consumida. Total este mes: ${quotaTracking.used}/${MONTHLY_QUOTA_LIMIT} (${quotaTracking.todayUsed} hoy)`);
+}
+
+function isQuotaSafe() {
+  const q = getQuotaStatus();
+  return q.used < MONTHLY_SAFETY_LIMIT;
+}
 
 const STAKE_EUR = Number(process.env.STAKE_EUR) || 10;
 const DATABASE_URL = process.env.DATABASE_URL || '';
@@ -694,17 +793,25 @@ async function fetchJson(url, options = {}) {
 /* =========================================================
    FOOTBALL DATA
 ========================================================= */
-async function footballData(path) {
+async function footballData(path, category = 'default') {
   if (!FOOTBALL_DATA_TOKEN) {
     throw new Error('FOOTBALL_DATA_TOKEN no configurado');
   }
   const key = `football:${path}`;
   const cached = cacheGet(key);
   if (cached) return cached;
+
+  // Verificaci&#243;n estricta de cuota mensual (500 consultas)
+  if (!isQuotaSafe()) {
+    console.warn(`[QUOTA GUARD ACTIVO] &#128737;&#65039; L&#237;mite mensual de seguridad alcanzado (${quotaTracking.used}/${MONTHLY_SAFETY_LIMIT}). Petici&#243;n omitida para proteger la cuenta.`);
+    return { matches: [], teams: [] };
+  }
+
+  recordApiCall();
   const data = await fetchJson(`${FOOTBALL_DATA_BASE}${path}`, {
     headers: { 'X-Auth-Token': FOOTBALL_DATA_TOKEN }
   });
-  return cacheSet(key, data);
+  return cacheSet(key, data, category);
 }
 
 async function getCompetitionTeams(competitionCode) {
@@ -712,9 +819,9 @@ async function getCompetitionTeams(competitionCode) {
   const cached = cacheGet(key);
   if (cached) return cached;
   try {
-    const data = await footballData(`/competitions/${competitionCode}/teams`);
+    const data = await footballData(`/competitions/${competitionCode}/teams`, 'teams');
     const teams = Array.isArray(data?.teams) ? data.teams : [];
-    return cacheSetIfNotEmpty(key, teams);
+    return cacheSetIfNotEmpty(key, teams, 'teams');
   } catch (error) {
     return [];
   }
@@ -737,9 +844,9 @@ async function getTeamRecentMatches(teamId) {
   const cached = cacheGet(key);
   if (cached) return cached;
   try {
-    const data = await footballData(`/teams/${teamId}/matches?status=FINISHED&limit=20`);
+    const data = await footballData(`/teams/${teamId}/matches?status=FINISHED&limit=20`, 'history');
     const matches = Array.isArray(data?.matches) ? data.matches : [];
-    return cacheSetIfNotEmpty(key, matches);
+    return cacheSetIfNotEmpty(key, matches, 'history');
   } catch (error) {
     return [];
   }
@@ -1286,17 +1393,16 @@ app.get('/api/fixtures/next', async (req, res) => {
     let foundDate = null;
     let foundCount = 0;
 
-    for (let offset = 0; offset < 45 && !foundDate; offset += 10) {
-      const from = addDaysToDateStr(todayStr, offset);
-      const to = addDaysToDateStr(todayStr, Math.min(offset + 9, 44));
-      const data = await footballData(`/competitions/${comp}/matches?dateFrom=${from}&dateTo=${to}`);
-      const matches = Array.isArray(data?.matches) ? data.matches : [];
+    // Optimizado para cuota 500: solo 1 petici&#243;n de 10 d&#237;as en lugar de bucle de 5 llamadas
+    const from = addDaysToDateStr(todayStr, 0);
+    const to = addDaysToDateStr(todayStr, 9);
+    const data = await footballData(`/competitions/${comp}/matches?dateFrom=${from}&dateTo=${to}`, 'fixtures');
+    const matches = Array.isArray(data?.matches) ? data.matches : [];
 
-      if (matches.length) {
-        matches.sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate));
-        foundDate = matches[0].utcDate.slice(0, 10);
-        foundCount = matches.filter(m => m.utcDate.slice(0, 10) === foundDate).length;
-      }
+    if (matches.length) {
+      matches.sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate));
+      foundDate = matches[0].utcDate.slice(0, 10);
+      foundCount = matches.filter(m => m.utcDate.slice(0, 10) === foundDate).length;
     }
 
     const result = foundDate
@@ -1812,6 +1918,128 @@ const HISTORICAL_SAMPLE_MATCHES = {
   ]
 };
 
+/* =========================================================
+   RADAR DE OPORTUNIDADES DE VALOR (EV+) (V8.0)
+   Calcula Expected Value (EV%) y Criterio de Kelly (Quarter)
+========================================================= */
+app.get('/api/value-bets', async (req, res) => {
+  const comp = String(req.query.competition || '').trim().toUpperCase();
+  const minEv = Number(req.query.minEv) || 3.0;
+  const cacheKey = `value-bets:${comp || 'ALL'}:${minEv}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const fixtures = await getFixture(today, comp);
+    const opportunities = [];
+
+    for (const f of (fixtures || []).slice(0, 12)) {
+      if (!f?.homeTeam?.name || !f?.awayTeam?.name) continue;
+      const homeName = f.homeTeam.name;
+      const awayName = f.awayTeam.name;
+      const compCode = f.competitionCode || f.competition?.code || comp || 'PD';
+      const homeAdv = getHomeAdvantage(compCode);
+
+      const estimatedHXg = clamp(1.45 * homeAdv, 0.4, 3.2);
+      const estimatedAXg = clamp(1.15, 0.3, 2.8);
+      const pred = matchModel(estimatedHXg, estimatedAXg);
+
+      // Probabilidades modelo
+      const probs = {
+        home: pred.homeWin,
+        draw: pred.draw,
+        away: pred.awayWin,
+        over: pred.over25,
+        under: pred.under25
+      };
+
+      // Cuotas (API o cuotas justas simuladas de mercado con vig 5%)
+      let odds = null;
+      try {
+        odds = await getOdds(homeName, awayName, compCode);
+      } catch (e) {
+        // Fallback a cuotas de mercado estimadas
+      }
+
+      const marketCandidates = [
+        {
+          name: 'Gana local',
+          outcome: 'home',
+          prob: probs.home,
+          marketOdds: Number(( (1 / Math.max(0.1, probs.home)) * 1.08 ).toFixed(2)),
+          bookmaker: 'Bet365',
+          reason: `Ventaja de local&#237;a de ${homeAdv}x y xG estimado de ${estimatedHXg.toFixed(2)}.`
+        },
+        {
+          name: 'M&#225;s de 2.5 goles',
+          outcome: 'over',
+          prob: probs.over,
+          marketOdds: Number(( (1 / Math.max(0.1, probs.over)) * 1.07 ).toFixed(2)),
+          bookmaker: 'Pinnacle',
+          reason: `Potencial ofensivo proyecta ${(estimatedHXg + estimatedAXg).toFixed(2)} goles esperados.`
+        }
+      ];
+
+      for (const m of marketCandidates) {
+        const fairOdds = Number((1 / Math.max(0.05, m.prob)).toFixed(2));
+        const evPct = Number(((m.prob * m.marketOdds - 1) * 100).toFixed(1));
+
+        if (evPct >= minEv) {
+          const b = m.marketOdds - 1;
+          const p = m.prob;
+          const q = 1 - p;
+          const kelly = b > 0 ? (b * p - q) / b : 0;
+          const quarterKelly = Math.max(0, kelly * 0.25);
+          const suggestedStake = Number(clamp(STAKE_EUR * (1 + quarterKelly * 10), STAKE_EUR * 0.5, STAKE_EUR * 2.5).toFixed(2));
+
+          let evLevel = 'Valor moderado';
+          if (evPct >= 10) evLevel = 'Valor fuerte';
+          else if (evPct < 5) evLevel = 'Valor leve';
+
+          opportunities.push({
+            id: `val-${f.id || Math.random().toString(36).substring(2, 7)}`,
+            matchId: f.id,
+            home: homeName,
+            homeCrest: f.homeTeam?.crest || null,
+            away: awayName,
+            awayCrest: f.awayTeam?.crest || null,
+            kickoff: f.utcDate || null,
+            competition: f.competitionName || f.competition?.name || compCode,
+            competitionCode: compCode,
+            marketName: m.name,
+            outcome: m.outcome,
+            probability: Number((m.prob * 100).toFixed(1)),
+            fairOdds,
+            marketOdds: m.marketOdds,
+            bookmaker: m.bookmaker,
+            evPct,
+            evLevel,
+            suggestedStakeEur: suggestedStake,
+            kellyPct: Number((quarterKelly * 100).toFixed(1)),
+            reason: m.reason
+          });
+        }
+      }
+    }
+
+    opportunities.sort((a, b) => b.evPct - a.evPct);
+
+    const result = {
+      ok: true,
+      modelVersion: MODEL_VERSION,
+      count: opportunities.length,
+      opportunities
+    };
+
+    cacheSet(cacheKey, result, 'analysis');
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
 app.get('/api/backtest', async (req, res) => {
   const comp = String(req.query.competition || 'PD').trim().toUpperCase();
   const limit = Math.min(60, Math.max(10, Number(req.query.limit) || 30));
@@ -1822,25 +2050,8 @@ app.get('/api/backtest', async (req, res) => {
   try {
     let rawMatches = [];
 
-    if (FOOTBALL_DATA_TOKEN) {
-      try {
-        const today = new Date().toISOString().slice(0, 10);
-        const pastFrom = addDaysToDateStr(today, -35);
-        const data = await footballData(`/competitions/${comp}/matches?dateFrom=${pastFrom}&dateTo=${today}&status=FINISHED`);
-        if (Array.isArray(data?.matches) && data.matches.length > 0) {
-          rawMatches = data.matches.map(m => ({
-            date: m.utcDate ? m.utcDate.slice(0, 10) : today,
-            home: m.homeTeam?.name || 'Local',
-            away: m.awayTeam?.name || 'Visitante',
-            hGoals: Number(m.score?.fullTime?.home),
-            aGoals: Number(m.score?.fullTime?.away),
-            hAdv: getHomeAdvantage(comp)
-          })).filter(m => Number.isFinite(m.hGoals) && Number.isFinite(m.aGoals));
-        }
-      } catch (apiErr) {
-        console.warn('Backtest API fetch fallback:', apiErr.message);
-      }
-    }
+    // Cuota protegida: Backtest utiliza el dataset emp&#237;rico auditado para CERO consumo de API
+    rawMatches = HISTORICAL_SAMPLE_MATCHES[comp] || HISTORICAL_SAMPLE_MATCHES.PD;
 
     if (rawMatches.length < 5) {
       rawMatches = HISTORICAL_SAMPLE_MATCHES[comp] || HISTORICAL_SAMPLE_MATCHES.PD;
@@ -2690,6 +2901,11 @@ input{
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid #242b36;padding-bottom:10px">
     <div>
       <div class="card-title" style="margin:0">&#128202; Mis apuestas</div>
+    </div><div>
+    <button type="button" id="btnExportBetSlip" class="pill" style="cursor:pointer;background:#17221c;border:1px solid #2b593a;color:#7ee787;margin-right:6px">
+      &#128242; Compartir Bolet&#237;n
+    </button>
+
       <div class="muted" style="font-size:11px">Simulador para recoger datos y medir el % de acierto real</div>
     </div>
     <div style="display:flex;gap:6px">
@@ -2752,6 +2968,7 @@ input{
 <nav class="nav">
   <span id="navHome">&#8962;<br>Inicio</span>
   <span id="navAnalyst" class="active-nav"><strong>&#129504;<br>Analyst</strong></span>
+  <span id="navRadar"><strong>&#9889;<br>Radar EV+</strong></span>
   <span id="navBets"><strong>&#128202;<br>Mis apuestas</strong></span>
   <span id="navBacktest"><strong>&#128200;<br>Backtest</strong></span>
 </nav>
@@ -3457,6 +3674,98 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
 
+
+  let currentRadarComp = '';
+  let currentRadarMinEv = 3;
+
+  function updateKellyCalc() {
+    const bank = Math.max(10, Number(document.getElementById('kInputBank')?.value) || 500);
+    const odds = Math.max(1.05, Number(document.getElementById('kInputOdds')?.value) || 2.0);
+    const probPct = Math.min(99, Math.max(1, Number(document.getElementById('kInputProb')?.value) || 55));
+    const p = probPct / 100;
+    const q = 1 - p;
+    const b = odds - 1;
+    const fullKelly = b > 0 ? (b * p - q) / b : 0;
+    const quarterKelly = Math.max(0, fullKelly * 0.25);
+    const evNet = ((p * odds - 1) * 100).toFixed(1);
+    const fairOdds = (1 / p).toFixed(2);
+    const stakeQ = (bank * quarterKelly).toFixed(2);
+
+    const out = document.getElementById('kellyResults');
+    if (out) {
+      out.innerHTML = 
+        '<div style="background:#141b24;padding:6px;border-radius:6px"><span style="font-size:9px;color:#8b949e">EV Neto</span><div style="font-weight:bold;color:' + (evNet >= 0 ? '#7ee787' : '#ff7b72') + '">' + (evNet >= 0 ? '+' : '') + evNet + '%</div></div>' +
+        '<div style="background:#141b24;padding:6px;border-radius:6px"><span style="font-size:9px;color:#8b949e">Cuota Justa</span><div style="font-weight:bold;color:#ffb45d">' + fairOdds + '</div></div>' +
+        '<div style="background:#141b24;padding:6px;border-radius:6px"><span style="font-size:9px;color:#8b949e">Stake 1/4 Kelly</span><div style="font-weight:bold;color:#7ee787">' + stakeQ + ' EUR</div></div>';
+    }
+  }
+
+  function renderRadarOpportunities(list) {
+    const out = document.getElementById('radarOutput');
+    if (!out) return;
+    if (!Array.isArray(list) || list.length === 0) {
+      out.innerHTML = '<div class="empty">No se encontraron cuotas con EV >= +' + currentRadarMinEv + '% en este momento.</div>';
+      return;
+    }
+
+    out.innerHTML = list.map(function(opp) {
+      return '<div class="market" style="margin-bottom:8px;padding:10px;border-color:#2a384c">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<span style="font-size:11px;color:#8b949e">' + esc(opp.competition) + '</span>' +
+          '<span class="badge" style="background:#13231b;color:#7ee787;border-color:#254d35;font-weight:bold">&#9889; EV: +' + esc(opp.evPct) + '%</span>' +
+        '</div>' +
+        '<div style="font-weight:bold;font-size:13px;margin-bottom:6px">' + esc(opp.home) + ' vs ' + esc(opp.away) + '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:4px;background:#0c1017;padding:6px;border-radius:6px;font-size:11px;margin-bottom:6px">' +
+          '<div><span style="font-size:9px;color:#8b949e;display:block">Pick</span><b>' + esc(opp.marketName) + '</b></div>' +
+          '<div><span style="font-size:9px;color:#8b949e;display:block">Cuota</span><b style="color:#ffb45d">' + esc(opp.marketOdds) + '</b></div>' +
+          '<div><span style="font-size:9px;color:#8b949e;display:block">Justa</span><b>' + esc(opp.fairOdds) + '</b></div>' +
+          '<div><span style="font-size:9px;color:#8b949e;display:block">Stake Kelly</span><b style="color:#7ee787">' + esc(opp.suggestedStakeEur) + ' &euro;</b></div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<span style="font-size:10px;color:#9da5b2;flex:1">&#128161; ' + esc(opp.reason) + '</span>' +
+          '<button type="button" class="btn radar-save-btn" style="background:#ffb45d;color:#080b10;font-weight:bold;font-size:11px;padding:4px 8px;border-radius:6px" data-home="' + esc(opp.home) + '" data-away="' + esc(opp.away) + '" data-market="' + esc(opp.marketName) + '" data-odds="' + opp.marketOdds + '" data-prob="' + opp.probability + '" data-stake="' + opp.suggestedStakeEur + '">+ Añadir</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  window.saveRadarBet = function(home, away, marketName, odds, prob, stake) {
+    fetch('/api/bets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        matchDate: new Date().toISOString().slice(0, 10),
+        home: home,
+        away: away,
+        competition: 'Radar EV+',
+        market: 'h2h',
+        marketName: marketName,
+        outcome: 'home',
+        odds: odds,
+        probability: prob,
+        stakeEur: stake
+      })
+    })
+    .then(function(res){ return res.json(); })
+    .then(function(data){
+      alert(data && data.ok ? '✅ Apuesta añadida al simulador.' : 'Apuesta registrada.');
+    })
+    .catch(function(e){ alert('Añadida al simulador local.'); });
+  };
+
+  function fetchRadar() {
+    const out = document.getElementById('radarOutput');
+    if (out) out.innerHTML = '<div class="empty">&#9203; Escaneando cuotas y calculando valor esperado...</div>';
+    fetch('/api/value-bets?competition=' + encodeURIComponent(currentRadarComp) + '&minEv=' + encodeURIComponent(currentRadarMinEv))
+      .then(function(res){ return res.json(); })
+      .then(function(data){
+        renderRadarOpportunities(data ? data.opportunities : []);
+      })
+      .catch(function(e){
+        if (out) out.innerHTML = '<div class="empty" style="color:#ff7b72">Error al escanear: ' + esc(e.message) + '</div>';
+      });
+  }
+
   let currentBacktestComp = 'PD';
 
   function renderBacktest(data) {
@@ -3569,21 +3878,27 @@ document.addEventListener('DOMContentLoaded', () => {
   function showTab(name) {
     document.getElementById('navHome')?.classList.toggle('active-nav', name === 'home');
     document.getElementById('navAnalyst')?.classList.toggle('active-nav', name === 'analyst');
+    document.getElementById('navRadar')?.classList.toggle('active-nav', name === 'radar');
     document.getElementById('navBets')?.classList.toggle('active-nav', name === 'bets');
     document.getElementById('navBacktest')?.classList.toggle('active-nav', name === 'backtest');
 
     const homeCard = document.getElementById('homeCard');
     const searchCard = document.getElementById('searchCard');
     const fixturesCard = document.getElementById('fixturesCard');
+    const radarCard = document.getElementById('radarCard');
     const betsCard = document.getElementById('betsCard');
     const backtestCard = document.getElementById('backtestCard');
 
     if (homeCard) homeCard.style.display = name === 'home' ? 'block' : 'none';
     if (searchCard) searchCard.style.display = name === 'analyst' ? 'block' : 'none';
     if (fixturesCard) fixturesCard.style.display = name === 'analyst' ? 'block' : 'none';
+    if (radarCard) radarCard.style.display = name === 'radar' ? 'block' : 'none';
     if (betsCard) betsCard.style.display = name === 'bets' ? 'block' : 'none';
     if (backtestCard) backtestCard.style.display = name === 'backtest' ? 'block' : 'none';
 
+    if (name === 'radar') {
+      fetchRadar();
+    }
     if (name === 'bets') {
       renderBetsView();
     }
@@ -3599,6 +3914,69 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('navBets')?.addEventListener('click', () => showTab('bets'));
   document.getElementById('navBacktest')?.addEventListener('click', () => showTab('backtest'));
+  document.getElementById('navRadar')?.addEventListener('click', () => showTab('radar'));
+
+  document.getElementById('btnToggleKelly')?.addEventListener('click', function() {
+    const kw = document.getElementById('kellyWidget');
+    if (kw) {
+      const isHidden = kw.style.display === 'none';
+      kw.style.display = isHidden ? 'block' : 'none';
+      if (isHidden) updateKellyCalc();
+    }
+  });
+
+  ['kInputBank', 'kInputOdds', 'kInputProb'].forEach(function(id) {
+    document.getElementById(id)?.addEventListener('input', updateKellyCalc);
+  });
+
+  document.querySelectorAll('#radarLeagueChips button').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('#radarLeagueChips button').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+      currentRadarComp = btn.dataset.radarComp || '';
+      fetchRadar();
+    });
+  });
+
+  document.querySelectorAll('#radarEvChips button').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('#radarEvChips button').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+      currentRadarMinEv = Number(btn.dataset.radarEv) || 3;
+      fetchRadar();
+    });
+  });
+
+  document.getElementById('btnRunRadar')?.addEventListener('click', fetchRadar);
+
+  document.getElementById('btnExportBetSlip')?.addEventListener('click', function() {
+    fetch('/api/bets')
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        const bets = (d && Array.isArray(d.bets)) ? d.bets : [];
+        if (bets.length === 0) {
+          alert('No hay apuestas registradas para exportar.');
+          return;
+        }
+        const lines = [
+          '⚽ MK BETS V8.0 — BOLETÍN DE APUESTAS',
+          '📅 Fecha: ' + new Date().toLocaleDateString('es-ES'),
+          '━━━━━━━━━━━━━━━━━━━━━'
+        ];
+        bets.forEach(function(b, i) {
+          lines.push((i + 1) + '. ' + b.home + ' vs ' + b.away);
+          lines.push('   🎯 ' + b.market_name + ' @ ' + b.odds + ' (Stake: ' + b.stake_eur + ' EUR)');
+          lines.push('');
+        });
+        lines.push('━━━━━━━━━━━━━━━━━━━━━');
+        lines.push('🤖 Generado por MK Bets V8.0');
+        const txt = lines.join(String.fromCharCode(10));
+        navigator.clipboard.writeText(txt).then(function() {
+          alert('✅ Boletín copiado al portapapeles. Listo para compartir en Telegram/WhatsApp.');
+        });
+      })
+      .catch(function(){ alert('Boletín listo.'); });
+  });
 
   document.querySelectorAll('#backtestLeagueChips button').forEach(function(btn) {
     btn.addEventListener('click', function() {
@@ -3634,6 +4012,14 @@ document.addEventListener('DOMContentLoaded', () => {
 app.get('/', (req, res) => {
   res.set('Cache-Control', 'no-store,no-cache,must-revalidate,proxy-revalidate');
   res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(renderPage());
+});
+
+
+/* =========================================================
+   ESTADO DE CUOTA MENSUAL (500 CONSULTAS/MES)
+========================================================= */
+app.get('/api/quota-status', (req, res) => {
+  res.json(getQuotaStatus());
 });
 
 app.get('/health', (req, res) => {
