@@ -65,7 +65,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] Acceso protegido con usuario/contrase&#241;a activado.');
 }
 
-const MODEL_VERSION = 'V8.0.1';
+const MODEL_VERSION = 'V8.0.2';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -1199,17 +1199,25 @@ function mostLikelyScore(homeXg, awayXg) {
    2. MODELO CON VENTAJA DE LOCAL AJUSTADA POR LIGA
 ========================================================= */
 function createModelInput(homeStats, awayStats, competitionCode) {
-  const homeAttack = homeStats.avgGoalsFor * clamp(homeStats.attackStrength, 0.75, 1.35);
-  const awayAttack = awayStats.avgGoalsFor * clamp(awayStats.attackStrength, 0.75, 1.35);
+  // V8.0.2: Debilidad defensiva (defenseStrength < 1.0 por bajas/lesiones)
+  // incrementa la vulnerabilidad del equipo (>1.0), aumentando directamente el xG rival.
+  const awayDefVulnerability = clamp(1.0 / Math.max(0.4, Number(awayStats.defenseStrength) || 1.0), 0.70, 1.55);
+  const homeDefVulnerability = clamp(1.0 / Math.max(0.4, Number(homeStats.defenseStrength) || 1.0), 0.70, 1.55);
+
+  const homeAttack = homeStats.avgGoalsFor * clamp(Number(homeStats.attackStrength) || 1.0, 0.70, 1.50);
+  const awayAttack = awayStats.avgGoalsFor * clamp(Number(awayStats.attackStrength) || 1.0, 0.70, 1.50);
 
   const homeAdvantage = getHomeAdvantage(competitionCode);
-  const homeXg = ((homeAttack + awayStats.avgGoalsAgainst) / 2) * homeAdvantage;
-  const awayXg = (awayAttack + homeStats.avgGoalsAgainst) / 2;
+
+  const homeXg = ((homeAttack + (awayStats.avgGoalsAgainst * awayDefVulnerability)) / 2) * homeAdvantage;
+  const awayXg = (awayAttack + (homeStats.avgGoalsAgainst * homeDefVulnerability)) / 2;
 
   return {
     homeXg: clamp(homeXg, 0.25, 3.8),
     awayXg: clamp(awayXg, 0.20, 3.5),
-    homeAdvantage
+    homeAdvantage,
+    homeDefVulnerability,
+    awayDefVulnerability
   };
 }
 
@@ -1227,7 +1235,7 @@ app.get('/api/status', (req, res) => {
     bigBallsConfigured: Boolean(BIGBALLS_KEY),
     stakeEur: STAKE_EUR,
     provider: 'football-data.org + The Odds API + Big Balls',
-    cacheMinutes: CACHE_MINUTES,
+    cacheMinutes: CACHE_TTLS.analysis, cacheTtls: CACHE_TTLS,
     modelVersion: MODEL_VERSION
   });
 });
@@ -1569,91 +1577,168 @@ app.get('/api/parlay', async (req, res) => {
     const date = String(req.query.date || '').trim() || new Date().toISOString().slice(0, 10);
     const maxLegs = Math.min(4, Math.max(2, Number(req.query.legs) || 3));
     const comp = String(req.query.competition || '').trim().toUpperCase();
-
-    const cacheKey = `smart-parlay:${date}:${comp || 'ALL'}:${maxLegs}`;
+    const cacheKey = `smart-parlay:${date}:${comp || 'ALL'}:${maxLegs}:v802`;
     const cached = cacheGet(cacheKey);
     if (cached) return res.json(cached);
 
-    // Oportunidades precargadas y auditadas para CERO consumo de cuota
-    const candidates = [
-      {
-        home: 'Real Madrid',
-        away: 'FC Barcelona',
-        homeCrest: 'https://crests.football-data.org/86.png',
-        awayCrest: 'https://crests.football-data.org/81.png',
-        competition: 'LaLiga EA Sports',
-        marketName: 'Gana local',
-        odds: 1.95,
-        probability: 58.4,
-        referenceEvPct: 14.0
-      },
-      {
-        home: 'Arsenal FC',
-        away: 'Chelsea FC',
-        homeCrest: 'https://crests.football-data.org/57.png',
-        awayCrest: 'https://crests.football-data.org/61.png',
-        competition: 'Premier League',
-        marketName: 'M&#225;s de 1.5 goles',
-        odds: 1.40,
-        probability: 72.8,
-        referenceEvPct: 16.4
-      },
-      {
-        home: 'Atl&#233;tico de Madrid',
-        away: 'Sevilla FC',
-        homeCrest: 'https://crests.football-data.org/78.png',
-        awayCrest: 'https://crests.football-data.org/559.png',
-        competition: 'LaLiga EA Sports',
-        marketName: 'Gana local',
-        odds: 1.74,
-        probability: 64.2,
-        referenceEvPct: 11.7
-      },
-      {
-        home: 'Manchester City',
-        away: 'Liverpool FC',
-        homeCrest: 'https://crests.football-data.org/65.png',
-        awayCrest: 'https://crests.football-data.org/64.png',
-        competition: 'Premier League',
-        marketName: 'Ambos anotan',
-        odds: 1.62,
-        probability: 67.5,
-        referenceEvPct: 9.35
+    // V8.0.2: PARLAY 100% REAL - Análisis del mercado real del día
+    const fixtures = await getFixture(date, comp);
+    const eligiblePicks = [];
+    const usedMatches = new Set();
+
+    for (const f of (fixtures || [])) {
+      if (!f?.homeTeam?.name || !f?.awayTeam?.name) continue;
+      const homeName = f.homeTeam.name;
+      const awayName = f.awayTeam.name;
+      const matchKey = `${homeName}_vs_${awayName}`;
+      if (usedMatches.has(matchKey)) continue;
+
+      const compCode = f.competitionCode || f.competition?.code || comp || 'PD';
+      const homeAdv = getHomeAdvantage(compCode);
+
+      // Obtener cuotas reales de casas de apuestas
+      let odds = null;
+      try {
+        odds = await getOdds(homeName, awayName, compCode);
+      } catch (e) {
+        odds = null;
       }
-    ];
 
-    candidates.sort((a, b) => Number(b.referenceEvPct || 0) - Number(a.referenceEvPct || 0));
+      // REGLA FUNDAMENTAL: SIN CUOTAS REALES -> OMITIR DEL PARLAY
+      if (!odds || !odds.available || !Array.isArray(odds.bookmakers) || !odds.bookmakers.length) {
+        continue;
+      }
 
-    if (!candidates.length) {
+      const prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
+      const best = extractBestOdds(prices);
+
+      // Modelo Dixon-Coles V8.0.2
+      const estimatedHXg = clamp(1.45 * homeAdv, 0.4, 3.2);
+      const estimatedAXg = clamp(1.15, 0.3, 2.8);
+      const pred = matchModel(estimatedHXg, estimatedAXg);
+
+      const pH = pred.homeWin;
+      const pD = pred.draw;
+      const pA = pred.awayWin;
+      const pO25 = pred.over25;
+      const pU25 = pred.under25;
+
+      const candidates = [];
+
+      // Evaluar selecciones con cuotas reales abiertas
+      if (best.home?.odds && best.home.odds >= 1.25 && best.home.odds <= 2.80) {
+        const evVal = (pH * best.home.odds - 1) * 100;
+        if (pH >= 0.48 || evVal > 1.5) {
+          candidates.push({
+            market: '1X2 - Gana Local',
+            selection: homeName,
+            odds: best.home.odds,
+            bookmaker: best.home.bookmaker,
+            probability: Number((pH * 100).toFixed(1)),
+            evPct: Number(evVal.toFixed(1))
+          });
+        }
+      }
+
+      if (best.away?.odds && best.away.odds >= 1.25 && best.away.odds <= 2.80) {
+        const evVal = (pA * best.away.odds - 1) * 100;
+        if (pA >= 0.48 || evVal > 1.5) {
+          candidates.push({
+            market: '1X2 - Gana Visitante',
+            selection: awayName,
+            odds: best.away.odds,
+            bookmaker: best.away.bookmaker,
+            probability: Number((pA * 100).toFixed(1)),
+            evPct: Number(evVal.toFixed(1))
+          });
+        }
+      }
+
+      if (best.over25?.odds && best.over25.odds >= 1.30 && best.over25.odds <= 2.40) {
+        const evVal = (pO25 * best.over25.odds - 1) * 100;
+        if (pO25 >= 0.52 || evVal > 1.5) {
+          candidates.push({
+            market: 'Línea de Goles - Más de 2.5',
+            selection: 'Más de 2.5 goles',
+            odds: best.over25.odds,
+            bookmaker: best.over25.bookmaker,
+            probability: Number((pO25 * 100).toFixed(1)),
+            evPct: Number(evVal.toFixed(1))
+          });
+        }
+      }
+
+      if (best.under25?.odds && best.under25.odds >= 1.30 && best.under25.odds <= 2.40) {
+        const evVal = (pU25 * best.under25.odds - 1) * 100;
+        if (pU25 >= 0.52 || evVal > 1.5) {
+          candidates.push({
+            market: 'Línea de Goles - Menos de 2.5',
+            selection: 'Menos de 2.5 goles',
+            odds: best.under25.odds,
+            bookmaker: best.under25.bookmaker,
+            probability: Number((pU25 * 100).toFixed(1)),
+            evPct: Number(evVal.toFixed(1))
+          });
+        }
+      }
+
+      // Máximo 1 pick por partido para garantizar independencia probabilística
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => (b.probability * 0.6 + b.evPct * 0.4) - (a.probability * 0.6 + a.evPct * 0.4));
+        const chosen = candidates[0];
+        eligiblePicks.push({
+          home: homeName,
+          away: awayName,
+          homeCrest: f.homeTeam?.crest || null,
+          awayCrest: f.awayTeam?.crest || null,
+          competition: f.competition?.name || compCode,
+          marketName: chosen.market,
+          selection: chosen.selection,
+          odds: chosen.odds,
+          bookmaker: chosen.bookmaker,
+          probability: chosen.probability,
+          referenceEvPct: chosen.evPct
+        });
+        usedMatches.add(matchKey);
+      }
+    }
+
+    eligiblePicks.sort((a, b) => b.referenceEvPct - a.referenceEvPct);
+    const selectedLegs = eligiblePicks.slice(0, maxLegs);
+
+    if (selectedLegs.length < 2) {
       return res.json({
         ok: true,
+        available: false,
         date,
-        stakeEur: STAKE_EUR,
-        candidates: [],
-        parlays: [],
-        message: 'No se detectaron picks fuertes ni errores de cuota para esta fecha.'
+        modelVersion: MODEL_VERSION,
+        message: 'No hay suficientes partidos del día con cuotas reales de mercado abiertas en The Odds API para construir una combinada (mínimo 2 requeridos).',
+        legs: []
       });
     }
 
-    const parlays = [];
-    for (let l = 2; l <= Math.min(maxLegs, candidates.length); l++) {
-      const legs = candidates.slice(0, l);
-      const combinedOdds = legs.reduce((acc, leg) => acc * Number(leg.odds), 1);
-      const combinedProb = legs.reduce((acc, leg) => acc * (Number(leg.probability) / 100), 1);
-      const combinedEv = Number(((combinedProb * combinedOdds - 1) * 100).toFixed(1));
+    const combinedOdds = Number(selectedLegs.reduce((acc, l) => acc * l.odds, 1).toFixed(2));
+    const combinedProbability = Number(selectedLegs.reduce((acc, l) => acc * (l.probability / 100), 1) * 100);
+    const combinedEv = Number(((combinedProbability / 100 * combinedOdds - 1) * 100).toFixed(1));
 
-      parlays.push({
-        legsCount: l,
-        legs,
-        combinedOdds: Number(combinedOdds.toFixed(2)),
-        combinedProbabilityPct: Number((combinedProb * 100).toFixed(1)),
-        combinedEvPct: combinedEv
-      });
-    }
+    const result = {
+      ok: true,
+      available: true,
+      date,
+      modelVersion: MODEL_VERSION,
+      stakeEur: STAKE_EUR,
+      legsCount: selectedLegs.length,
+      combinedOdds,
+      combinedProbability: Number(combinedProbability.toFixed(1)),
+      combinedEv,
+      legs: selectedLegs,
+      timestamp: new Date().toISOString()
+    };
 
-    return res.json({ ok: true, date, stakeEur: STAKE_EUR, candidates, parlays });
+    cacheSet(cacheKey, result, 'analysis');
+    return res.json(result);
   } catch (error) {
-    return res.status(500).json({ ok: false, error: error.message });
+    return res.status(500).json({ ok: false, error: error.message, modelVersion: MODEL_VERSION });
   }
 });
 
@@ -1919,8 +2004,8 @@ const HISTORICAL_SAMPLE_MATCHES = {
 ========================================================= */
 app.get('/api/value-bets', async (req, res) => {
   const comp = String(req.query.competition || '').trim().toUpperCase();
-  const minEv = Number(req.query.minEv) || 3.0;
-  const cacheKey = `value-bets:${comp || 'ALL'}:${minEv}`;
+  const minEv = Number(req.query.minEv) || 2.0;
+  const cacheKey = `value-bets:${comp || 'ALL'}:${minEv}:v802`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
@@ -1929,7 +2014,7 @@ app.get('/api/value-bets', async (req, res) => {
     const fixtures = await getFixture(today, comp);
     const opportunities = [];
 
-    for (const f of (fixtures || []).slice(0, 15)) {
+    for (const f of (fixtures || []).slice(0, 20)) {
       if (!f?.homeTeam?.name || !f?.awayTeam?.name) continue;
       const homeName = f.homeTeam.name;
       const awayName = f.awayTeam.name;
@@ -1944,48 +2029,65 @@ app.get('/api/value-bets', async (req, res) => {
         odds = null;
       }
 
-      // V8.0.1 Rigor Analítico: Si no hay cuotas reales abiertas de casas de apuestas, OMITIR
-      if (!odds || !odds.available) {
+      // V8.0.2: CERO CUOTAS SINTÉTICAS. Si no hay cuotas reales abiertas en casas de apuestas, OMITIR
+      if (!odds || !odds.available || !Array.isArray(odds.bookmakers) || !odds.bookmakers.length) {
         continue;
       }
+
+      const prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
+      const best = extractBestOdds(prices);
 
       const estimatedHXg = clamp(1.45 * homeAdv, 0.4, 3.2);
       const estimatedAXg = clamp(1.15, 0.3, 2.8);
       const pred = matchModel(estimatedHXg, estimatedAXg);
 
-      const probs = {
-        home: pred.homeWin,
-        draw: pred.draw,
-        away: pred.awayWin,
-        over: pred.over25,
-        under: pred.under25
-      };
-
-      const marketCandidates = [
+      const markets = [
         {
-          name: 'Gana local',
-          outcome: 'home',
-          prob: probs.home,
-          marketOdds: Number(( (1 / Math.max(0.1, probs.home)) * 1.08 ).toFixed(2)),
-          bookmaker: 'Bet365',
-          reason: `Ventaja de local&#237;a de ${homeAdv}x y xG estimado de ${estimatedHXg.toFixed(2)}.`
+          market: '1X2 - Gana Local',
+          selection: homeName,
+          prob: pred.homeWin,
+          oddsObj: best.home,
+          reason: `Modelo proyecta ${(pred.homeWin * 100).toFixed(1)}% de probabilidad con ventaja local (${homeAdv.toFixed(2)}x).`
         },
         {
-          name: 'M&#225;s de 2.5 goles',
-          outcome: 'over',
-          prob: probs.over,
-          marketOdds: Number(( (1 / Math.max(0.1, probs.over)) * 1.07 ).toFixed(2)),
-          bookmaker: 'Pinnacle',
-          reason: `Potencial ofensivo proyecta ${(estimatedHXg + estimatedAXg).toFixed(2)} goles esperados.`
+          market: '1X2 - Empate',
+          selection: 'Empate',
+          prob: pred.draw,
+          oddsObj: best.draw,
+          reason: `Modelo Dixon-Coles proyecta ${(pred.draw * 100).toFixed(1)}% con correlación de baja anotación.`
+        },
+        {
+          market: '1X2 - Gana Visitante',
+          selection: awayName,
+          prob: pred.awayWin,
+          oddsObj: best.away,
+          reason: `Modelo proyecta ${(pred.awayWin * 100).toFixed(1)}% para el visitante.`
+        },
+        {
+          market: 'Línea de Goles - Más de 2.5',
+          selection: 'Más de 2.5 goles',
+          prob: pred.over25,
+          oddsObj: best.over25,
+          reason: `Proyección conjunta de ${(estimatedHXg + estimatedAXg).toFixed(2)} goles esperados (${(pred.over25 * 100).toFixed(1)}%).`
+        },
+        {
+          market: 'Línea de Goles - Menos de 2.5',
+          selection: 'Menos de 2.5 goles',
+          prob: pred.under25,
+          oddsObj: best.under25,
+          reason: `Tendencia defensiva proyecta ${(pred.under25 * 100).toFixed(1)}% de probabilidad Under 2.5.`
         }
       ];
 
-      for (const m of marketCandidates) {
-        const fairOdds = Number((1 / Math.max(0.05, m.prob)).toFixed(2));
-        const evPct = Number(((m.prob * m.marketOdds - 1) * 100).toFixed(1));
+      for (const m of markets) {
+        if (!m.oddsObj || !m.oddsObj.odds || m.oddsObj.odds <= 1.05) continue;
+
+        const realOdds = Number(m.oddsObj.odds);
+        const bookmaker = m.oddsObj.bookmaker || 'The Odds API';
+        const evPct = Number(((m.prob * realOdds - 1) * 100).toFixed(1));
 
         if (evPct >= minEv) {
-          const b = m.marketOdds - 1;
+          const b = realOdds - 1;
           const p = m.prob;
           const q = 1 - p;
           const kelly = b > 0 ? (b * p - q) / b : 0;
@@ -1993,30 +2095,26 @@ app.get('/api/value-bets', async (req, res) => {
           const suggestedStake = Number(clamp(STAKE_EUR * (1 + quarterKelly * 10), STAKE_EUR * 0.5, STAKE_EUR * 2.5).toFixed(2));
 
           let evLevel = 'Valor moderado';
-          if (evPct >= 10) evLevel = 'Valor fuerte';
-          else if (evPct < 5) evLevel = 'Valor leve';
+          if (evPct >= 10) evLevel = 'Valor muy alto';
+          else if (evPct >= 5) evLevel = 'Buen valor';
 
           opportunities.push({
-            id: `val-${f.id || Math.random().toString(36).substring(2, 7)}`,
-            matchId: f.id,
-            home: homeName,
-            homeCrest: f.homeTeam?.crest || null,
-            away: awayName,
-            awayCrest: f.awayTeam?.crest || null,
-            kickoff: f.utcDate || null,
-            competition: f.competitionName || f.competition?.name || compCode,
-            competitionCode: compCode,
-            marketName: m.name,
-            outcome: m.outcome,
-            probability: Number((m.prob * 100).toFixed(1)),
-            fairOdds,
-            marketOdds: m.marketOdds,
-            bookmaker: m.bookmaker,
+            id: `val_${homeName.replace(/\s+/g, '')}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            homeTeam: homeName,
+            awayTeam: awayName,
+            competition: compCode,
+            market: m.market,
+            selection: m.selection,
+            probabilityPct: Number((m.prob * 100).toFixed(1)),
+            fairOdds: Number((1 / Math.max(0.01, m.prob)).toFixed(2)),
+            marketOdds: realOdds,
+            bookmaker,
             evPct,
             evLevel,
             suggestedStakeEur: suggestedStake,
-            kellyPct: Number((quarterKelly * 100).toFixed(1)),
-            reason: m.reason
+            signalScore: confidence(m.prob, 10),
+            reason: m.reason,
+            timestamp: new Date().toISOString()
           });
         }
       }
@@ -2027,36 +2125,50 @@ app.get('/api/value-bets', async (req, res) => {
     const result = {
       ok: true,
       modelVersion: MODEL_VERSION,
-      count: opportunities.length,
-      opportunities
+      competition: comp || 'ALL',
+      totalOpportunities: opportunities.length,
+      realOddsProvider: 'The Odds API',
+      opportunities,
+      timestamp: new Date().toISOString()
     };
 
     cacheSet(cacheKey, result, 'analysis');
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, modelVersion: MODEL_VERSION });
   }
 });
 
-
 app.get('/api/backtest', async (req, res) => {
   const comp = String(req.query.competition || 'PD').trim().toUpperCase();
-  const limit = Math.min(60, Math.max(10, Number(req.query.limit) || 30));
-  const cacheKey = `backtest:${comp}:${limit}`;
+  const limit = Math.min(100, Math.max(5, Number(req.query.limit) || 30));
+  const cacheKey = `backtest:${comp}:${limit}:v802`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
   try {
-    let rawMatches = [];
-
-    // Cuota protegida: Backtest utiliza el dataset emp&#237;rico auditado para CERO consumo de API
-    rawMatches = HISTORICAL_SAMPLE_MATCHES[comp] || HISTORICAL_SAMPLE_MATCHES.PD;
-
-    if (rawMatches.length < 5) {
-      rawMatches = HISTORICAL_SAMPLE_MATCHES[comp] || HISTORICAL_SAMPLE_MATCHES.PD;
+    let allFixtures = {};
+    const historicalPath = path.join(process.cwd(), 'data', 'historical_fixtures.json');
+    if (fs.existsSync(historicalPath)) {
+      try {
+        allFixtures = JSON.parse(fs.readFileSync(historicalPath, 'utf8'));
+      } catch (e) {
+        allFixtures = {};
+      }
     }
 
-    const matchesToEval = rawMatches.slice(-limit);
+    const leagueMatches = allFixtures[comp] || allFixtures.PD || [];
+    const matchesToEval = leagueMatches.slice(-limit);
+
+    if (!matchesToEval.length) {
+      return res.json({
+        ok: true,
+        modelVersion: MODEL_VERSION,
+        competition: comp,
+        totalEvaluated: 0,
+        message: 'No hay partidos históricos disponibles para esta competición.'
+      });
+    }
 
     let brierSum = 0;
     let logLossSum = 0;
@@ -2079,110 +2191,113 @@ app.get('/api/backtest', async (req, res) => {
     const evaluatedList = [];
 
     for (const m of matchesToEval) {
-      const hGoals = m.hGoals;
-      const aGoals = m.aGoals;
+      const hGoals = Number(m.hGoals);
+      const aGoals = Number(m.aGoals);
       const actualResult = hGoals > aGoals ? 'home' : (hGoals === aGoals ? 'draw' : 'away');
       const isActualOver25 = (hGoals + aGoals) >= 3;
-      const isActualBtts = (hGoals >= 1 && aGoals >= 1);
+      const isActualBtts = (hGoals >= 1) && (aGoals >= 1);
 
-      const yH = actualResult === 'home' ? 1 : 0;
-      const yD = actualResult === 'draw' ? 1 : 0;
-      const yA = actualResult === 'away' ? 1 : 0;
+      const homeAdv = getHomeAdvantage(comp);
+      // Fuerzas ofensivas y defensivas reales del dataset histórico
+      const lambda = clamp((m.hAtt || 1.5) * (m.aDef || 1.1) * homeAdv * 0.95, 0.3, 3.8);
+      const mu = clamp((m.aAtt || 1.3) * (m.hDef || 1.0) * 0.90, 0.2, 3.5);
 
-      const hAdv = m.hAdv || getHomeAdvantage(comp);
-      const estimatedHXg = clamp(1.45 * hAdv, 0.4, 3.2);
-      const estimatedAXg = clamp(1.15, 0.3, 2.8);
-      const pred = matchModel(estimatedHXg, estimatedAXg);
+      // Inferencia Dixon-Coles V8.0.2
+      const pred = matchModel(lambda, mu);
 
       const pH = pred.homeWin;
       const pD = pred.draw;
       const pA = pred.awayWin;
-      const pOver = pred.over25;
+      const pO25 = pred.over25;
       const pBtts = pred.btts;
 
-      // 1. Brier Score multi-clase: (pH - yH)^2 + (pD - yD)^2 + (pA - yA)^2
-      const brier = Math.pow(pH - yH, 2) + Math.pow(pD - yD, 2) + Math.pow(pA - yA, 2);
-      brierSum += brier;
+      // 1. Brier Score Multicategoría Real
+      const yH = actualResult === 'home' ? 1 : 0;
+      const yD = actualResult === 'draw' ? 1 : 0;
+      const yA = actualResult === 'away' ? 1 : 0;
+      const matchBrier = Math.pow(pH - yH, 2) + Math.pow(pD - yD, 2) + Math.pow(pA - yA, 2);
+      brierSum += matchBrier;
 
-      // 2. Log Loss (Cross-Entropy)
-      const probTarget = actualResult === 'home' ? pH : (actualResult === 'draw' ? pD : pA);
-      logLossSum += -Math.log(Math.max(0.001, probTarget));
+      // 2. Log-Loss Real
+      const actualProb = actualResult === 'home' ? pH : (actualResult === 'draw' ? pD : pA);
+      logLossSum += -Math.log(Math.max(0.01, actualProb));
 
-      // 3. Pron&#243;stico 1X2
+      // 3. Predicción del modelo
+      const predictedWinner = (pH >= pD && pH >= pA) ? 'home' : (pA >= pH && pA >= pD ? 'away' : 'draw');
+      const isCorrect1X2 = predictedWinner === actualResult;
+      if (isCorrect1X2) correct1X2++;
+
+      if ((pO25 >= 0.5) === isActualOver25) correctOverUnder++;
+      if ((pBtts >= 0.5) === isActualBtts) correctBtts++;
+
+      // 4. Calibración empírica por rangos
       const maxP = Math.max(pH, pD, pA);
-      const predictedWinner = (pH === maxP) ? 'home' : (pA === maxP ? 'away' : 'draw');
-      const hit1X2 = (predictedWinner === actualResult);
-      if (hit1X2) correct1X2++;
-
-      // 4. Over/Under 2.5
-      const predictedOver = pOver >= 0.50;
-      const hitOverUnder = (predictedOver === isActualOver25);
-      if (hitOverUnder) correctOverUnder++;
-
-      // 5. BTTS
-      const predictedBtts = pBtts >= 0.50;
-      const hitBtts = (predictedBtts === isActualBtts);
-      if (hitBtts) correctBtts++;
-
-      // 6. Calibraci&#243;n por Rangos
-      const maxPPct = maxP * 100;
       let binKey = '35-50%';
-      if (maxPPct >= 70) binKey = '70%+';
-      else if (maxPPct >= 60) binKey = '60-70%';
-      else if (maxPPct >= 50) binKey = '50-60%';
+      if (maxP >= 0.70) binKey = '70%+';
+      else if (maxP >= 0.60) binKey = '60-70%';
+      else if (maxP >= 0.50) binKey = '50-60%';
 
       bins[binKey].count++;
-      bins[binKey].predictedSum += maxPPct;
-      if (hit1X2) bins[binKey].actualWins++;
+      bins[binKey].predictedSum += maxP;
+      if (isCorrect1X2) bins[binKey].actualWins++;
 
-      // 7. Simulaci&#243;n Financiera (Stake plano 10&#8364; con cuota justa/mercado)
-      const fairOdds = 1 / Math.max(0.05, maxP);
-      const effectiveOdds = Number((fairOdds * 0.94).toFixed(2)); // margen de casa 6%
-      if (hit1X2) {
-        const profit = (effectiveOdds - 1) * 10;
-        simulatedPnl += profit;
-        currentBalance += profit;
-      } else {
-        simulatedPnl -= 10;
-        currentBalance -= 10;
+      // 5. Simulación de PnL con cuotas reales de cierre
+      const oddsMap = { home: Number(m.oddsHome || 2.0), draw: Number(m.oddsDraw || 3.2), away: Number(m.oddsAway || 3.5) };
+      const selectedOdds = oddsMap[predictedWinner] || 2.0;
+      const evVal = (maxP * selectedOdds - 1);
+
+      let betProfit = 0;
+      if (evVal > 0.02) {
+        const stake = 10;
+        if (isCorrect1X2) {
+          betProfit = Number(((selectedOdds - 1) * stake).toFixed(2));
+        } else {
+          betProfit = -stake;
+        }
+        simulatedPnl += betProfit;
+        currentBalance += betProfit;
+        if (currentBalance > peakBalance) peakBalance = currentBalance;
+        const currentDd = peakBalance - currentBalance;
+        if (currentDd > maxDrawdown) maxDrawdown = currentDd;
       }
 
-      if (currentBalance > peakBalance) peakBalance = currentBalance;
-      const dd = peakBalance - currentBalance;
-      if (dd > maxDrawdown) maxDrawdown = dd;
-
       totalEvaluated++;
-
       evaluatedList.push({
         date: m.date,
         home: m.home,
         away: m.away,
-        score: `${hGoals} - ${aGoals}`,
-        predictedPick: predictedWinner === 'home' ? 'Local (1)' : (predictedWinner === 'away' ? 'Visitante (2)' : 'Empate (X)'),
-        actualResult: actualResult === 'home' ? 'Local (1)' : (actualResult === 'away' ? 'Visitante (2)' : 'Empate (X)'),
-        probPct: Number(maxPPct.toFixed(1)),
-        hit: hit1X2,
-        overUnderHit: hitOverUnder,
-        bttsHit: hitBtts
+        score: `${hGoals}-${aGoals}`,
+        actualResult,
+        predictedWinner,
+        probabilities: {
+          home: Number((pH * 100).toFixed(1)),
+          draw: Number((pD * 100).toFixed(1)),
+          away: Number((pA * 100).toFixed(1))
+        },
+        odds: selectedOdds,
+        correct: isCorrect1X2,
+        brier: Number(matchBrier.toFixed(3)),
+        profitEur: betProfit
       });
     }
 
-    const avgBrier = totalEvaluated > 0 ? Number((brierSum / totalEvaluated).toFixed(4)) : 0.5421;
-    const avgLogLoss = totalEvaluated > 0 ? Number((logLossSum / totalEvaluated).toFixed(4)) : 0.9124;
-    const accuracyPct = totalEvaluated > 0 ? Number(((correct1X2 / totalEvaluated) * 100).toFixed(1)) : 68.0;
-    const accuracyOverUnderPct = totalEvaluated > 0 ? Number(((correctOverUnder / totalEvaluated) * 100).toFixed(1)) : 65.0;
-    const accuracyBttsPct = totalEvaluated > 0 ? Number(((correctBtts / totalEvaluated) * 100).toFixed(1)) : 60.0;
-    const roiPct = totalEvaluated > 0 ? Number(((simulatedPnl / (totalEvaluated * 10)) * 100).toFixed(1)) : 12.5;
+    const n = Math.max(1, totalEvaluated);
+    const avgBrier = Number((brierSum / n).toFixed(3));
+    const avgLogLoss = Number((logLossSum / n).toFixed(3));
+    const accuracy1X2Pct = Number(((correct1X2 / n) * 100).toFixed(1));
+    const accuracyGoalsPct = Number(((correctOverUnder / n) * 100).toFixed(1));
+    const accuracyBttsPct = Number(((correctBtts / n) * 100).toFixed(1));
 
-    const calibrationReport = Object.entries(bins).map(([binName, b]) => {
-      const avgPred = b.count > 0 ? Number((b.predictedSum / b.count).toFixed(1)) : 0;
-      const winRate = b.count > 0 ? Number(((b.actualWins / b.count) * 100).toFixed(1)) : 0;
-      const gap = b.count > 0 ? Number((winRate - avgPred).toFixed(1)) : 0;
+    const calibrationReport = Object.keys(bins).map(k => {
+      const b = bins[k];
+      const avgPred = b.count > 0 ? Number(((b.predictedSum / b.count) * 100).toFixed(1)) : 0;
+      const actualPct = b.count > 0 ? Number(((b.actualWins / b.count) * 100).toFixed(1)) : 0;
+      const gap = Number(Math.abs(avgPred - actualPct).toFixed(1));
       return {
-        range: binName,
+        range: k,
         matches: b.count,
         avgPredictedPct: avgPred,
-        actualWinRatePct: winRate,
+        actualWinRatePct: actualPct,
         gap
       };
     });
@@ -2190,31 +2305,33 @@ app.get('/api/backtest', async (req, res) => {
     const result = {
       ok: true,
       modelVersion: MODEL_VERSION,
+      modelEngine: 'Dixon-Coles Bivariate Poisson (V8.0.2)',
       competition: comp,
       competitionName: competitionName(comp),
+      totalEvaluated,
       evaluatedMatches: totalEvaluated,
       metrics: {
         brierScore: avgBrier,
-        brierStatus: avgBrier <= 0.58 ? 'Excelente' : (avgBrier <= 0.65 ? 'Aceptable' : 'Ajustable'),
+        brierStatus: avgBrier <= 0.58 ? 'Excelente calibración' : (avgBrier <= 0.65 ? 'Buena' : 'Moderada'),
         logLoss: avgLogLoss,
-        accuracy1X2Pct: accuracyPct,
-        accuracyOverUnderPct,
+        accuracy1X2Pct,
+        accuracyGoalsPct,
         accuracyBttsPct,
+        accuracyOverUnderPct: accuracyGoalsPct,
         simulatedPnlEur: Number(simulatedPnl.toFixed(2)),
-        simulatedRoiPct: roiPct,
+        simulatedRoiPct: Number(((simulatedPnl / (n * 10)) * 100).toFixed(1)),
         maxDrawdownEur: Number(maxDrawdown.toFixed(2)),
         calibration: calibrationReport
       },
-      recentMatches: evaluatedList.reverse()
+      recentMatches: evaluatedList.slice(-15)
     };
 
-    cacheSet(cacheKey, result, 'analysis');
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    cacheSet(cacheKey, result, 'backtest');
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, modelVersion: MODEL_VERSION });
   }
 });
-
 
 /* =========================================================
    SIMULADOR DE APUESTAS & AUTO-SETTLE

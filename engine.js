@@ -7,7 +7,7 @@
  *   and Inefficiencies in the Football Betting Market. Applied Statistics, 46(2), 265-280.
  */
 
-export const ENGINE_VERSION = '8.0.1';
+export const ENGINE_VERSION = '8.0.2';
 export const DIXON_COLES_RHO = -0.11; // Parámetro canónico empírico de correlación de bajas anotaciones
 
 export function clamp(value, min, max) {
@@ -36,7 +36,10 @@ export function ev(probability, odds) {
   return Number(((p * o - 1) * 100).toFixed(1));
 }
 
-export function confidence(bestProbability, sampleSize = 10) {
+/**
+ * Model Signal (Índice de Fuerza del Modelo): Puntuación analítica heurística (20-95).
+ */
+export function modelSignal(bestProbability, sampleSize = 10) {
   let prob = Number(bestProbability);
   if (!Number.isFinite(prob)) return 50;
   if (prob > 1) prob = prob / 100;
@@ -50,6 +53,8 @@ export function confidence(bestProbability, sampleSize = 10) {
   const finalScore = rawScore * sampleFactor;
   return Math.round(clamp(finalScore, 20, 95));
 }
+
+export const confidence = modelSignal;
 
 export function poisson(k, lambda) {
   if (lambda <= 0 || k < 0) return 0;
