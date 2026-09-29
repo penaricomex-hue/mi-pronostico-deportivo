@@ -1,56 +1,17 @@
-const express = require('express');
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-let Pool;
-try {
-  Pool = require('pg').Pool;
-} catch (e) {
-  Pool = null;
-}
+import express from 'express';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import pg from 'pg';
 
-// Importar motor o usar fallback interno aut&#243;nomo
-let engine;
-try {
-  engine = require('./engine');
-} catch (e) {
-  engine = {
-    clamp: (val, min, max) => Math.max(min, Math.min(max, val)),
-    shrinkToMean: (val, baseline, n = 10) => {
-      const weight = n / (n + 4);
-      return weight * val + (1 - weight) * baseline;
-    },
-    implied: (odds) => odds > 1 ? Number(((1 / odds) * 100).toFixed(1)) : null,
-    ev: (p, odds) => {
-      const prob = p > 1 ? p / 100 : p;
-      return Number(((prob * odds - 1) * 100).toFixed(1));
-    },
-    confidence: (prob, n = 10) => {
-      const p = prob > 1 ? prob / 100 : prob;
-      const sample = Math.min(1, Math.max(0.4, n / 10));
-      return Math.round(Math.min(95, Math.max(20, (35 + ((p - 0.33) / 0.45) * 55) * sample)));
-    },
-    matchModel: (homeXg, awayXg) => {
-      const hXg = Math.max(0.1, Number(homeXg) || 1.3);
-      const aXg = Math.max(0.1, Number(awayXg) || 1.1);
-      function p(k, l) {
-        let f = 1; for (let i = 2; i <= k; i++) f *= i;
-        return (Math.exp(-l) * Math.pow(l, k)) / f;
-      }
-      let hw = 0, d = 0, aw = 0, o25 = 0, u25 = 0, btts = 0;
-      for (let h = 0; h <= 7; h++) {
-        for (let a = 0; a <= 7; a++) {
-          const prob = p(h, hXg) * p(a, aXg);
-          if (h > a) hw += prob; else if (h === a) d += prob; else aw += prob;
-          if (h + a >= 3) o25 += prob; else u25 += prob;
-          if (h >= 1 && a >= 1) btts += prob;
-        }
-      }
-      const total = hw + d + aw;
-      return { homeWin: hw / total, draw: d / total, awayWin: aw / total, over25: o25, under25: u25, btts };
-    }
-  };
-}
+const { Pool } = pg || {};
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Motor Estadístico Canónico V8.0.1 con Dixon-Coles
+import * as engine from './engine.js';
+console.log(`[ENGINE] Motor cargado: ${engine.ENGINE_VERSION} (${engine.matchModel(1.3, 1.1).modelName})`);
 
 const {
   matchModel,
@@ -104,7 +65,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] Acceso protegido con usuario/contrase&#241;a activado.');
 }
 
-const MODEL_VERSION = 'V8.0.0';
+const MODEL_VERSION = 'V8.0.1';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -122,7 +83,7 @@ const BIGBALLS_LEAGUE_MAP = {
 };
 
 /* =========================================================
-   1. VENTAJA DE LOCAL DIN&#193;MICA Y APRENDIDA (V8.0)
+   1. VENTAJA DE LOCAL DIN&#193;MICA Y APRENDIDA (V8.0.1)
    Home Advantage = promedio hist&#243;rico de goles local / goles visitante
    de esa competici&#243;n, suavizado (shrinkage) hacia la media global (1.09x).
 ========================================================= */
@@ -180,7 +141,7 @@ function getHomeAdvantage(competitionCode) {
 }
 
 /* =========================================================
-   CACH&#201; MULTINIVEL CON TTLs INDEPENDIENTES (V8.0)
+   CACH&#201; MULTINIVEL CON TTLs INDEPENDIENTES (V8.0.1)
    Evita que cuotas o partidos se congelen 24 horas.
 ========================================================= */
 /* =========================================================
@@ -212,8 +173,6 @@ let quotaTracking = {
 
 // Cargar cuota persistida si existe
 try {
-  const fs = require('fs');
-  const path = require('path');
   const quotaFile = path.join(process.cwd(), 'api_quota.json');
   if (fs.existsSync(quotaFile)) {
     const raw = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
@@ -228,8 +187,6 @@ try {
 
 function saveQuotaTracking() {
   try {
-    const fs = require('fs');
-    const path = require('path');
     const quotaFile = path.join(process.cwd(), 'api_quota.json');
     fs.writeFileSync(quotaFile, JSON.stringify(quotaTracking, null, 2), 'utf8');
   } catch (e) {
@@ -499,7 +456,7 @@ async function getInjuryDataForTeam(teamName, competitionCode) {
 }
 
 /* =========================================================
-   2. C&#193;LCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0)
+   2. C&#193;LCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0.1)
    - Portero titular: afecta defensa (+vulnerabilidad)
    - Delanteros / goleadores: afecta ataque
    - Defensas / medios: impacto repartido
@@ -567,7 +524,7 @@ async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, c
 }
 
 /* =========================================================
-   3. DESCANSO Y FATIGA ASIM&#201;TRICA Y SUAVE (V8.0)
+   3. DESCANSO Y FATIGA ASIM&#201;TRICA Y SUAVE (V8.0.1)
    - Fatiga defensiva (desajuste t&#225;ctico/repliegue) > fatiga ofensiva
    - Curva continua y acotada, sin saltos binarios irreales
 ========================================================= */
@@ -1920,7 +1877,7 @@ app.get('/api/analyze', async (req, res) => {
 });
 
 /* =========================================================
-   BACKTESTING & CALIBRACI&#211;N ESTAD&#205;STICA (V8.0)
+   BACKTESTING & CALIBRACI&#211;N ESTAD&#205;STICA (V8.0.1)
    Calcula Brier Score multi-clase, Log Loss, precisi&#243;n 1X2,
    Over/Under, BTTS, Yield simulado y Calibraci&#243;n por rangos.
 ========================================================= */
@@ -1957,7 +1914,7 @@ const HISTORICAL_SAMPLE_MATCHES = {
 };
 
 /* =========================================================
-   RADAR DE OPORTUNIDADES DE VALOR (EV+) (V8.0)
+   RADAR DE OPORTUNIDADES DE VALOR (EV+) (V8.0.1)
    Calcula Expected Value (EV%) y Criterio de Kelly (Quarter)
 ========================================================= */
 app.get('/api/value-bets', async (req, res) => {
@@ -1972,18 +1929,30 @@ app.get('/api/value-bets', async (req, res) => {
     const fixtures = await getFixture(today, comp);
     const opportunities = [];
 
-    for (const f of (fixtures || []).slice(0, 12)) {
+    for (const f of (fixtures || []).slice(0, 15)) {
       if (!f?.homeTeam?.name || !f?.awayTeam?.name) continue;
       const homeName = f.homeTeam.name;
       const awayName = f.awayTeam.name;
       const compCode = f.competitionCode || f.competition?.code || comp || 'PD';
       const homeAdv = getHomeAdvantage(compCode);
 
+      // Cuotas REALES procedentes de casas de apuestas (The Odds API)
+      let odds = null;
+      try {
+        odds = await getOdds(homeName, awayName, compCode);
+      } catch (e) {
+        odds = null;
+      }
+
+      // V8.0.1 Rigor Analítico: Si no hay cuotas reales abiertas de casas de apuestas, OMITIR
+      if (!odds || !odds.available) {
+        continue;
+      }
+
       const estimatedHXg = clamp(1.45 * homeAdv, 0.4, 3.2);
       const estimatedAXg = clamp(1.15, 0.3, 2.8);
       const pred = matchModel(estimatedHXg, estimatedAXg);
 
-      // Probabilidades modelo
       const probs = {
         home: pred.homeWin,
         draw: pred.draw,
@@ -1991,14 +1960,6 @@ app.get('/api/value-bets', async (req, res) => {
         over: pred.over25,
         under: pred.under25
       };
-
-      // Cuotas (API o cuotas justas simuladas de mercado con vig 5%)
-      let odds = null;
-      try {
-        odds = await getOdds(homeName, awayName, compCode);
-      } catch (e) {
-        // Fallback a cuotas de mercado estimadas
-      }
 
       const marketCandidates = [
         {
@@ -2431,7 +2392,7 @@ app.get('/api/bets/summary', async (req, res) => {
 });
 
 /* =========================================================
-   FRONTEND - RENDER PAGE (V8.0.0)
+   FRONTEND - RENDER PAGE (V8.0.1)
    Incluye:
    - Banner VS con escudos grandes
    - Medidor circular SVG de confianza
@@ -2448,7 +2409,7 @@ function renderPage() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
-<title>MK Bets V8.0.0 - Pron&#243;sticos Deportivos</title>
+<title>MK Bets V8.0.1 - Pron&#243;sticos Deportivos</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 90' style='background:%23080b10'%3E%3Cpolyline points='10,80 10,10 45,55 80,10 80,80' fill='none' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='8' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='82' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3C/svg%3E">
 
 <style>
@@ -2832,7 +2793,7 @@ input{
 
 <header class="header">
   <div>
-    <span class="version">&#9679; V8.0.0 ANALYST</span>
+    <span class="version">&#9679; V8.0.1 ANALYST</span>
   </div>
 
   <div class="logo-row">
@@ -2845,7 +2806,7 @@ input{
   </div>
 
   <h1 style="margin:14px 0 6px;font-size:28px;line-height:1.1">Analiza antes de apostar.</h1>
-  <div class="subtitle">Motor Estad&#237;stico V8.0 + Local&#237;a Aprendida + Fatiga Suave + Lesiones Ponderadas + 2&#170; Opini&#243;n Desacoplada.</div>
+  <div class="subtitle">Motor Estad&#237;stico V8.0.1 + Local&#237;a Aprendida + Fatiga Suave + Lesiones Ponderadas + 2&#170; Opini&#243;n Desacoplada.</div>
 
   <div class="chips">
     <span class="chip">&#127967;&#65039; Local&#237;a Aprendida</span>
@@ -2924,7 +2885,7 @@ input{
     <div style="font-style:italic;color:#c7ccd4;margin-top:8px">"El bal&#243;n no miente. Los n&#250;meros tampoco."</div>
   </div>
 
-  <div class="card-title">Novedades V8.0.0</div>
+  <div class="card-title">Novedades V8.0.1</div>
   <div class="muted">
     1. <b>Ventaja Local Aprendida:</b> Estimaci&#243;n bayesiana con regresi&#243;n a la media seg&#250;n goles hist&#243;ricos reales por liga.<br>
     2. <b>Lesiones Ponderadas:</b> Impacto espec&#237;fico por posici&#243;n (portero/defensa/delantera) y acotado al 8% m&#225;ximo.<br>
@@ -2976,7 +2937,7 @@ input{
       <div class="card-title" style="margin:0">&#128200; Backtesting &amp; Calibraci&#243;n</div>
       <div class="muted" style="font-size:11px">Auditor&#237;a con marcadores oficiales: Brier Score, Log Loss y Bias</div>
     </div>
-    <span class="chip" style="background:#13231b;color:#7ee787;border:1px solid #254d35">V8.0 Audit</span>
+    <span class="chip" style="background:#13231b;color:#7ee787;border:1px solid #254d35">V8.0.1 Audit</span>
   </div>
 
   <div style="font-size:12px;color:#9da5b2;margin-bottom:10px">
@@ -4024,7 +3985,7 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         const lines = [
-          '⚽ MK BETS V8.0 — BOLETÍN DE APUESTAS',
+          '⚽ MK BETS V8.0.1 — BOLETÍN DE APUESTAS',
           '📅 Fecha: ' + new Date().toLocaleDateString('es-ES'),
           '━━━━━━━━━━━━━━━━━━━━━'
         ];
@@ -4034,7 +3995,7 @@ document.addEventListener('DOMContentLoaded', () => {
           lines.push('');
         });
         lines.push('━━━━━━━━━━━━━━━━━━━━━');
-        lines.push('🤖 Generado por MK Bets V8.0');
+        lines.push('🤖 Generado por MK Bets V8.0.1');
         const txt = lines.join(String.fromCharCode(10));
         navigator.clipboard.writeText(txt).then(function() {
           alert('✅ Boletín copiado al portapapeles. Listo para compartir en Telegram/WhatsApp.');
