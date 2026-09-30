@@ -7,7 +7,7 @@
  *   and Inefficiencies in the Football Betting Market. Applied Statistics, 46(2), 265-280.
  */
 
-export const ENGINE_VERSION = '8.0.2';
+export const ENGINE_VERSION = '8.0.3';
 export const DIXON_COLES_RHO = -0.11; // Parámetro canónico empírico de correlación de bajas anotaciones
 
 export function clamp(value, min, max) {

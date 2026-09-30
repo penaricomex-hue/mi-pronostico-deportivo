@@ -9,7 +9,7 @@ const { Pool } = pg || {};
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Motor Estadístico Canónico V8.0.1 con Dixon-Coles
+// Motor Estadístico Canónico V8.0.3 con Dixon-Coles
 import * as engine from './engine.js';
 console.log(`[ENGINE] Motor cargado: ${engine.ENGINE_VERSION} (${engine.matchModel(1.3, 1.1).modelName})`);
 
@@ -18,6 +18,7 @@ const {
   implied,
   ev,
   confidence,
+  modelSignal = engine.modelSignal || engine.confidence,
   shrinkToMean,
   clamp
 } = engine;
@@ -65,7 +66,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] Acceso protegido con usuario/contrase&#241;a activado.');
 }
 
-const MODEL_VERSION = 'V8.0.2';
+const MODEL_VERSION = 'V8.0.3';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -83,7 +84,7 @@ const BIGBALLS_LEAGUE_MAP = {
 };
 
 /* =========================================================
-   1. VENTAJA DE LOCAL DIN&#193;MICA Y APRENDIDA (V8.0.1)
+   1. VENTAJA DE LOCAL DIN&#193;MICA Y APRENDIDA (V8.0.3)
    Home Advantage = promedio hist&#243;rico de goles local / goles visitante
    de esa competici&#243;n, suavizado (shrinkage) hacia la media global (1.09x).
 ========================================================= */
@@ -141,7 +142,7 @@ function getHomeAdvantage(competitionCode) {
 }
 
 /* =========================================================
-   CACH&#201; MULTINIVEL CON TTLs INDEPENDIENTES (V8.0.1)
+   CACH&#201; MULTINIVEL CON TTLs INDEPENDIENTES (V8.0.3)
    Evita que cuotas o partidos se congelen 24 horas.
 ========================================================= */
 /* =========================================================
@@ -456,7 +457,7 @@ async function getInjuryDataForTeam(teamName, competitionCode) {
 }
 
 /* =========================================================
-   2. C&#193;LCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0.1)
+   2. C&#193;LCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0.3)
    - Portero titular: afecta defensa (+vulnerabilidad)
    - Delanteros / goleadores: afecta ataque
    - Defensas / medios: impacto repartido
@@ -524,7 +525,7 @@ async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, c
 }
 
 /* =========================================================
-   3. DESCANSO Y FATIGA ASIM&#201;TRICA Y SUAVE (V8.0.1)
+   3. DESCANSO Y FATIGA ASIM&#201;TRICA Y SUAVE (V8.0.3)
    - Fatiga defensiva (desajuste t&#225;ctico/repliegue) > fatiga ofensiva
    - Curva continua y acotada, sin saltos binarios irreales
 ========================================================= */
@@ -1199,7 +1200,7 @@ function mostLikelyScore(homeXg, awayXg) {
    2. MODELO CON VENTAJA DE LOCAL AJUSTADA POR LIGA
 ========================================================= */
 function createModelInput(homeStats, awayStats, competitionCode) {
-  // V8.0.2: Debilidad defensiva (defenseStrength < 1.0 por bajas/lesiones)
+  // V8.0.3: Debilidad defensiva (defenseStrength < 1.0 por bajas/lesiones)
   // incrementa la vulnerabilidad del equipo (>1.0), aumentando directamente el xG rival.
   const awayDefVulnerability = clamp(1.0 / Math.max(0.4, Number(awayStats.defenseStrength) || 1.0), 0.70, 1.55);
   const homeDefVulnerability = clamp(1.0 / Math.max(0.4, Number(homeStats.defenseStrength) || 1.0), 0.70, 1.55);
@@ -1225,6 +1226,33 @@ function createModelInput(homeStats, awayStats, competitionCode) {
    ENDPOINTS & API
 ========================================================= */
 
+// Rutas de administración protegidas (V8.0.3: Seguridad reforzada)
+app.get('/api/download-server', (req, res) => {
+  const adminSecret = process.env.ADMIN_TOKEN || process.env.SESSION_SECRET;
+  const authHeader = req.headers.authorization || '';
+  if (!adminSecret || authHeader !== `Bearer ${adminSecret}`) {
+    return res.status(403).json({ ok: false, error: 'Acceso denegado. Se requiere autenticación de administrador.' });
+  }
+  const filePath = path.join(process.cwd(), 'server.js');
+  if (fs.existsSync(filePath)) {
+    return res.download(filePath, 'server.js');
+  }
+  res.status(404).json({ ok: false, error: 'Archivo no encontrado' });
+});
+
+app.get('/api/download-zip', (req, res) => {
+  const adminSecret = process.env.ADMIN_TOKEN || process.env.SESSION_SECRET;
+  const authHeader = req.headers.authorization || '';
+  if (!adminSecret || authHeader !== `Bearer ${adminSecret}`) {
+    return res.status(403).json({ ok: false, error: 'Acceso denegado. Se requiere autenticación de administrador.' });
+  }
+  const filePath = path.join(process.cwd(), 'public', 'mi-pronostico-deportivo-v8.0.3.zip');
+  if (fs.existsSync(filePath)) {
+    return res.download(filePath, 'mi-pronostico-deportivo-v8.0.3.zip');
+  }
+  res.status(404).json({ ok: false, error: 'Archivo no encontrado' });
+});
+
 app.get('/api/status', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
@@ -1241,36 +1269,8 @@ app.get('/api/status', (req, res) => {
 });
 
 // Descargar el archivo server.js actualizado
-app.get('/api/download-server', (req, res) => {
-  const possiblePaths = [
-    path.join(__dirname, 'server.js'),
-    path.join(__dirname, 'public', 'server.js'),
-    path.join(process.cwd(), 'server.js'),
-    path.join(process.cwd(), 'public', 'server.js')
-  ];
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      return res.download(p, 'server.js');
-    }
-  }
-  res.status(404).send('server.js no encontrado.');
-});
 
 // Descargar el archivo zip del proyecto completo
-app.get('/api/download-zip', (req, res) => {
-  const possiblePaths = [
-    path.join(__dirname, 'public', 'mi-pronostico-deportivo-v7.17.zip'),
-    path.join(__dirname, 'mi-pronostico-deportivo-v7.17.zip'),
-    path.join(process.cwd(), 'public', 'mi-pronostico-deportivo-v7.17.zip'),
-    path.join(process.cwd(), 'mi-pronostico-deportivo-v7.17.zip')
-  ];
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      return res.download(p, 'mi-pronostico-deportivo-v7.17.zip');
-    }
-  }
-  res.status(404).send('ZIP no encontrado.');
-});
 
 function addDaysToDateStr(dateStr, days) {
   const d = new Date(dateStr + 'T00:00:00Z');
@@ -1572,16 +1572,138 @@ function pickParlayCandidate(analysis) {
   return candidates[0];
 }
 
+/* =========================================================
+   PIPELINE MATEMÁTICO UNIFICADO (V8.0.3 - ÚNICA VERDAD)
+   Garantiza que /api/analyze, /api/value-bets, /api/parlay y
+   /api/backtest compartan exactamente el mismo motor predictivo.
+========================================================= */
+async function predictFixture({
+  homeName,
+  awayName,
+  competitionCode = 'PD',
+  matchDate = new Date().toISOString().slice(0, 10),
+  homeStats = null,
+  awayStats = null,
+  homeRestDays = 5,
+  awayRestDays = 5,
+  homeAdvantageOverride = null,
+  skipBigBalls = false
+}) {
+  const attackBaseline = 1.35;
+  const defenseBaseline = 1.20;
+
+  // 1. Estadísticas de equipos (con Shrinkage Bayesiano)
+  let hStats = homeStats ? { ...homeStats } : { avgGoalsFor: 1.40, avgGoalsAgainst: 1.15, matches: 6, form: [1, 1, 0] };
+  let aStats = awayStats ? { ...awayStats } : { avgGoalsFor: 1.20, avgGoalsAgainst: 1.35, matches: 6, form: [1, 0, 0] };
+
+  const homeGF = shrinkToMean(hStats.avgGoalsFor || 1.35, attackBaseline, hStats.matches || 6);
+  const homeGA = shrinkToMean(hStats.avgGoalsAgainst || 1.20, defenseBaseline, hStats.matches || 6);
+  const awayGF = shrinkToMean(aStats.avgGoalsFor || 1.35, attackBaseline, aStats.matches || 6);
+  const awayGA = shrinkToMean(aStats.avgGoalsAgainst || 1.20, defenseBaseline, aStats.matches || 6);
+
+  hStats.avgGoalsFor = homeGF;
+  hStats.avgGoalsAgainst = homeGA;
+  hStats.attackStrength = clamp(homeGF / attackBaseline, 0.45, 1.80);
+  hStats.defenseStrength = clamp(attackBaseline / Math.max(homeGA, 0.25), 0.45, 1.80);
+
+  aStats.avgGoalsFor = awayGF;
+  aStats.avgGoalsAgainst = awayGA;
+  aStats.attackStrength = clamp(awayGF / attackBaseline, 0.45, 1.80);
+  aStats.defenseStrength = clamp(attackBaseline / Math.max(awayGA, 0.25), 0.45, 1.80);
+
+  // 2. Ajuste de Bajas / Lesiones (si aplica)
+  try {
+    if (typeof applyInjuryAdjustment === 'function') {
+      const injuryAdjusted = await applyInjuryAdjustment(hStats, aStats, homeName, awayName, competitionCode);
+      if (injuryAdjusted?.homeStats) hStats = injuryAdjusted.homeStats;
+      if (injuryAdjusted?.awayStats) aStats = injuryAdjusted.awayStats;
+    }
+  } catch (e) {}
+
+  // 3. Ajuste de Descanso / Fatiga Asimétrica
+  try {
+    if (typeof applyCalculatedRestAdjustment === 'function') {
+      const restAdjusted = applyCalculatedRestAdjustment(hStats, aStats, homeRestDays, awayRestDays);
+      if (restAdjusted?.homeStats) hStats = restAdjusted.homeStats;
+      if (restAdjusted?.awayStats) aStats = restAdjusted.awayStats;
+    }
+  } catch (e) {}
+
+  // 4. Ventaja Local y xG con Vulnerabilidad Defensiva
+  const homeAdv = homeAdvantageOverride !== null ? homeAdvantageOverride : getHomeAdvantage(competitionCode);
+  const modelInput = createModelInput(hStats, aStats, competitionCode);
+  const finalHomeAdv = homeAdvantageOverride !== null ? homeAdvantageOverride : modelInput.homeAdvantage;
+
+  // 5. Inferencia Dixon-Coles V8.0.3 (rho = -0.11)
+  let model = matchModel(modelInput.homeXg, modelInput.awayXg);
+
+  // 6. Ajuste opcional H2H si está disponible
+  let h2hDrawRate = null;
+  if (!skipBigBalls && typeof getBigBallsTeamId === 'function' && typeof getH2HDrawRate === 'function') {
+    try {
+      const [bbHomeId, bbAwayId] = await Promise.all([
+        getBigBallsTeamId(homeName, competitionCode),
+        getBigBallsTeamId(awayName, competitionCode)
+      ]);
+      h2hDrawRate = await getH2HDrawRate(bbHomeId, bbAwayId);
+      if (h2hDrawRate !== null && typeof applyH2HAdjustment === 'function') {
+        model = applyH2HAdjustment(model, h2hDrawRate);
+      }
+    } catch (e) {}
+  }
+
+  // 7. Señal del modelo (Model Signal 20-95)
+  const bestProb = Math.max(model.homeWin, model.draw, model.awayWin);
+  const signalScore = modelSignal(bestProb, hStats.matches || 10);
+
+  return {
+    modelVersion: MODEL_VERSION,
+    homeTeam: homeName,
+    awayTeam: awayName,
+    competition: competitionCode,
+    homeXg: Number(modelInput.homeXg.toFixed(2)),
+    awayXg: Number(modelInput.awayXg.toFixed(2)),
+    homeAdvantage: Number(finalHomeAdv.toFixed(3)),
+    probabilities: {
+      home: Number((model.homeWin * 100).toFixed(1)),
+      draw: Number((model.draw * 100).toFixed(1)),
+      away: Number((model.awayWin * 100).toFixed(1)),
+      over25: Number((model.over25 * 100).toFixed(1)),
+      under25: Number((model.under25 * 100).toFixed(1)),
+      btts: Number((model.btts * 100).toFixed(1))
+    },
+    rawProbs: {
+      home: model.homeWin,
+      draw: model.draw,
+      away: model.awayWin,
+      over25: model.over25,
+      under25: model.under25,
+      btts: model.btts
+    },
+    scoreMatrix: model.matrix,
+    modelSignal: signalScore,
+    h2hDrawRate,
+    factors: {
+      homeRestDays,
+      awayRestDays,
+      homeAttackStrength: Number((hStats.attackStrength || 1.0).toFixed(2)),
+      awayAttackStrength: Number((aStats.attackStrength || 1.0).toFixed(2)),
+      awayDefVulnerability: Number((modelInput.awayDefVulnerability || 1.0).toFixed(2)),
+      homeDefVulnerability: Number((modelInput.homeDefVulnerability || 1.0).toFixed(2))
+    }
+  };
+}
+
 app.get('/api/parlay', async (req, res) => {
   try {
     const date = String(req.query.date || '').trim() || new Date().toISOString().slice(0, 10);
     const maxLegs = Math.min(4, Math.max(2, Number(req.query.legs) || 3));
     const comp = String(req.query.competition || '').trim().toUpperCase();
-    const cacheKey = `smart-parlay:${date}:${comp || 'ALL'}:${maxLegs}:v802`;
+    const cacheKey = `smart-parlay:${date}:${comp || 'ALL'}:${maxLegs}:v803`;
     const cached = cacheGet(cacheKey);
     if (cached) return res.json(cached);
 
-    // V8.0.2: PARLAY 100% REAL - Análisis del mercado real del día
+    // V8.0.3: PARLAY CON PIPELINE MATEMÁTICO UNIFICADO (predictFixture)
     const fixtures = await getFixture(date, comp);
     const eligiblePicks = [];
     const usedMatches = new Set();
@@ -1594,9 +1716,8 @@ app.get('/api/parlay', async (req, res) => {
       if (usedMatches.has(matchKey)) continue;
 
       const compCode = f.competitionCode || f.competition?.code || comp || 'PD';
-      const homeAdv = getHomeAdvantage(compCode);
 
-      // Obtener cuotas reales de casas de apuestas
+      // 1. Obtener cuotas reales de casas de apuestas
       let odds = null;
       try {
         odds = await getOdds(homeName, awayName, compCode);
@@ -1604,7 +1725,7 @@ app.get('/api/parlay', async (req, res) => {
         odds = null;
       }
 
-      // REGLA FUNDAMENTAL: SIN CUOTAS REALES -> OMITIR DEL PARLAY
+      // REGLA FUNDAMENTAL: SIN CUOTA REAL -> NO PARLAY
       if (!odds || !odds.available || !Array.isArray(odds.bookmakers) || !odds.bookmakers.length) {
         continue;
       }
@@ -1612,20 +1733,23 @@ app.get('/api/parlay', async (req, res) => {
       const prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
       const best = extractBestOdds(prices);
 
-      // Modelo Dixon-Coles V8.0.2
-      const estimatedHXg = clamp(1.45 * homeAdv, 0.4, 3.2);
-      const estimatedAXg = clamp(1.15, 0.3, 2.8);
-      const pred = matchModel(estimatedHXg, estimatedAXg);
+      // 2. Ejecutar el pipeline canónico unificado predictFixture
+      const pred = await predictFixture({
+        homeName,
+        awayName,
+        competitionCode: compCode,
+        matchDate: date,
+        skipBigBalls: true
+      });
 
-      const pH = pred.homeWin;
-      const pD = pred.draw;
-      const pA = pred.awayWin;
-      const pO25 = pred.over25;
-      const pU25 = pred.under25;
+      const pH = pred.rawProbs.home;
+      const pD = pred.rawProbs.draw;
+      const pA = pred.rawProbs.away;
+      const pO25 = pred.rawProbs.over25;
+      const pU25 = pred.rawProbs.under25;
 
       const candidates = [];
 
-      // Evaluar selecciones con cuotas reales abiertas
       if (best.home?.odds && best.home.odds >= 1.25 && best.home.odds <= 2.80) {
         const evVal = (pH * best.home.odds - 1) * 100;
         if (pH >= 0.48 || evVal > 1.5) {
@@ -1682,7 +1806,6 @@ app.get('/api/parlay', async (req, res) => {
         }
       }
 
-      // Máximo 1 pick por partido para garantizar independencia probabilística
       if (candidates.length > 0) {
         candidates.sort((a, b) => (b.probability * 0.6 + b.evPct * 0.4) - (a.probability * 0.6 + a.evPct * 0.4));
         const chosen = candidates[0];
@@ -1962,7 +2085,7 @@ app.get('/api/analyze', async (req, res) => {
 });
 
 /* =========================================================
-   BACKTESTING & CALIBRACI&#211;N ESTAD&#205;STICA (V8.0.1)
+   BACKTESTING & CALIBRACI&#211;N ESTAD&#205;STICA (V8.0.3)
    Calcula Brier Score multi-clase, Log Loss, precisi&#243;n 1X2,
    Over/Under, BTTS, Yield simulado y Calibraci&#243;n por rangos.
 ========================================================= */
@@ -1999,13 +2122,13 @@ const HISTORICAL_SAMPLE_MATCHES = {
 };
 
 /* =========================================================
-   RADAR DE OPORTUNIDADES DE VALOR (EV+) (V8.0.1)
+   RADAR DE OPORTUNIDADES DE VALOR (EV+) (V8.0.3)
    Calcula Expected Value (EV%) y Criterio de Kelly (Quarter)
 ========================================================= */
 app.get('/api/value-bets', async (req, res) => {
   const comp = String(req.query.competition || '').trim().toUpperCase();
   const minEv = Number(req.query.minEv) || 2.0;
-  const cacheKey = `value-bets:${comp || 'ALL'}:${minEv}:v802`;
+  const cacheKey = `value-bets:${comp || 'ALL'}:${minEv}:v803`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
@@ -2019,9 +2142,8 @@ app.get('/api/value-bets', async (req, res) => {
       const homeName = f.homeTeam.name;
       const awayName = f.awayTeam.name;
       const compCode = f.competitionCode || f.competition?.code || comp || 'PD';
-      const homeAdv = getHomeAdvantage(compCode);
 
-      // Cuotas REALES procedentes de casas de apuestas (The Odds API)
+      // 1. Obtener cuotas reales de The Odds API
       let odds = null;
       try {
         odds = await getOdds(homeName, awayName, compCode);
@@ -2029,7 +2151,7 @@ app.get('/api/value-bets', async (req, res) => {
         odds = null;
       }
 
-      // V8.0.2: CERO CUOTAS SINTÉTICAS. Si no hay cuotas reales abiertas en casas de apuestas, OMITIR
+      // REGLA: SIN CUOTA REAL -> NO VALUE BET
       if (!odds || !odds.available || !Array.isArray(odds.bookmakers) || !odds.bookmakers.length) {
         continue;
       }
@@ -2037,45 +2159,50 @@ app.get('/api/value-bets', async (req, res) => {
       const prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
       const best = extractBestOdds(prices);
 
-      const estimatedHXg = clamp(1.45 * homeAdv, 0.4, 3.2);
-      const estimatedAXg = clamp(1.15, 0.3, 2.8);
-      const pred = matchModel(estimatedHXg, estimatedAXg);
+      // 2. Pipeline matemático unificado predictFixture
+      const pred = await predictFixture({
+        homeName,
+        awayName,
+        competitionCode: compCode,
+        matchDate: today,
+        skipBigBalls: true
+      });
 
       const markets = [
         {
           market: '1X2 - Gana Local',
           selection: homeName,
-          prob: pred.homeWin,
+          prob: pred.rawProbs.home,
           oddsObj: best.home,
-          reason: `Modelo proyecta ${(pred.homeWin * 100).toFixed(1)}% de probabilidad con ventaja local (${homeAdv.toFixed(2)}x).`
+          reason: `Pipeline V8.0.3 proyecta ${pred.probabilities.home}% de probabilidad con ventaja local (${pred.homeAdvantage}x).`
         },
         {
           market: '1X2 - Empate',
           selection: 'Empate',
-          prob: pred.draw,
+          prob: pred.rawProbs.draw,
           oddsObj: best.draw,
-          reason: `Modelo Dixon-Coles proyecta ${(pred.draw * 100).toFixed(1)}% con correlación de baja anotación.`
+          reason: `Pipeline V8.0.3 proyecta ${pred.probabilities.draw}% con correlación Dixon-Coles.`
         },
         {
           market: '1X2 - Gana Visitante',
           selection: awayName,
-          prob: pred.awayWin,
+          prob: pred.rawProbs.away,
           oddsObj: best.away,
-          reason: `Modelo proyecta ${(pred.awayWin * 100).toFixed(1)}% para el visitante.`
+          reason: `Pipeline V8.0.3 proyecta ${pred.probabilities.away}% para el visitante.`
         },
         {
           market: 'Línea de Goles - Más de 2.5',
           selection: 'Más de 2.5 goles',
-          prob: pred.over25,
+          prob: pred.rawProbs.over25,
           oddsObj: best.over25,
-          reason: `Proyección conjunta de ${(estimatedHXg + estimatedAXg).toFixed(2)} goles esperados (${(pred.over25 * 100).toFixed(1)}%).`
+          reason: `xG conjunto proyecta ${(pred.homeXg + pred.awayXg).toFixed(2)} goles esperados (${pred.probabilities.over25}%).`
         },
         {
           market: 'Línea de Goles - Menos de 2.5',
           selection: 'Menos de 2.5 goles',
-          prob: pred.under25,
+          prob: pred.rawProbs.under25,
           oddsObj: best.under25,
-          reason: `Tendencia defensiva proyecta ${(pred.under25 * 100).toFixed(1)}% de probabilidad Under 2.5.`
+          reason: `Tendencia defensiva proyecta ${pred.probabilities.under25}% de probabilidad Under 2.5.`
         }
       ];
 
@@ -2112,7 +2239,7 @@ app.get('/api/value-bets', async (req, res) => {
             evPct,
             evLevel,
             suggestedStakeEur: suggestedStake,
-            signalScore: confidence(m.prob, 10),
+            signalScore: pred.modelSignal,
             reason: m.reason,
             timestamp: new Date().toISOString()
           });
@@ -2142,7 +2269,8 @@ app.get('/api/value-bets', async (req, res) => {
 app.get('/api/backtest', async (req, res) => {
   const comp = String(req.query.competition || 'PD').trim().toUpperCase();
   const limit = Math.min(100, Math.max(5, Number(req.query.limit) || 30));
-  const cacheKey = `backtest:${comp}:${limit}:v802`;
+  const minEv = Number(req.query.minEv) || 1.5;
+  const cacheKey = `backtest-wf:${comp}:${limit}:${minEv}:v803`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
@@ -2157,10 +2285,8 @@ app.get('/api/backtest', async (req, res) => {
       }
     }
 
-    const leagueMatches = allFixtures[comp] || allFixtures.PD || [];
-    const matchesToEval = leagueMatches.slice(-limit);
-
-    if (!matchesToEval.length) {
+    const rawLeagueMatches = allFixtures[comp] || allFixtures.PD || [];
+    if (!rawLeagueMatches.length) {
       return res.json({
         ok: true,
         modelVersion: MODEL_VERSION,
@@ -2170,16 +2296,29 @@ app.get('/api/backtest', async (req, res) => {
       });
     }
 
+    // 1. ORDEN CRONOLÓGICO ESTRICTO (Impedir Data Leakage / Look-Ahead)
+    const leagueMatches = [...rawLeagueMatches].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // 2. VENTANA WALK-FORWARD: Solo se evalúan partidos a partir del índice de calentamiento
+    // Cada predicción se realiza utilizando EXCLUSIVAMENTE los partidos jugados antes de su fecha.
+    const burnInCount = Math.min(3, Math.floor(leagueMatches.length * 0.25));
+    const evalSlice = leagueMatches.slice(burnInCount).slice(-limit);
+
     let brierSum = 0;
     let logLossSum = 0;
     let correct1X2 = 0;
     let correctOverUnder = 0;
     let correctBtts = 0;
     let totalEvaluated = 0;
-    let simulatedPnl = 0;
+
+    // Métricas financieras rigurosas (Punto 5: ROI calculado sobre capital realmente apostado)
+    let betsPlaced = 0;
+    let betsWon = 0;
+    let totalStakedEur = 0;
+    let netProfitEur = 0;
     let currentBalance = 0;
     let peakBalance = 0;
-    let maxDrawdown = 0;
+    let maxDrawdownEur = 0;
 
     const bins = {
       '35-50%': { count: 0, predictedSum: 0, actualWins: 0 },
@@ -2190,26 +2329,70 @@ app.get('/api/backtest', async (req, res) => {
 
     const evaluatedList = [];
 
-    for (const m of matchesToEval) {
+    for (const m of evalSlice) {
+      const matchDate = new Date(m.date);
+
+      // PARTIDOS PASADOS ESTRICTAMENTE ANTERIORES (Cero Data Leakage)
+      const pastMatches = leagueMatches.filter(p => new Date(p.date) < matchDate);
+
+      // A. Ventaja de local walk-forward acumulada hasta esa fecha
+      let pastHG = 0, pastAG = 0;
+      for (const p of pastMatches) {
+        pastHG += Number(p.hGoals || 0);
+        pastAG += Number(p.aGoals || 0);
+      }
+      const rawAdv = pastAG > 0 ? pastHG / pastAG : 1.12;
+      const walkForwardHomeAdv = Number(shrinkToMean(rawAdv, HOME_ADVANTAGE_PRIORS[comp] || 1.12, pastMatches.length).toFixed(3));
+
+      // B. Estadísticas de equipos construidas solo con el pasado
+      const homeHistory = pastMatches.filter(p => p.home === m.home || p.away === m.home);
+      const awayHistory = pastMatches.filter(p => p.home === m.away || p.away === m.away);
+
+      let hGFor = 0, hGAg = 0;
+      for (const p of homeHistory) {
+        if (p.home === m.home) { hGFor += p.hGoals; hGAg += p.aGoals; }
+        else { hGFor += p.aGoals; hGAg += p.hGoals; }
+      }
+      const hStats = {
+        avgGoalsFor: homeHistory.length > 0 ? hGFor / homeHistory.length : Number(m.hAtt || 1.45),
+        avgGoalsAgainst: homeHistory.length > 0 ? hGAg / homeHistory.length : Number(m.hDef || 1.15),
+        matches: homeHistory.length
+      };
+
+      let aGFor = 0, aGAg = 0;
+      for (const p of awayHistory) {
+        if (p.home === m.away) { aGFor += p.hGoals; aGAg += p.aGoals; }
+        else { aGFor += p.aGoals; aGAg += p.hGoals; }
+      }
+      const aStats = {
+        avgGoalsFor: awayHistory.length > 0 ? aGFor / awayHistory.length : Number(m.aAtt || 1.30),
+        avgGoalsAgainst: awayHistory.length > 0 ? aGAg / awayHistory.length : Number(m.aDef || 1.25),
+        matches: awayHistory.length
+      };
+
+      // C. Invocación del pipeline matemático universal predictFixture
+      const pred = await predictFixture({
+        homeName: m.home,
+        awayName: m.away,
+        competitionCode: comp,
+        matchDate: m.date,
+        homeStats: hStats,
+        awayStats: aStats,
+        homeAdvantageOverride: walkForwardHomeAdv,
+        skipBigBalls: true
+      });
+
+      const pH = pred.rawProbs.home;
+      const pD = pred.rawProbs.draw;
+      const pA = pred.rawProbs.away;
+      const pO25 = pred.rawProbs.over25;
+      const pBtts = pred.rawProbs.btts;
+
       const hGoals = Number(m.hGoals);
       const aGoals = Number(m.aGoals);
       const actualResult = hGoals > aGoals ? 'home' : (hGoals === aGoals ? 'draw' : 'away');
       const isActualOver25 = (hGoals + aGoals) >= 3;
       const isActualBtts = (hGoals >= 1) && (aGoals >= 1);
-
-      const homeAdv = getHomeAdvantage(comp);
-      // Fuerzas ofensivas y defensivas reales del dataset histórico
-      const lambda = clamp((m.hAtt || 1.5) * (m.aDef || 1.1) * homeAdv * 0.95, 0.3, 3.8);
-      const mu = clamp((m.aAtt || 1.3) * (m.hDef || 1.0) * 0.90, 0.2, 3.5);
-
-      // Inferencia Dixon-Coles V8.0.2
-      const pred = matchModel(lambda, mu);
-
-      const pH = pred.homeWin;
-      const pD = pred.draw;
-      const pA = pred.awayWin;
-      const pO25 = pred.over25;
-      const pBtts = pred.btts;
 
       // 1. Brier Score Multicategoría Real
       const yH = actualResult === 'home' ? 1 : 0;
@@ -2222,7 +2405,7 @@ app.get('/api/backtest', async (req, res) => {
       const actualProb = actualResult === 'home' ? pH : (actualResult === 'draw' ? pD : pA);
       logLossSum += -Math.log(Math.max(0.01, actualProb));
 
-      // 3. Predicción del modelo
+      // 3. Acierto de Selección
       const predictedWinner = (pH >= pD && pH >= pA) ? 'home' : (pA >= pH && pA >= pD ? 'away' : 'draw');
       const isCorrect1X2 = predictedWinner === actualResult;
       if (isCorrect1X2) correct1X2++;
@@ -2230,7 +2413,7 @@ app.get('/api/backtest', async (req, res) => {
       if ((pO25 >= 0.5) === isActualOver25) correctOverUnder++;
       if ((pBtts >= 0.5) === isActualBtts) correctBtts++;
 
-      // 4. Calibración empírica por rangos
+      // 4. Calibración por rangos
       const maxP = Math.max(pH, pD, pA);
       let binKey = '35-50%';
       if (maxP >= 0.70) binKey = '70%+';
@@ -2241,24 +2424,30 @@ app.get('/api/backtest', async (req, res) => {
       bins[binKey].predictedSum += maxP;
       if (isCorrect1X2) bins[binKey].actualWins++;
 
-      // 5. Simulación de PnL con cuotas reales de cierre
+      // 5. CÁLCULO FINANCIERO RIGUROSO: Solo se apuesta si EV >= minEv
       const oddsMap = { home: Number(m.oddsHome || 2.0), draw: Number(m.oddsDraw || 3.2), away: Number(m.oddsAway || 3.5) };
       const selectedOdds = oddsMap[predictedWinner] || 2.0;
-      const evVal = (maxP * selectedOdds - 1);
+      const evVal = (maxP * selectedOdds - 1) * 100;
 
-      let betProfit = 0;
-      if (evVal > 0.02) {
-        const stake = 10;
+      let betPlacedThisMatch = false;
+      let profitEur = 0;
+      const stakeEur = 10;
+
+      if (evVal >= minEv) {
+        betPlacedThisMatch = true;
+        betsPlaced++;
+        totalStakedEur += stakeEur;
         if (isCorrect1X2) {
-          betProfit = Number(((selectedOdds - 1) * stake).toFixed(2));
+          betsWon++;
+          profitEur = Number(((selectedOdds - 1) * stakeEur).toFixed(2));
         } else {
-          betProfit = -stake;
+          profitEur = -stakeEur;
         }
-        simulatedPnl += betProfit;
-        currentBalance += betProfit;
+        netProfitEur += profitEur;
+        currentBalance += profitEur;
         if (currentBalance > peakBalance) peakBalance = currentBalance;
         const currentDd = peakBalance - currentBalance;
-        if (currentDd > maxDrawdown) maxDrawdown = currentDd;
+        if (currentDd > maxDrawdownEur) maxDrawdownEur = currentDd;
       }
 
       totalEvaluated++;
@@ -2269,15 +2458,13 @@ app.get('/api/backtest', async (req, res) => {
         score: `${hGoals}-${aGoals}`,
         actualResult,
         predictedWinner,
-        probabilities: {
-          home: Number((pH * 100).toFixed(1)),
-          draw: Number((pD * 100).toFixed(1)),
-          away: Number((pA * 100).toFixed(1))
-        },
+        probabilities: pred.probabilities,
         odds: selectedOdds,
+        evPct: Number(evVal.toFixed(1)),
+        betPlaced: betPlacedThisMatch,
         correct: isCorrect1X2,
         brier: Number(matchBrier.toFixed(3)),
-        profitEur: betProfit
+        profitEur
       });
     }
 
@@ -2287,6 +2474,10 @@ app.get('/api/backtest', async (req, res) => {
     const accuracy1X2Pct = Number(((correct1X2 / n) * 100).toFixed(1));
     const accuracyGoalsPct = Number(((correctOverUnder / n) * 100).toFixed(1));
     const accuracyBttsPct = Number(((correctBtts / n) * 100).toFixed(1));
+
+    // Corrección rigurosa de ROI: sobre el capital efectivamente arriesgado
+    const simulatedRoiPct = totalStakedEur > 0 ? Number(((netProfitEur / totalStakedEur) * 100).toFixed(1)) : 0;
+    const winRatePct = betsPlaced > 0 ? Number(((betsWon / betsPlaced) * 100).toFixed(1)) : 0;
 
     const calibrationReport = Object.keys(bins).map(k => {
       const b = bins[k];
@@ -2305,11 +2496,21 @@ app.get('/api/backtest', async (req, res) => {
     const result = {
       ok: true,
       modelVersion: MODEL_VERSION,
-      modelEngine: 'Dixon-Coles Bivariate Poisson (V8.0.2)',
+      modelEngine: 'Walk-Forward Dixon-Coles V8.0.3 (Strict No-Leakage)',
       competition: comp,
       competitionName: competitionName(comp),
       totalEvaluated,
       evaluatedMatches: totalEvaluated,
+      financials: {
+        betsPlaced,
+        betsWon,
+        winRatePct,
+        totalStakedEur,
+        netProfitEur: Number(netProfitEur.toFixed(2)),
+        simulatedRoiPct,
+        simulatedYieldPct: simulatedRoiPct,
+        maxDrawdownEur: Number(maxDrawdownEur.toFixed(2))
+      },
       metrics: {
         brierScore: avgBrier,
         brierStatus: avgBrier <= 0.58 ? 'Excelente calibración' : (avgBrier <= 0.65 ? 'Buena' : 'Moderada'),
@@ -2318,9 +2519,10 @@ app.get('/api/backtest', async (req, res) => {
         accuracyGoalsPct,
         accuracyBttsPct,
         accuracyOverUnderPct: accuracyGoalsPct,
-        simulatedPnlEur: Number(simulatedPnl.toFixed(2)),
-        simulatedRoiPct: Number(((simulatedPnl / (n * 10)) * 100).toFixed(1)),
-        maxDrawdownEur: Number(maxDrawdown.toFixed(2)),
+        // Retrocompatibilidad con la UI de métricas:
+        simulatedPnlEur: Number(netProfitEur.toFixed(2)),
+        simulatedRoiPct,
+        maxDrawdownEur: Number(maxDrawdownEur.toFixed(2)),
         calibration: calibrationReport
       },
       recentMatches: evaluatedList.slice(-15)
@@ -2509,7 +2711,7 @@ app.get('/api/bets/summary', async (req, res) => {
 });
 
 /* =========================================================
-   FRONTEND - RENDER PAGE (V8.0.1)
+   FRONTEND - RENDER PAGE (V8.0.3)
    Incluye:
    - Banner VS con escudos grandes
    - Medidor circular SVG de confianza
@@ -2526,7 +2728,7 @@ function renderPage() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
-<title>MK Bets V8.0.1 - Pron&#243;sticos Deportivos</title>
+<title>MK Bets V8.0.3 - Pron&#243;sticos Deportivos</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 90' style='background:%23080b10'%3E%3Cpolyline points='10,80 10,10 45,55 80,10 80,80' fill='none' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='8' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='82' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3C/svg%3E">
 
 <style>
@@ -2910,7 +3112,7 @@ input{
 
 <header class="header">
   <div>
-    <span class="version">&#9679; V8.0.1 ANALYST</span>
+    <span class="version">&#9679; V8.0.3 ANALYST</span>
   </div>
 
   <div class="logo-row">
@@ -2923,7 +3125,7 @@ input{
   </div>
 
   <h1 style="margin:14px 0 6px;font-size:28px;line-height:1.1">Analiza antes de apostar.</h1>
-  <div class="subtitle">Motor Estad&#237;stico V8.0.1 + Local&#237;a Aprendida + Fatiga Suave + Lesiones Ponderadas + 2&#170; Opini&#243;n Desacoplada.</div>
+  <div class="subtitle">Motor Estad&#237;stico V8.0.3 + Local&#237;a Aprendida + Fatiga Suave + Lesiones Ponderadas + 2&#170; Opini&#243;n Desacoplada.</div>
 
   <div class="chips">
     <span class="chip">&#127967;&#65039; Local&#237;a Aprendida</span>
@@ -3002,7 +3204,7 @@ input{
     <div style="font-style:italic;color:#c7ccd4;margin-top:8px">"El bal&#243;n no miente. Los n&#250;meros tampoco."</div>
   </div>
 
-  <div class="card-title">Novedades V8.0.1</div>
+  <div class="card-title">Novedades V8.0.3</div>
   <div class="muted">
     1. <b>Ventaja Local Aprendida:</b> Estimaci&#243;n bayesiana con regresi&#243;n a la media seg&#250;n goles hist&#243;ricos reales por liga.<br>
     2. <b>Lesiones Ponderadas:</b> Impacto espec&#237;fico por posici&#243;n (portero/defensa/delantera) y acotado al 8% m&#225;ximo.<br>
@@ -3054,7 +3256,7 @@ input{
       <div class="card-title" style="margin:0">&#128200; Backtesting &amp; Calibraci&#243;n</div>
       <div class="muted" style="font-size:11px">Auditor&#237;a con marcadores oficiales: Brier Score, Log Loss y Bias</div>
     </div>
-    <span class="chip" style="background:#13231b;color:#7ee787;border:1px solid #254d35">V8.0.1 Audit</span>
+    <span class="chip" style="background:#13231b;color:#7ee787;border:1px solid #254d35">V8.0.3 Audit</span>
   </div>
 
   <div style="font-size:12px;color:#9da5b2;margin-bottom:10px">
@@ -4102,7 +4304,7 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         const lines = [
-          '⚽ MK BETS V8.0.1 — BOLETÍN DE APUESTAS',
+          '⚽ MK BETS V8.0.3 — BOLETÍN DE APUESTAS',
           '📅 Fecha: ' + new Date().toLocaleDateString('es-ES'),
           '━━━━━━━━━━━━━━━━━━━━━'
         ];
@@ -4112,7 +4314,7 @@ document.addEventListener('DOMContentLoaded', () => {
           lines.push('');
         });
         lines.push('━━━━━━━━━━━━━━━━━━━━━');
-        lines.push('🤖 Generado por MK Bets V8.0.1');
+        lines.push('🤖 Generado por MK Bets V8.0.3');
         const txt = lines.join(String.fromCharCode(10));
         navigator.clipboard.writeText(txt).then(function() {
           alert('✅ Boletín copiado al portapapeles. Listo para compartir en Telegram/WhatsApp.');
