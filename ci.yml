@@ -1,0 +1,43 @@
+name: CI - Verificación de Calidad y Despliegue
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Instalación reproducible con npm ci
+        run: npm ci
+
+      - name: Validación de sintaxis en server.js y engine.js
+        run: |
+          node -c server.js
+          node -c engine.js
+
+      - name: Compilación del frontend Vite
+        run: npm run build
+
+      - name: Comprobación de versión del modelo V8.0.4
+        run: |
+          node -e "
+          import fs from 'fs';
+          const s = fs.readFileSync('server.js', 'utf8');
+          if (!s.includes(\"const MODEL_VERSION = 'V8.0.4';\")) {
+            console.error('ERROR: server.js no contiene MODEL_VERSION V8.0.4');
+            process.exit(1);
+          }
+          console.log('MODEL_VERSION V8.0.4 verificado con éxito.');
+          "
