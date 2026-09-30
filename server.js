@@ -9,7 +9,7 @@ const { Pool } = pg || {};
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Motor Estadístico Canónico V8.0.3 con Dixon-Coles
+// Motor Estadístico Canónico V8.0.4 con Dixon-Coles
 import * as engine from './engine.js';
 console.log(`[ENGINE] Motor cargado: ${engine.ENGINE_VERSION} (${engine.matchModel(1.3, 1.1).modelName})`);
 
@@ -66,7 +66,7 @@ if (APP_USERNAME && APP_PASSWORD) {
   console.log('[AUTH] Acceso protegido con usuario/contrase&#241;a activado.');
 }
 
-const MODEL_VERSION = 'V8.0.3';
+const MODEL_VERSION = 'V8.0.4';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
@@ -84,7 +84,7 @@ const BIGBALLS_LEAGUE_MAP = {
 };
 
 /* =========================================================
-   1. VENTAJA DE LOCAL DIN&#193;MICA Y APRENDIDA (V8.0.3)
+   1. VENTAJA DE LOCAL DIN&#193;MICA Y APRENDIDA (V8.0.4)
    Home Advantage = promedio hist&#243;rico de goles local / goles visitante
    de esa competici&#243;n, suavizado (shrinkage) hacia la media global (1.09x).
 ========================================================= */
@@ -142,7 +142,7 @@ function getHomeAdvantage(competitionCode) {
 }
 
 /* =========================================================
-   CACH&#201; MULTINIVEL CON TTLs INDEPENDIENTES (V8.0.3)
+   CACH&#201; MULTINIVEL CON TTLs INDEPENDIENTES (V8.0.4)
    Evita que cuotas o partidos se congelen 24 horas.
 ========================================================= */
 /* =========================================================
@@ -457,7 +457,7 @@ async function getInjuryDataForTeam(teamName, competitionCode) {
 }
 
 /* =========================================================
-   2. C&#193;LCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0.3)
+   2. C&#193;LCULO DE LESIONES PONDERADO POR IMPORTANCIA (V8.0.4)
    - Portero titular: afecta defensa (+vulnerabilidad)
    - Delanteros / goleadores: afecta ataque
    - Defensas / medios: impacto repartido
@@ -525,7 +525,7 @@ async function applyInjuryAdjustment(homeStats, awayStats, homeName, awayName, c
 }
 
 /* =========================================================
-   3. DESCANSO Y FATIGA ASIM&#201;TRICA Y SUAVE (V8.0.3)
+   3. DESCANSO Y FATIGA ASIM&#201;TRICA Y SUAVE (V8.0.4)
    - Fatiga defensiva (desajuste t&#225;ctico/repliegue) > fatiga ofensiva
    - Curva continua y acotada, sin saltos binarios irreales
 ========================================================= */
@@ -904,7 +904,7 @@ async function getOddsEvents(competitionCode) {
   if (cached) return cached;
 
   try {
-    const url = `${ODDS_BASE}/sports/${sport}/odds?regions=us,uk,eu&markets=h2h,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(ODDS_API_KEY)}`;
+    const url = `${ODDS_BASE}/sports/${sport}/odds?regions=eu&markets=h2h,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(ODDS_API_KEY)}`;
     const data = await fetchJson(url);
     const events = Array.isArray(data) ? data : [];
     return cacheSetIfNotEmpty(key, events);
@@ -1199,16 +1199,19 @@ function mostLikelyScore(homeXg, awayXg) {
 /* =========================================================
    2. MODELO CON VENTAJA DE LOCAL AJUSTADA POR LIGA
 ========================================================= */
-function createModelInput(homeStats, awayStats, competitionCode) {
-  // V8.0.3: Debilidad defensiva (defenseStrength < 1.0 por bajas/lesiones)
-  // incrementa la vulnerabilidad del equipo (>1.0), aumentando directamente el xG rival.
+function createModelInput(homeStats, awayStats, competitionCode, homeAdvantageOverride = null) {
+  // V8.0.4: Vulnerabilidad defensiva real. Si el rival tiene debilidad defensiva (defenseStrength < 1.0),
+  // se incrementa su vulnerabilidad (>1.0), aumentando directamente los goles esperados del atacante.
   const awayDefVulnerability = clamp(1.0 / Math.max(0.4, Number(awayStats.defenseStrength) || 1.0), 0.70, 1.55);
   const homeDefVulnerability = clamp(1.0 / Math.max(0.4, Number(homeStats.defenseStrength) || 1.0), 0.70, 1.55);
 
   const homeAttack = homeStats.avgGoalsFor * clamp(Number(homeStats.attackStrength) || 1.0, 0.70, 1.50);
   const awayAttack = awayStats.avgGoalsFor * clamp(Number(awayStats.attackStrength) || 1.0, 0.70, 1.50);
 
-  const homeAdvantage = getHomeAdvantage(competitionCode);
+  // V8.0.4: Respeto absoluto del override del backtest walk-forward (Cero Look-Ahead)
+  const homeAdvantage = (homeAdvantageOverride !== null && Number.isFinite(Number(homeAdvantageOverride)))
+    ? Number(homeAdvantageOverride)
+    : getHomeAdvantage(competitionCode);
 
   const homeXg = ((homeAttack + (awayStats.avgGoalsAgainst * awayDefVulnerability)) / 2) * homeAdvantage;
   const awayXg = (awayAttack + (homeStats.avgGoalsAgainst * homeDefVulnerability)) / 2;
@@ -1226,32 +1229,8 @@ function createModelInput(homeStats, awayStats, competitionCode) {
    ENDPOINTS & API
 ========================================================= */
 
-// Rutas de administración protegidas (V8.0.3: Seguridad reforzada)
-app.get('/api/download-server', (req, res) => {
-  const adminSecret = process.env.ADMIN_TOKEN || process.env.SESSION_SECRET;
-  const authHeader = req.headers.authorization || '';
-  if (!adminSecret || authHeader !== `Bearer ${adminSecret}`) {
-    return res.status(403).json({ ok: false, error: 'Acceso denegado. Se requiere autenticación de administrador.' });
-  }
-  const filePath = path.join(process.cwd(), 'server.js');
-  if (fs.existsSync(filePath)) {
-    return res.download(filePath, 'server.js');
-  }
-  res.status(404).json({ ok: false, error: 'Archivo no encontrado' });
-});
 
-app.get('/api/download-zip', (req, res) => {
-  const adminSecret = process.env.ADMIN_TOKEN || process.env.SESSION_SECRET;
-  const authHeader = req.headers.authorization || '';
-  if (!adminSecret || authHeader !== `Bearer ${adminSecret}`) {
-    return res.status(403).json({ ok: false, error: 'Acceso denegado. Se requiere autenticación de administrador.' });
-  }
-  const filePath = path.join(process.cwd(), 'public', 'mi-pronostico-deportivo-v8.0.3.zip');
-  if (fs.existsSync(filePath)) {
-    return res.download(filePath, 'mi-pronostico-deportivo-v8.0.3.zip');
-  }
-  res.status(404).json({ ok: false, error: 'Archivo no encontrado' });
-});
+
 
 app.get('/api/status', (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -1573,7 +1552,7 @@ function pickParlayCandidate(analysis) {
 }
 
 /* =========================================================
-   PIPELINE MATEMÁTICO UNIFICADO (V8.0.3 - ÚNICA VERDAD)
+   PIPELINE MATEMÁTICO UNIFICADO (V8.0.4 - ÚNICA VERDAD)
    Garantiza que /api/analyze, /api/value-bets, /api/parlay y
    /api/backtest compartan exactamente el mismo motor predictivo.
 ========================================================= */
@@ -1629,12 +1608,10 @@ async function predictFixture({
     }
   } catch (e) {}
 
-  // 4. Ventaja Local y xG con Vulnerabilidad Defensiva
-  const homeAdv = homeAdvantageOverride !== null ? homeAdvantageOverride : getHomeAdvantage(competitionCode);
-  const modelInput = createModelInput(hStats, aStats, competitionCode);
-  const finalHomeAdv = homeAdvantageOverride !== null ? homeAdvantageOverride : modelInput.homeAdvantage;
+  // 4. Ventaja Local y xG con Vulnerabilidad Defensiva (pasando el override al cálculo matemático)
+  const modelInput = createModelInput(hStats, aStats, competitionCode, homeAdvantageOverride);
 
-  // 5. Inferencia Dixon-Coles V8.0.3 (rho = -0.11)
+  // 5. Inferencia Dixon-Coles V8.0.4 (rho = -0.11)
   let model = matchModel(modelInput.homeXg, modelInput.awayXg);
 
   // 6. Ajuste opcional H2H si está disponible
@@ -1663,7 +1640,7 @@ async function predictFixture({
     competition: competitionCode,
     homeXg: Number(modelInput.homeXg.toFixed(2)),
     awayXg: Number(modelInput.awayXg.toFixed(2)),
-    homeAdvantage: Number(finalHomeAdv.toFixed(3)),
+    homeAdvantage: Number(modelInput.homeAdvantage.toFixed(3)),
     probabilities: {
       home: Number((model.homeWin * 100).toFixed(1)),
       draw: Number((model.draw * 100).toFixed(1)),
@@ -1680,7 +1657,7 @@ async function predictFixture({
       under25: model.under25,
       btts: model.btts
     },
-    scoreMatrix: model.matrix,
+    scoreMatrix: model.scoreMatrix,
     modelSignal: signalScore,
     h2hDrawRate,
     factors: {
@@ -1703,7 +1680,7 @@ app.get('/api/parlay', async (req, res) => {
     const cached = cacheGet(cacheKey);
     if (cached) return res.json(cached);
 
-    // V8.0.3: PARLAY CON PIPELINE MATEMÁTICO UNIFICADO (predictFixture)
+    // V8.0.4: PARLAY CON PIPELINE MATEMÁTICO UNIFICADO (predictFixture)
     const fixtures = await getFixture(date, comp);
     const eligiblePicks = [];
     const usedMatches = new Set();
@@ -1879,8 +1856,8 @@ app.get('/api/analyze', async (req, res) => {
     let selected = fixtures.find(m =>
       namesMatch(m?.homeTeam?.name, requestedHome) && namesMatch(m?.awayTeam?.name, requestedAway)
     );
-
     let reversedRequest = false;
+
     if (!selected) {
       selected = fixtures.find(m =>
         namesMatch(m?.homeTeam?.name, requestedAway) && namesMatch(m?.awayTeam?.name, requestedHome)
@@ -1889,7 +1866,7 @@ app.get('/api/analyze', async (req, res) => {
     }
 
     if (!selected) {
-      return res.status(404).json({ ok: false, error: 'No se encontr&#243; el partido solicitado.', modelVersion: MODEL_VERSION });
+      return res.status(404).json({ ok: false, error: 'No se encontró el partido solicitado.', modelVersion: MODEL_VERSION });
     }
 
     const actualHomeName = selected.homeTeam?.name || requestedHome;
@@ -1914,7 +1891,7 @@ app.get('/api/analyze', async (req, res) => {
     if (!homeId || !awayId) {
       return res.status(503).json({
         ok: false,
-        error: 'Football-Data no pudo identificar uno de los equipos para estad&#237;sticas.',
+        error: 'Football-Data no pudo identificar uno de los equipos para estadísticas.',
         modelVersion: MODEL_VERSION
       });
     }
@@ -1924,207 +1901,127 @@ app.get('/api/analyze', async (req, res) => {
       getTeamRecentMatches(awayId)
     ]);
 
-    let homeStats = calculateRecentTeamStats(homeId, homeMatches);
-    let awayStats = calculateRecentTeamStats(awayId, awayMatches);
+    const homeStats = calculateRecentTeamStats(homeId, homeMatches);
+    const awayStats = calculateRecentTeamStats(awayId, awayMatches);
 
-    // Shrinkage hacia la media
-    const attackBaseline = 1.35;
-    const defenseBaseline = 1.20;
-    const homeGF = shrinkToMean(homeStats.avgGoalsFor, attackBaseline, homeStats.matches);
-    const homeGA = shrinkToMean(homeStats.avgGoalsAgainst, defenseBaseline, homeStats.matches);
-    const awayGF = shrinkToMean(awayStats.avgGoalsFor, attackBaseline, awayStats.matches);
-    const awayGA = shrinkToMean(awayStats.avgGoalsAgainst, defenseBaseline, awayStats.matches);
-
-    homeStats = {
-      ...homeStats,
-      avgGoalsFor: homeGF,
-      avgGoalsAgainst: homeGA,
-      attackStrength: clamp(homeGF / attackBaseline, 0.45, 1.8),
-      defenseStrength: clamp(attackBaseline / Math.max(homeGA, 0.25), 0.45, 1.8)
-    };
-    awayStats = {
-      ...awayStats,
-      avgGoalsFor: awayGF,
-      avgGoalsAgainst: awayGA,
-      attackStrength: clamp(awayGF / attackBaseline, 0.45, 1.8),
-      defenseStrength: clamp(attackBaseline / Math.max(awayGA, 0.25), 0.45, 1.8)
-    };
-
-    // Lesionados (Big Balls)
-    const injuryAdjusted = await applyInjuryAdjustment(homeStats, awayStats, actualHomeName, actualAwayName, competitionCode);
-    homeStats = injuryAdjusted.homeStats;
-    awayStats = injuryAdjusted.awayStats;
-
-    // 1. Descanso calculado gratis
     const homeRestDays = calculateRestDaysFromMatches(homeMatches, selected.utcDate);
     const awayRestDays = calculateRestDaysFromMatches(awayMatches, selected.utcDate);
-    const restAdjusted = applyCalculatedRestAdjustment(homeStats, awayStats, homeRestDays, awayRestDays);
-    homeStats = restAdjusted.homeStats;
-    awayStats = restAdjusted.awayStats;
 
-    // 2. Modelo con Ventaja de Local ajustada por Liga
-    const modelInput = createModelInput(homeStats, awayStats, competitionCode);
-    let model = matchModel(modelInput.homeXg, modelInput.awayXg);
+    // V8.0.4: /api/analyze UTILIZA DIRECTAMENTE EL PIPELINE UNIVERSAL predictFixture()
+    const prediction = await predictFixture({
+      homeName: actualHomeName,
+      awayName: actualAwayName,
+      competitionCode,
+      matchDate: selected.utcDate || date,
+      homeStats,
+      awayStats,
+      homeRestDays,
+      awayRestDays,
+      skipBigBalls: false
+    });
 
-    // H2H
-    const [bbHomeTeamId, bbAwayTeamId] = await Promise.all([
-      getBigBallsTeamId(actualHomeName, competitionCode),
-      getBigBallsTeamId(actualAwayName, competitionCode)
-    ]);
-    const h2hDrawRate = await getH2HDrawRate(bbHomeTeamId, bbAwayTeamId);
-    model = applyH2HAdjustment(model, h2hDrawRate);
-
-    // 3. Predicci&#243;n Big Balls (Segunda Opini&#243;n)
-    const bbPrediction = await getBigBallsPrediction(actualHomeName, actualAwayName, competitionCode);
-    const bbComparison = evaluateSecondOpinion(model, bbPrediction);
-
-    // Confianza base matem&#225;tica aut&#243;noma
-    let modelConfidence = 50;
+    // 2. Consulta de Cuotas Reales a The Odds API
+    let odds = null;
     try {
-      const bestProbability = Math.max(model.homeWin, model.draw, model.awayWin);
-      const confidenceSampleSize = Math.min(homeStats.matches, awayStats.matches);
-      modelConfidence = confidence(bestProbability, confidenceSampleSize);
+      odds = await getOdds(actualHomeName, actualAwayName, competitionCode);
     } catch (e) {
-      modelConfidence = 50;
+      odds = null;
     }
 
-    const confidenceAdjusted = clamp(Math.round(modelConfidence), 20, 95);
+    let oddsSummary = null;
+    let valueBets = [];
 
-    // Actualizar ventaja de local aprendida
-    updateLearnedHomeAdvantage(competitionCode, (homeMatches || []).concat(awayMatches || []));
+    if (odds && odds.available && Array.isArray(odds.bookmakers)) {
+      const prices = collectPrices(odds.bookmakers, actualHomeName, actualAwayName, odds.reversed);
+      const bestOdds = extractBestOdds(prices);
 
-    // Cuotas reales
-    const odds = await getOdds(actualHomeName, actualAwayName, competitionCode);
-    const markets = buildMarkets(model, odds, actualHomeName, actualAwayName);
-    const value = bestValue(markets, confidenceAdjusted);
+      const pH = prediction.rawProbs.home;
+      const pD = prediction.rawProbs.draw;
+      const pA = prediction.rawProbs.away;
+      const pOver = prediction.rawProbs.over25;
+      const pUnder = prediction.rawProbs.under25;
 
-    const betEligible = Boolean(value);
-    const recommendation = betEligible ? value.name : 'NO BET';
-    const reason = betEligible
-      ? `El modelo detecta valor respaldado por el mercado con ${Number(value.probability).toFixed(1)}% de probabilidad y EV de mercado de ${Number(value.referenceEvPct).toFixed(1)}%.`
-      : 'No existe una oportunidad de valor positiva que cumpla los filtros actuales de probabilidad, EV, confianza y respaldo del mercado.';
+      const markets = [
+        { key: 'home', market: '1X2 - Gana Local', selection: actualHomeName, prob: pH, best: bestOdds.home },
+        { key: 'draw', market: '1X2 - Empate', selection: 'Empate', prob: pD, best: bestOdds.draw },
+        { key: 'away', market: '1X2 - Gana Visitante', selection: actualAwayName, prob: pA, best: bestOdds.away },
+        { key: 'over', market: 'Más de 2.5 goles', selection: 'Más de 2.5', prob: pOver, best: bestOdds.over25 },
+        { key: 'under', market: 'Menos de 2.5 goles', selection: 'Menos de 2.5', prob: pUnder, best: bestOdds.under25 }
+      ];
 
-    const confidenceLevel = confidenceAdjusted >= 75 ? 'Alta' : (confidenceAdjusted >= 60 ? 'Media' : 'Baja');
-    const confidenceExplanation = confidenceAdjusted >= 75
-      ? 'Se&#241;al estad&#237;stica fuerte respaldada por m&#233;tricas s&#243;lidas.'
-      : (confidenceAdjusted >= 60 ? 'Se&#241;al moderada. Recomendada gesti&#243;n de banca disciplinada.' : 'Se&#241;al insuficiente para recomendar apuesta de alto riesgo.');
+      for (const m of markets) {
+        if (!m.best?.odds || m.best.odds <= 1.05) continue;
+        const evPct = Number(((m.prob * m.best.odds - 1) * 100).toFixed(1));
+        if (evPct >= 1.5) {
+          valueBets.push({
+            market: m.market,
+            selection: m.selection,
+            probabilityPct: Number((m.prob * 100).toFixed(1)),
+            fairOdds: Number((1 / Math.max(0.01, m.prob)).toFixed(2)),
+            marketOdds: m.best.odds,
+            bookmaker: m.best.bookmaker,
+            evPct
+          });
+        }
+      }
 
-    const score = mostLikelyScore(modelInput.homeXg, modelInput.awayXg);
+      oddsSummary = {
+        available: true,
+        bestOdds,
+        pricesCount: {
+          home: prices.home.length,
+          draw: prices.draw.length,
+          away: prices.away.length
+        }
+      };
+    }
 
-    return res.json({
+    // Segunda opinión desacoplada (Big Balls)
+    let bbComparison = null;
+    try {
+      const bbPrediction = await getBigBallsPrediction(actualHomeName, actualAwayName, competitionCode);
+      if (bbPrediction) {
+        bbComparison = evaluateSecondOpinion({ homeWin: prediction.rawProbs.home, draw: prediction.rawProbs.draw, awayWin: prediction.rawProbs.away }, bbPrediction);
+      }
+    } catch (e) {}
+
+    const response = {
       ok: true,
       modelVersion: MODEL_VERSION,
       match: {
-        id: selected.id || null,
-        home: actualHomeName,
-        homeCrest: homeTeamObj?.crest || selected.homeTeam?.crest || null,
-        away: actualAwayName,
-        awayCrest: awayTeamObj?.crest || selected.awayTeam?.crest || null,
+        id: selected.id,
+        utcDate: selected.utcDate,
         date,
-        kickoff: selected.utcDate || null,
-        competition: selected.competitionName || selected.competition?.name || competitionCode,
-        competitionCode
-      },
-      recommendation,
-      reason,
-      betEligible,
-      strength: value?.valueLevel || 'Sin valor',
-      homeAdvantage: {
-        factor: modelInput.homeAdvantage,
-        league: competitionCode,
-        description: `Ventaja de local ajustada para ${competitionName(competitionCode)} (${modelInput.homeAdvantage}x)`
-      },
-      rest: {
-        home: restAdjusted.homeRest,
-        away: restAdjusted.awayRest
-      },
-      recentForm: { home: homeStats, away: awayStats },
-      averages: {
-        home: { goalsFor: Number(homeStats.avgGoalsFor.toFixed(2)), goalsAgainst: Number(homeStats.avgGoalsAgainst.toFixed(2)) },
-        away: { goalsFor: Number(awayStats.avgGoalsFor.toFixed(2)), goalsAgainst: Number(awayStats.avgGoalsAgainst.toFixed(2)) }
-      },
-      xG: {
-        home: Number(modelInput.homeXg.toFixed(2)),
-        away: Number(modelInput.awayXg.toFixed(2)),
-        total: Number((modelInput.homeXg + modelInput.awayXg).toFixed(2))
-      },
-      mostLikelyScore: score,
-      probabilities: {
-        homeWin: Number((model.homeWin * 100).toFixed(1)),
-        draw: Number((model.draw * 100).toFixed(1)),
-        awayWin: Number((model.awayWin * 100).toFixed(1)),
-        over25: Number((model.over25 * 100).toFixed(1)),
-        under25: Number((model.under25 * 100).toFixed(1)),
-        btts: Number((model.btts * 100).toFixed(1))
-      },
-      markets,
-      oddsAvailable: Boolean(odds?.available),
-      oddsReason: odds?.available ? null : (odds?.reason || null),
-      bestValue: value || null,
-      confidence: confidenceAdjusted,
-      confidenceLevel,
-      confidenceExplanation,
-      bigBallsComparison: bbComparison,
-      stakeEur: STAKE_EUR,
-      diagnostics: {
-        fixtureSource: selected.source || 'football-data',
+        competition: selected.competition?.name || competitionCode,
         competitionCode,
-        homeTeamId: homeId,
-        awayTeamId: awayId,
-        homeInjuries: injuryAdjusted.homeInjuries,
-        awayInjuries: injuryAdjusted.awayInjuries,
-        homeRestDays,
-        awayRestDays,
-        homeAdvantageFactor: modelInput.homeAdvantage
+        homeTeam: actualHomeName,
+        awayTeam: actualAwayName,
+        reversed: reversedRequest
+      },
+      prediction: {
+        probabilities: prediction.probabilities,
+        homeXg: prediction.homeXg,
+        awayXg: prediction.awayXg,
+        homeAdvantage: prediction.homeAdvantage,
+        modelSignal: prediction.modelSignal,
+        scoreMatrix: prediction.scoreMatrix,
+        factors: prediction.factors
+      },
+      odds: oddsSummary,
+      valueBets,
+      secondOpinion: bbComparison,
+      stats: {
+        home: homeStats,
+        away: awayStats
       }
-    });
+    };
+
+    return res.json(response);
   } catch (error) {
-    console.error('ANALYZE ERROR:', error);
     return res.status(500).json({ ok: false, error: error.message, modelVersion: MODEL_VERSION });
   }
 });
 
-/* =========================================================
-   BACKTESTING & CALIBRACI&#211;N ESTAD&#205;STICA (V8.0.3)
-   Calcula Brier Score multi-clase, Log Loss, precisi&#243;n 1X2,
-   Over/Under, BTTS, Yield simulado y Calibraci&#243;n por rangos.
-========================================================= */
-const HISTORICAL_SAMPLE_MATCHES = {
-  PD: [
-    { date: '2026-02-15', home: 'Real Madrid', away: 'Sevilla FC', hGoals: 2, aGoals: 0, hAdv: 1.14 },
-    { date: '2026-02-15', home: 'FC Barcelona', away: 'Girona FC', hGoals: 3, aGoals: 1, hAdv: 1.14 },
-    { date: '2026-02-14', home: 'Atl&#233;tico de Madrid', away: 'Celta de Vigo', hGoals: 1, aGoals: 1, hAdv: 1.14 },
-    { date: '2026-02-14', home: 'Real Sociedad', away: 'Real Betis', hGoals: 2, aGoals: 1, hAdv: 1.14 },
-    { date: '2026-02-08', home: 'Villarreal CF', away: 'RCD Mallorca', hGoals: 1, aGoals: 0, hAdv: 1.14 },
-    { date: '2026-02-08', home: 'Athletic Club', away: 'RCD Espanyol', hGoals: 2, aGoals: 0, hAdv: 1.14 },
-    { date: '2026-02-07', home: 'Getafe CF', away: 'Valencia CF', hGoals: 0, aGoals: 0, hAdv: 1.14 },
-    { date: '2026-02-07', home: 'CA Osasuna', away: 'Deportivo Alav&#233;s', hGoals: 2, aGoals: 2, hAdv: 1.14 },
-    { date: '2026-02-01', home: 'Real Madrid', away: 'Atl&#233;tico de Madrid', hGoals: 1, aGoals: 1, hAdv: 1.14 },
-    { date: '2026-02-01', home: 'Sevilla FC', away: 'FC Barcelona', hGoals: 1, aGoals: 4, hAdv: 1.14 },
-    { date: '2026-01-25', home: 'FC Barcelona', away: 'Valencia CF', hGoals: 5, aGoals: 0, hAdv: 1.14 },
-    { date: '2026-01-25', home: 'Rayo Vallecano', away: 'Girona FC', hGoals: 2, aGoals: 1, hAdv: 1.14 },
-    { date: '2026-01-24', home: 'Real Valladolid', away: 'Real Madrid', hGoals: 0, aGoals: 3, hAdv: 1.14 },
-    { date: '2026-01-18', home: 'Athletic Club', away: 'Real Sociedad', hGoals: 1, aGoals: 0, hAdv: 1.14 },
-    { date: '2026-01-18', home: 'Atl&#233;tico de Madrid', away: 'Villarreal CF', hGoals: 3, aGoals: 1, hAdv: 1.14 }
-  ],
-  PL: [
-    { date: '2026-02-15', home: 'Arsenal FC', away: 'Chelsea FC', hGoals: 2, aGoals: 1, hAdv: 1.07 },
-    { date: '2026-02-15', home: 'Liverpool FC', away: 'Everton FC', hGoals: 2, aGoals: 0, hAdv: 1.07 },
-    { date: '2026-02-14', home: 'Manchester City FC', away: 'Newcastle United FC', hGoals: 3, aGoals: 1, hAdv: 1.07 },
-    { date: '2026-02-14', home: 'Tottenham Hotspur FC', away: 'Aston Villa FC', hGoals: 1, aGoals: 2, hAdv: 1.07 },
-    { date: '2026-02-08', home: 'Manchester United FC', away: 'Crystal Palace FC', hGoals: 1, aGoals: 1, hAdv: 1.07 },
-    { date: '2026-02-08', home: 'Brighton & Hove Albion FC', away: 'Fulham FC', hGoals: 2, aGoals: 1, hAdv: 1.07 },
-    { date: '2026-02-07', home: 'West Ham United FC', away: 'Brentford FC', hGoals: 1, aGoals: 1, hAdv: 1.07 },
-    { date: '2026-02-01', home: 'Liverpool FC', away: 'Manchester City FC', hGoals: 2, aGoals: 2, hAdv: 1.07 },
-    { date: '2026-01-25', home: 'Chelsea FC', away: 'Wolverhampton Wanderers FC', hGoals: 3, aGoals: 0, hAdv: 1.07 },
-    { date: '2026-01-24', home: 'Aston Villa FC', away: 'Arsenal FC', hGoals: 0, aGoals: 2, hAdv: 1.07 }
-  ]
-};
-
-/* =========================================================
-   RADAR DE OPORTUNIDADES DE VALOR (EV+) (V8.0.3)
-   Calcula Expected Value (EV%) y Criterio de Kelly (Quarter)
-========================================================= */
 app.get('/api/value-bets', async (req, res) => {
   const comp = String(req.query.competition || '').trim().toUpperCase();
   const minEv = Number(req.query.minEv) || 2.0;
@@ -2174,21 +2071,21 @@ app.get('/api/value-bets', async (req, res) => {
           selection: homeName,
           prob: pred.rawProbs.home,
           oddsObj: best.home,
-          reason: `Pipeline V8.0.3 proyecta ${pred.probabilities.home}% de probabilidad con ventaja local (${pred.homeAdvantage}x).`
+          reason: `Pipeline V8.0.4 proyecta ${pred.probabilities.home}% de probabilidad con ventaja local (${pred.homeAdvantage}x).`
         },
         {
           market: '1X2 - Empate',
           selection: 'Empate',
           prob: pred.rawProbs.draw,
           oddsObj: best.draw,
-          reason: `Pipeline V8.0.3 proyecta ${pred.probabilities.draw}% con correlación Dixon-Coles.`
+          reason: `Pipeline V8.0.4 proyecta ${pred.probabilities.draw}% con correlación Dixon-Coles.`
         },
         {
           market: '1X2 - Gana Visitante',
           selection: awayName,
           prob: pred.rawProbs.away,
           oddsObj: best.away,
-          reason: `Pipeline V8.0.3 proyecta ${pred.probabilities.away}% para el visitante.`
+          reason: `Pipeline V8.0.4 proyecta ${pred.probabilities.away}% para el visitante.`
         },
         {
           market: 'Línea de Goles - Más de 2.5',
@@ -2345,28 +2242,30 @@ app.get('/api/backtest', async (req, res) => {
       const walkForwardHomeAdv = Number(shrinkToMean(rawAdv, HOME_ADVANTAGE_PRIORS[comp] || 1.12, pastMatches.length).toFixed(3));
 
       // B. Estadísticas de equipos construidas solo con el pasado
-      const homeHistory = pastMatches.filter(p => p.home === m.home || p.away === m.home);
-      const awayHistory = pastMatches.filter(p => p.home === m.away || p.away === m.away);
+      // V8.0.4: Ventana temporal idéntica a producción (últimos 5 partidos anteriores)
+      const homeHistory = pastMatches.filter(p => p.home === m.home || p.away === m.home).slice(-5);
+      const awayHistory = pastMatches.filter(p => p.home === m.away || p.away === m.away).slice(-5);
 
       let hGFor = 0, hGAg = 0;
       for (const p of homeHistory) {
-        if (p.home === m.home) { hGFor += p.hGoals; hGAg += p.aGoals; }
-        else { hGFor += p.aGoals; hGAg += p.hGoals; }
+        if (p.home === m.home) { hGFor += Number(p.hGoals || 0); hGAg += Number(p.aGoals || 0); }
+        else { hGFor += Number(p.aGoals || 0); hGAg += Number(p.hGoals || 0); }
       }
+      // V8.0.4: Cero Data Leakage. Si no hay partidos previos, se usan exclusivamente priors bayesianos de liga
       const hStats = {
-        avgGoalsFor: homeHistory.length > 0 ? hGFor / homeHistory.length : Number(m.hAtt || 1.45),
-        avgGoalsAgainst: homeHistory.length > 0 ? hGAg / homeHistory.length : Number(m.hDef || 1.15),
+        avgGoalsFor: homeHistory.length > 0 ? hGFor / homeHistory.length : 1.35,
+        avgGoalsAgainst: homeHistory.length > 0 ? hGAg / homeHistory.length : 1.20,
         matches: homeHistory.length
       };
 
       let aGFor = 0, aGAg = 0;
       for (const p of awayHistory) {
-        if (p.home === m.away) { aGFor += p.hGoals; aGAg += p.aGoals; }
-        else { aGFor += p.aGoals; aGAg += p.hGoals; }
+        if (p.home === m.away) { aGFor += Number(p.hGoals || 0); aGAg += Number(p.aGoals || 0); }
+        else { aGFor += Number(p.aGoals || 0); aGAg += Number(p.hGoals || 0); }
       }
       const aStats = {
-        avgGoalsFor: awayHistory.length > 0 ? aGFor / awayHistory.length : Number(m.aAtt || 1.30),
-        avgGoalsAgainst: awayHistory.length > 0 ? aGAg / awayHistory.length : Number(m.aDef || 1.25),
+        avgGoalsFor: awayHistory.length > 0 ? aGFor / awayHistory.length : 1.35,
+        avgGoalsAgainst: awayHistory.length > 0 ? aGAg / awayHistory.length : 1.20,
         matches: awayHistory.length
       };
 
@@ -2496,7 +2395,7 @@ app.get('/api/backtest', async (req, res) => {
     const result = {
       ok: true,
       modelVersion: MODEL_VERSION,
-      modelEngine: 'Walk-Forward Dixon-Coles V8.0.3 (Strict No-Leakage)',
+      modelEngine: 'Walk-Forward Dixon-Coles V8.0.4 (Strict No-Leakage)',
       competition: comp,
       competitionName: competitionName(comp),
       totalEvaluated,
@@ -2711,7 +2610,7 @@ app.get('/api/bets/summary', async (req, res) => {
 });
 
 /* =========================================================
-   FRONTEND - RENDER PAGE (V8.0.3)
+   FRONTEND - RENDER PAGE (V8.0.4)
    Incluye:
    - Banner VS con escudos grandes
    - Medidor circular SVG de confianza
@@ -2728,7 +2627,7 @@ function renderPage() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
-<title>MK Bets V8.0.3 - Pron&#243;sticos Deportivos</title>
+<title>MK Bets V8.0.4 - Pron&#243;sticos Deportivos</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 90' style='background:%23080b10'%3E%3Cpolyline points='10,80 10,10 45,55 80,10 80,80' fill='none' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='8' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3Cline x1='80' y1='45' x2='118' y2='82' stroke='%23ffb45d' stroke-width='11' stroke-linecap='round'/%3E%3C/svg%3E">
 
 <style>
@@ -3112,7 +3011,7 @@ input{
 
 <header class="header">
   <div>
-    <span class="version">&#9679; V8.0.3 ANALYST</span>
+    <span class="version">&#9679; V8.0.4 ANALYST</span>
   </div>
 
   <div class="logo-row">
@@ -3125,7 +3024,7 @@ input{
   </div>
 
   <h1 style="margin:14px 0 6px;font-size:28px;line-height:1.1">Analiza antes de apostar.</h1>
-  <div class="subtitle">Motor Estad&#237;stico V8.0.3 + Local&#237;a Aprendida + Fatiga Suave + Lesiones Ponderadas + 2&#170; Opini&#243;n Desacoplada.</div>
+  <div class="subtitle">Motor Estad&#237;stico V8.0.4 + Local&#237;a Aprendida + Fatiga Suave + Lesiones Ponderadas + 2&#170; Opini&#243;n Desacoplada.</div>
 
   <div class="chips">
     <span class="chip">&#127967;&#65039; Local&#237;a Aprendida</span>
@@ -3204,7 +3103,7 @@ input{
     <div style="font-style:italic;color:#c7ccd4;margin-top:8px">"El bal&#243;n no miente. Los n&#250;meros tampoco."</div>
   </div>
 
-  <div class="card-title">Novedades V8.0.3</div>
+  <div class="card-title">Novedades V8.0.4</div>
   <div class="muted">
     1. <b>Ventaja Local Aprendida:</b> Estimaci&#243;n bayesiana con regresi&#243;n a la media seg&#250;n goles hist&#243;ricos reales por liga.<br>
     2. <b>Lesiones Ponderadas:</b> Impacto espec&#237;fico por posici&#243;n (portero/defensa/delantera) y acotado al 8% m&#225;ximo.<br>
@@ -3256,7 +3155,7 @@ input{
       <div class="card-title" style="margin:0">&#128200; Backtesting &amp; Calibraci&#243;n</div>
       <div class="muted" style="font-size:11px">Auditor&#237;a con marcadores oficiales: Brier Score, Log Loss y Bias</div>
     </div>
-    <span class="chip" style="background:#13231b;color:#7ee787;border:1px solid #254d35">V8.0.3 Audit</span>
+    <span class="chip" style="background:#13231b;color:#7ee787;border:1px solid #254d35">V8.0.4 Audit</span>
   </div>
 
   <div style="font-size:12px;color:#9da5b2;margin-bottom:10px">
@@ -4304,7 +4203,7 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         const lines = [
-          '⚽ MK BETS V8.0.3 — BOLETÍN DE APUESTAS',
+          '⚽ MK BETS V8.0.4 — BOLETÍN DE APUESTAS',
           '📅 Fecha: ' + new Date().toLocaleDateString('es-ES'),
           '━━━━━━━━━━━━━━━━━━━━━'
         ];
@@ -4314,7 +4213,7 @@ document.addEventListener('DOMContentLoaded', () => {
           lines.push('');
         });
         lines.push('━━━━━━━━━━━━━━━━━━━━━');
-        lines.push('🤖 Generado por MK Bets V8.0.3');
+        lines.push('🤖 Generado por MK Bets V8.0.4');
         const txt = lines.join(String.fromCharCode(10));
         navigator.clipboard.writeText(txt).then(function() {
           alert('✅ Boletín copiado al portapapeles. Listo para compartir en Telegram/WhatsApp.');

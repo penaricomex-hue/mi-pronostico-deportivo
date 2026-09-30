@@ -1,13 +1,13 @@
 /**
  * MK Bets - Motor Estadístico de Modelado de Fútbol
- * Versión V8.0.1 (Núcleo Canónico Unificado con Corrección Dixon-Coles)
+ * Versión V8.0.4 (Núcleo Canónico Unificado con Corrección Dixon-Coles)
  * 
  * Basado en:
  * - Dixon, M. J., & Coles, S. G. (1997). Modelling Association Football Scores
  *   and Inefficiencies in the Football Betting Market. Applied Statistics, 46(2), 265-280.
  */
 
-export const ENGINE_VERSION = '8.0.3';
+export const ENGINE_VERSION = '8.0.4';
 export const DIXON_COLES_RHO = -0.11; // Parámetro canónico empírico de correlación de bajas anotaciones
 
 export function clamp(value, min, max) {
@@ -141,7 +141,7 @@ export function matchModel(homeXg, awayXg, rho = DIXON_COLES_RHO) {
 
   return {
     engineVersion: ENGINE_VERSION,
-    modelName: 'Dixon-Coles Bivariate Poisson (V8.0.1)',
+    modelName: 'Dixon-Coles Bivariate Poisson (V8.0.4)',
     homeXg: lambda,
     awayXg: mu,
     rho,
