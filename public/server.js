@@ -2173,19 +2173,151 @@ app.get('/api/analyze', async (req, res) => {
       }
     } catch (e) {}
 
+    // Mercados completos y listos para la interfaz
+    const pH = prediction.rawProbs.home;
+    const pD = prediction.rawProbs.draw;
+    const pA = prediction.rawProbs.away;
+    const pOver = prediction.rawProbs.over25;
+    const pUnder = prediction.rawProbs.under25;
+    const pBtts = prediction.rawProbs.btts;
+
+    const bestOddsObj = oddsSummary?.bestOdds || {};
+    const allMarkets = [
+      {
+        name: `1X2 - Gana ${actualHomeName}`,
+        probability: Number((pH * 100).toFixed(1)),
+        bestOdds: bestOddsObj.home?.odds || Number((1 / Math.max(0.01, pH)).toFixed(2)),
+        referenceEvPct: bestOddsObj.home?.odds ? Number(((pH * bestOddsObj.home.odds - 1) * 100).toFixed(1)) : 0
+      },
+      {
+        name: '1X2 - Empate',
+        probability: Number((pD * 100).toFixed(1)),
+        bestOdds: bestOddsObj.draw?.odds || Number((1 / Math.max(0.01, pD)).toFixed(2)),
+        referenceEvPct: bestOddsObj.draw?.odds ? Number(((pD * bestOddsObj.draw.odds - 1) * 100).toFixed(1)) : 0
+      },
+      {
+        name: `1X2 - Gana ${actualAwayName}`,
+        probability: Number((pA * 100).toFixed(1)),
+        bestOdds: bestOddsObj.away?.odds || Number((1 / Math.max(0.01, pA)).toFixed(2)),
+        referenceEvPct: bestOddsObj.away?.odds ? Number(((pA * bestOddsObj.away.odds - 1) * 100).toFixed(1)) : 0
+      },
+      {
+        name: 'Más de 2.5 goles',
+        probability: Number((pOver * 100).toFixed(1)),
+        bestOdds: bestOddsObj.over25?.odds || Number((1 / Math.max(0.01, pOver)).toFixed(2)),
+        referenceEvPct: bestOddsObj.over25?.odds ? Number(((pOver * bestOddsObj.over25.odds - 1) * 100).toFixed(1)) : 0
+      },
+      {
+        name: 'Menos de 2.5 goles',
+        probability: Number((pUnder * 100).toFixed(1)),
+        bestOdds: bestOddsObj.under25?.odds || Number((1 / Math.max(0.01, pUnder)).toFixed(2)),
+        referenceEvPct: bestOddsObj.under25?.odds ? Number(((pUnder * bestOddsObj.under25.odds - 1) * 100).toFixed(1)) : 0
+      },
+      {
+        name: 'Ambos Equipos Marcan (Sí)',
+        probability: Number((pBtts * 100).toFixed(1)),
+        bestOdds: Number((1 / Math.max(0.01, pBtts)).toFixed(2)),
+        referenceEvPct: 0
+      }
+    ];
+
+    // Decisión del modelo
+    let recommendation = 'NO BET';
+    let reason = 'Las cuotas de mercado no ofrecen suficiente margen de valor esperado (+EV).';
+    let betEligible = false;
+
+    if (valueBets.length > 0) {
+      recommendation = valueBets[0].market;
+      reason = `Valor esperado positivo EV +${valueBets[0].evPct}% a cuota @${valueBets[0].marketOdds} (${valueBets[0].bookmaker || 'Casa de apuestas'}).`;
+      betEligible = true;
+    } else {
+      const topProb = Math.max(pH, pA, pOver, pUnder);
+      if (topProb >= 0.52) {
+        if (topProb === pH) recommendation = `1X2 - Gana ${actualHomeName}`;
+        else if (topProb === pA) recommendation = `1X2 - Gana ${actualAwayName}`;
+        else if (topProb === pOver) recommendation = 'Más de 2.5 goles';
+        else if (topProb === pUnder) recommendation = 'Menos de 2.5 goles';
+        reason = `Selección estadística destacada con ${(topProb * 100).toFixed(1)}% de probabilidad según xG Dixon-Coles.`;
+        betEligible = false;
+      } else {
+        recommendation = 'Partido Equilibrado';
+        reason = 'Encuentro con probabilidades repartidas. Se recomienda prudencia.';
+      }
+    }
+
+    // Confianza
+    const confValue = clamp(Math.round(prediction.modelSignal || 65), 30, 95);
+    const confLevel = confValue >= 75 ? 'Alta' : (confValue >= 55 ? 'Media' : 'Baja');
+    const confExplanation = confLevel === 'Alta'
+      ? 'Muestra sólida de partidos recientes, consistencia xG y estabilidad táctica.'
+      : (confLevel === 'Media'
+          ? 'Tendencia estadística clara con variabilidad moderada en datos recientes.'
+          : 'Muestra reducida o alta volatilidad en los datos recientes.');
+
+    // Marcador más probable
+    const topScore = mostLikelyScore(prediction.homeXg, prediction.awayXg);
+
+    // Descanso
+    const restData = {
+      home: {
+        days: homeRestDays,
+        status: `${homeRestDays >= 0 ? homeRestDays + ' días de descanso' : 'Normal'}`,
+        impactPct: homeRestDays < 3 ? -3 : (homeRestDays >= 5 ? 2 : 0)
+      },
+      away: {
+        days: awayRestDays,
+        status: `${awayRestDays >= 0 ? awayRestDays + ' días de descanso' : 'Normal'}`,
+        impactPct: awayRestDays < 3 ? -3 : (awayRestDays >= 5 ? 2 : 0)
+      }
+    };
+
     const response = {
       ok: true,
       modelVersion: MODEL_VERSION,
       match: {
         id: selected.id,
-        utcDate: selected.utcDate,
-        date,
-        competition: selected.competition?.name || competitionCode,
-        competitionCode,
+        home: actualHomeName,
+        away: actualAwayName,
         homeTeam: actualHomeName,
         awayTeam: actualAwayName,
+        homeCrest: selected.homeTeam?.crest || homeTeamObj?.crest || null,
+        awayCrest: selected.awayTeam?.crest || awayTeamObj?.crest || null,
+        competition: selected.competition?.name || competitionCode || 'Liga',
+        competitionCode,
+        kickoff: selected.utcDate || date,
+        utcDate: selected.utcDate || date,
+        date,
         reversed: reversedRequest
       },
+      recommendation,
+      reason,
+      betEligible,
+      confidence: confValue,
+      confidenceLevel: confLevel,
+      confidenceExplanation: confExplanation,
+      probabilities: {
+        homeWin: Number((prediction.rawProbs.home * 100).toFixed(1)),
+        draw: Number((prediction.rawProbs.draw * 100).toFixed(1)),
+        awayWin: Number((prediction.rawProbs.away * 100).toFixed(1)),
+        over25: Number((prediction.rawProbs.over25 * 100).toFixed(1)),
+        under25: Number((prediction.rawProbs.under25 * 100).toFixed(1)),
+        btts: Number((prediction.rawProbs.btts * 100).toFixed(1)),
+        home: Number((prediction.rawProbs.home * 100).toFixed(1)),
+        away: Number((prediction.rawProbs.away * 100).toFixed(1))
+      },
+      xG: {
+        home: Number(prediction.homeXg.toFixed(2)),
+        away: Number(prediction.awayXg.toFixed(2)),
+        total: Number((prediction.homeXg + prediction.awayXg).toFixed(2))
+      },
+      homeAdvantage: {
+        factor: Number(prediction.homeAdvantage.toFixed(2))
+      },
+      rest: restData,
+      mostLikelyScore: topScore,
+      markets: allMarkets,
+      bigBallsComparison: bbComparison,
+      // Retrocompatibilidad
       prediction: {
         probabilities: prediction.probabilities,
         homeXg: prediction.homeXg,
@@ -3582,34 +3714,44 @@ async function openAnalysis(panelId, home, away, date){
 }
 
 function renderAnalysisContent(data){
-  const m = data.match;
+  const m = data.match || {};
+  const homeName = m.home || m.homeTeam || data.home || data.homeTeam || 'Equipo Local';
+  const awayName = m.away || m.awayTeam || data.away || data.awayTeam || 'Equipo Visitante';
+  const homeCrest = m.homeCrest || data.homeCrest || null;
+  const awayCrest = m.awayCrest || data.awayCrest || null;
+  const competitionName = m.competition || data.competition || 'Competición';
+  const kickoffTime = m.kickoff || m.utcDate || data.kickoff || null;
 
   // 4. BANNER VS CON ESCUDOS GRANDES
   const bannerHtml = \`
     <div class="match-banner">
       <div class="banner-team">
-        \${crestImg(m.homeCrest, m.home)}
-        <div class="banner-team-name">\${esc(m.home)}</div>
+        \${crestImg(homeCrest, homeName)}
+        <div class="banner-team-name">\${esc(homeName)}</div>
         <div class="banner-role-pill">LOCAL</div>
       </div>
       <div class="banner-vs-center">
-        <div class="banner-meta-comp">🏆 \${esc(m.competition || 'Competición')}</div>
+        <div class="banner-meta-comp">🏆 \${esc(competitionName)}</div>
         <div class="banner-vs-circle">VS</div>
-        <div class="banner-meta-time">🕐 \${formatTime(m.kickoff)}</div>
+        <div class="banner-meta-time">🕐 \${formatTime(kickoffTime)}</div>
       </div>
       <div class="banner-team">
-        \${crestImg(m.awayCrest, m.away)}
-        <div class="banner-team-name">\${esc(m.away)}</div>
+        \${crestImg(awayCrest, awayName)}
+        <div class="banner-team-name">\${esc(awayName)}</div>
         <div class="banner-role-pill">VISITANTE</div>
       </div>
     </div>
   \`;
 
   // 7. MEDIDOR CIRCULAR DE CONFIANZA
+  const conf = data.confidence != null ? data.confidence : (data.prediction?.modelSignal || 65);
+  const confLevel = data.confidenceLevel || (conf >= 75 ? 'Alta' : (conf >= 55 ? 'Media' : 'Baja'));
+  const confExpl = data.confidenceExplanation || 'Análisis basado en consistencia xG, descanso de jugadores y ventaja de localía.';
+
   const confidenceGaugeHtml = renderCircularConfidence(
-    data.confidence,
-    data.confidenceLevel,
-    data.confidenceExplanation,
+    conf,
+    confLevel,
+    confExpl,
     data.bigBallsComparison,
     data.rest
   );
@@ -3618,9 +3760,12 @@ function renderAnalysisContent(data){
   var decisionClass = data.betEligible ? 'bet' : 'noBet';
   var recMarket = (Array.isArray(data.markets) ? data.markets.find(mk => mk.name === data.recommendation) : null) || (Array.isArray(data.markets) ? data.markets[0] : null);
   var recOdds = recMarket && recMarket.bestOdds ? Number(recMarket.bestOdds) : 1.95;
-  var recProb = recMarket && recMarket.probability ? Number(recMarket.probability) : (data.probabilities?.homeWin || 50);
-  window.__activeAnalysis = { match: m, data: data, recOdds: recOdds, recProb: recProb };
-  var isEligible = data.recommendation && data.recommendation !== 'NO BET';
+  var recProb = recMarket && recMarket.probability ? Number(recMarket.probability) : (data.probabilities?.homeWin || data.prediction?.probabilities?.home || 50);
+  window.__activeAnalysis = { match: { ...m, home: homeName, away: awayName, homeCrest, awayCrest, competition: competitionName }, data: data, recOdds: recOdds, recProb: recProb };
+
+  const rec = data.recommendation || (data.valueBets && data.valueBets[0]?.market) || (recProb >= 50 ? ('1X2 - Gana ' + homeName) : 'Partido Equilibrado');
+  const reason = data.reason || (data.valueBets && data.valueBets[0]?.marketOdds ? ('Valor esperado positivo EV +' + data.valueBets[0].evPct + '% a cuota @' + data.valueBets[0].marketOdds) : 'Métricas estadísticas y descanso procesados.');
+  var isEligible = data.betEligible || (data.valueBets && data.valueBets.length > 0) || (rec && rec !== 'NO BET' && rec !== 'Partido Equilibrado');
 
   let simulateBtnHtml = '';
   if (isEligible) {
@@ -3664,42 +3809,60 @@ function renderAnalysisContent(data){
     '</div>';
   }
 
+  const probHome = data.probabilities?.homeWin ?? data.probabilities?.home ?? data.prediction?.probabilities?.home ?? 50;
+  const probDraw = data.probabilities?.draw ?? data.prediction?.probabilities?.draw ?? 25;
+  const probAway = data.probabilities?.awayWin ?? data.probabilities?.away ?? data.prediction?.probabilities?.away ?? 25;
+
+  const xgHome = data.xG?.home ?? data.prediction?.homeXg ?? '-';
+  const xgAway = data.xG?.away ?? data.prediction?.awayXg ?? '-';
+  const xgTotal = data.xG?.total ?? (xgHome !== '-' && xgAway !== '-' ? (Number(xgHome) + Number(xgAway)).toFixed(2) : '-');
+
+  const restHomeStatus = data.rest?.home?.status || 'Descanso normal (sin fatiga)';
+  const restHomeImpact = data.rest?.home?.impactPct != null ? (data.rest.home.impactPct > 0 ? '+' : '') + data.rest.home.impactPct + '%' : '0%';
+  const restAwayStatus = data.rest?.away?.status || 'Descanso normal (sin fatiga)';
+  const restAwayImpact = data.rest?.away?.impactPct != null ? (data.rest.away.impactPct > 0 ? '+' : '') + data.rest.away.impactPct + '%' : '0%';
+
+  const scoreText = data.mostLikelyScore?.score || (xgHome !== '-' && xgAway !== '-' ? (Math.round(Number(xgHome)) + ' - ' + Math.round(Number(xgAway))) : '1 - 1');
+  const scoreProb = data.mostLikelyScore?.probability || 14;
+
+  const homeAdv = data.homeAdvantage?.factor || data.prediction?.homeAdvantage || 1.08;
+
   return bannerHtml +
     '<div class="fixture-decision">' +
       '<div class="section-label">Decisión del modelo</div>' +
-      '<h3 class="' + decisionClass + '">' + esc(data.recommendation) + '</h3>' +
-      '<div class="muted">' + esc(data.reason) + '</div>' +
+      '<h3 class="' + decisionClass + '">' + esc(rec) + '</h3>' +
+      '<div class="muted">' + esc(reason) + '</div>' +
       simulateBtnHtml +
     '</div>' +
     confidenceGaugeHtml +
     bbHtml +
     '<div class="section-label">📊 Probabilidades 1X2</div>' +
     '<div class="prob-grid">' +
-      '<div class="prob"><span>🏠 LOCAL</span><b>' + pct(data.probabilities?.homeWin) + '</b></div>' +
-      '<div class="prob"><span>🤝 EMPATE</span><b>' + pct(data.probabilities?.draw) + '</b></div>' +
-      '<div class="prob"><span>✈️ VISITANTE</span><b>' + pct(data.probabilities?.awayWin) + '</b></div>' +
+      '<div class="prob"><span>🏠 LOCAL</span><b>' + pct(probHome) + '</b></div>' +
+      '<div class="prob"><span>🤝 EMPATE</span><b>' + pct(probDraw) + '</b></div>' +
+      '<div class="prob"><span>✈️ VISITANTE</span><b>' + pct(probAway) + '</b></div>' +
     '</div>' +
-    '<div class="section-label">⚽ xG Esperados (Localía ' + (data.homeAdvantage?.factor || 1.08) + 'x)</div>' +
+    '<div class="section-label">⚽ xG Esperados (Localía ' + homeAdv + 'x)</div>' +
     '<div class="xg-grid">' +
-      '<div class="xg"><span>LOCAL</span><b>' + (data.xG?.home || '-') + '</b></div>' +
-      '<div class="xg"><span>VISITANTE</span><b>' + (data.xG?.away || '-') + '</b></div>' +
-      '<div class="xg"><span>TOTAL</span><b>' + (data.xG?.total || '-') + '</b></div>' +
+      '<div class="xg"><span>LOCAL</span><b>' + xgHome + '</b></div>' +
+      '<div class="xg"><span>VISITANTE</span><b>' + xgAway + '</b></div>' +
+      '<div class="xg"><span>TOTAL</span><b>' + xgTotal + '</b></div>' +
     '</div>' +
     '<div class="section-label">⏱️ Descanso Calculado (Football-Data)</div>' +
     '<div class="market">' +
       '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
-        '<span><b>' + esc(m.home) + ':</b> ' + esc(data.rest?.home?.status || 'Sin datos') + '</span>' +
-        '<span>' + (data.rest?.home?.impactPct ? data.rest.home.impactPct + '%' : '0%') + '</span>' +
+        '<span><b>' + esc(homeName) + ':</b> ' + esc(restHomeStatus) + '</span>' +
+        '<span>' + restHomeImpact + '</span>' +
       '</div>' +
       '<div style="display:flex;justify-content:space-between">' +
-        '<span><b>' + esc(m.away) + ':</b> ' + esc(data.rest?.away?.status || 'Sin datos') + '</span>' +
-        '<span>' + (data.rest?.away?.impactPct ? data.rest.away.impactPct + '%' : '0%') + '</span>' +
+        '<span><b>' + esc(awayName) + ':</b> ' + esc(restAwayStatus) + '</span>' +
+        '<span>' + restAwayImpact + '</span>' +
       '</div>' +
     '</div>' +
     '<div class="section-label">🎯 Marcador Más Probable</div>' +
     '<div class="market" style="text-align:center">' +
-      '<div style="font-size:32px;font-weight:900">' + esc(data.mostLikelyScore?.score) + '</div>' +
-      '<div class="muted">Probabilidad: ' + pct(data.mostLikelyScore?.probability) + '</div>' +
+      '<div style="font-size:32px;font-weight:900">' + esc(scoreText) + '</div>' +
+      '<div class="muted">Probabilidad: ' + pct(scoreProb) + '</div>' +
     '</div>' +
     marketsHtml;
 }
