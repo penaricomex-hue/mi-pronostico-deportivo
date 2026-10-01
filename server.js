@@ -1890,13 +1890,12 @@ app.get('/api/parlay', async (req, res) => {
         odds = null;
       }
 
-      // REGLA FUNDAMENTAL: SIN CUOTA REAL -> NO PARLAY
-      if (!odds || !odds.available || !Array.isArray(odds.bookmakers) || !odds.bookmakers.length) {
-        continue;
+      let prices = null;
+      let best = null;
+      if (odds && odds.available && Array.isArray(odds.bookmakers) && odds.bookmakers.length) {
+        prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
+        best = extractBestOdds(prices);
       }
-
-      const prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
-      const best = extractBestOdds(prices);
 
       // 2. Ejecutar el pipeline canónico unificado predictFixture
       const pred = await predictFixture({
@@ -1913,58 +1912,68 @@ app.get('/api/parlay', async (req, res) => {
       const pO25 = pred.rawProbs.over25;
       const pU25 = pred.rawProbs.under25;
 
+      // Si no hay cuotas reales de The Odds API, calcular cuotas de mercado con margen 5%
+      const homeOdds = best?.home?.odds || Number((0.95 / Math.max(0.01, pH)).toFixed(2));
+      const homeBookmaker = best?.home?.bookmaker || 'Cuota Modelo';
+      const awayOdds = best?.away?.odds || Number((0.95 / Math.max(0.01, pA)).toFixed(2));
+      const awayBookmaker = best?.away?.bookmaker || 'Cuota Modelo';
+      const overOdds = best?.over25?.odds || Number((0.95 / Math.max(0.01, pO25)).toFixed(2));
+      const overBookmaker = best?.over25?.bookmaker || 'Cuota Modelo';
+      const underOdds = best?.under25?.odds || Number((0.95 / Math.max(0.01, pU25)).toFixed(2));
+      const underBookmaker = best?.under25?.bookmaker || 'Cuota Modelo';
+
       const candidates = [];
 
-      if (best.home?.odds && best.home.odds >= 1.25 && best.home.odds <= 2.80) {
-        const evVal = (pH * best.home.odds - 1) * 100;
-        if (pH >= 0.48 || evVal > 1.5) {
+      if (homeOdds >= 1.25 && homeOdds <= 2.80) {
+        const evVal = (pH * homeOdds - 1) * 100;
+        if (pH >= 0.48 || evVal > 0) {
           candidates.push({
             market: '1X2 - Gana Local',
             selection: homeName,
-            odds: best.home.odds,
-            bookmaker: best.home.bookmaker,
+            odds: homeOdds,
+            bookmaker: homeBookmaker,
             probability: Number((pH * 100).toFixed(1)),
             evPct: Number(evVal.toFixed(1))
           });
         }
       }
 
-      if (best.away?.odds && best.away.odds >= 1.25 && best.away.odds <= 2.80) {
-        const evVal = (pA * best.away.odds - 1) * 100;
-        if (pA >= 0.48 || evVal > 1.5) {
+      if (awayOdds >= 1.25 && awayOdds <= 2.80) {
+        const evVal = (pA * awayOdds - 1) * 100;
+        if (pA >= 0.48 || evVal > 0) {
           candidates.push({
             market: '1X2 - Gana Visitante',
             selection: awayName,
-            odds: best.away.odds,
-            bookmaker: best.away.bookmaker,
+            odds: awayOdds,
+            bookmaker: awayBookmaker,
             probability: Number((pA * 100).toFixed(1)),
             evPct: Number(evVal.toFixed(1))
           });
         }
       }
 
-      if (best.over25?.odds && best.over25.odds >= 1.30 && best.over25.odds <= 2.40) {
-        const evVal = (pO25 * best.over25.odds - 1) * 100;
-        if (pO25 >= 0.52 || evVal > 1.5) {
+      if (overOdds >= 1.30 && overOdds <= 2.40) {
+        const evVal = (pO25 * overOdds - 1) * 100;
+        if (pO25 >= 0.52 || evVal > 0) {
           candidates.push({
             market: 'Línea de Goles - Más de 2.5',
             selection: 'Más de 2.5 goles',
-            odds: best.over25.odds,
-            bookmaker: best.over25.bookmaker,
+            odds: overOdds,
+            bookmaker: overBookmaker,
             probability: Number((pO25 * 100).toFixed(1)),
             evPct: Number(evVal.toFixed(1))
           });
         }
       }
 
-      if (best.under25?.odds && best.under25.odds >= 1.30 && best.under25.odds <= 2.40) {
-        const evVal = (pU25 * best.under25.odds - 1) * 100;
-        if (pU25 >= 0.52 || evVal > 1.5) {
+      if (underOdds >= 1.30 && underOdds <= 2.40) {
+        const evVal = (pU25 * underOdds - 1) * 100;
+        if (pU25 >= 0.52 || evVal > 0) {
           candidates.push({
             market: 'Línea de Goles - Menos de 2.5',
             selection: 'Menos de 2.5 goles',
-            odds: best.under25.odds,
-            bookmaker: best.under25.bookmaker,
+            odds: underOdds,
+            bookmaker: underBookmaker,
             probability: Number((pU25 * 100).toFixed(1)),
             evPct: Number(evVal.toFixed(1))
           });
@@ -3500,6 +3509,34 @@ input{
   </div>
 </section>
 
+<!-- VISTA COMBINADAS (SMART PARLAY) -->
+<section id="parlayCard" class="card" style="display:none">
+  <div class="card-title">&#129513; Smart Parlay / Combinadas Sugeridas</div>
+  <div class="muted" style="margin-bottom:12px">
+    El modelo Dixon-Coles selecciona los picks con mayor probabilidad y valor esperado (+EV) combinando sus cuotas de mercado.
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+    <label style="font-size:12px;color:#9da5b2">Número de selecciones:</label>
+    <div style="display:flex;gap:6px" id="parlayLegsChips">
+      <button type="button" class="league-chip" data-legs="2">2 Picks</button>
+      <button type="button" class="league-chip active" data-legs="3">3 Picks</button>
+      <button type="button" class="league-chip" data-legs="4">4 Picks</button>
+    </div>
+  </div>
+
+  <button type="button" id="btnRunParlayCard" class="simulate-bet-btn" style="background:#ffb45d;color:#080b10;font-weight:900;margin-bottom:12px">
+    &#127920; Generar Combinada Óptima
+  </button>
+
+  <div id="parlayCardLoading" style="display:none;margin-bottom:12px">
+    <div class="loading-status-text">Analizando correlaciones, cuotas y valor esperado...</div>
+    <div class="skeleton-shimmer" style="height:120px;border-radius:14px"></div>
+  </div>
+
+  <div id="parlayCardResult"></div>
+</section>
+
 </div>
 
 <nav class="nav">
@@ -4471,11 +4508,119 @@ document.addEventListener('DOMContentLoaded', () => {
     if (name === 'radar') {
       fetchRadar();
     }
+    if (name === 'parlay') {
+      fetchParlay('parlayCardResult', 'parlayCardLoading', 'btnRunParlayCard', currentParlayLegs);
+    }
     if (name === 'bets') {
       renderBetsView();
     }
     if (name === 'backtest') {
       fetchBacktest(currentBacktestComp);
+    }
+  }
+
+  let currentParlayLegs = 3;
+
+  async function fetchParlay(resultContainerId, loadingContainerId, btnId, legs) {
+    const resultEl = document.getElementById(resultContainerId);
+    const loadingEl = document.getElementById(loadingContainerId);
+    const btnEl = document.getElementById(btnId);
+
+    const date = document.getElementById('date')?.value || new Date().toISOString().slice(0, 10);
+    const comp = selectedCompetition || '';
+    const numLegs = legs || currentParlayLegs || 3;
+
+    if (loadingEl) loadingEl.style.display = 'block';
+    if (resultEl) resultEl.innerHTML = '';
+    if (btnEl) {
+      btnEl.disabled = true;
+      btnEl.dataset.origText = btnEl.innerText;
+      btnEl.innerText = '⏳ Generando combinación...';
+    }
+
+    try {
+      const url = '/api/parlay?date=' + encodeURIComponent(date) + (comp ? '&competition=' + encodeURIComponent(comp) : '') + '&legs=' + numLegs;
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'No se pudo generar la combinada.');
+      }
+
+      if (!data.available || !Array.isArray(data.legs) || data.legs.length < 2) {
+        if (resultEl) {
+          resultEl.innerHTML = '<div class="card" style="background:#131822;border:1px dashed #30363d;padding:14px;text-align:center;border-radius:10px">' +
+            '<div style="font-size:24px;margin-bottom:6px">⚠️</div>' +
+            '<div style="font-weight:700;color:#ffb45d;margin-bottom:4px">Sin suficientes partidos para combinar en esta fecha</div>' +
+            '<div class="muted" style="font-size:12px">' + esc(data.message || 'Se requieren al menos 2 partidos programados con cuotas para armar un Parlay.') + '</div>' +
+          '</div>';
+        }
+        return;
+      }
+
+      const totalOdds = Number(data.combinedOdds).toFixed(2);
+      const probPct = pct(data.combinedProbability);
+      const estReturn = (10 * Number(totalOdds)).toFixed(2);
+
+      const legsHtml = data.legs.map(function(leg, idx) {
+        return '<div class="market" style="display:flex;justify-content:space-between;align-items:center;background:#0d1117;margin-bottom:8px;padding:10px;border-radius:8px">' +
+          '<div>' +
+            '<div style="font-size:11px;color:#8e97a5">#' + (idx + 1) + ' · 🏆 ' + esc(leg.competition || 'Liga') + '</div>' +
+            '<div style="font-weight:700;font-size:13px;color:#f0f6fc;margin:2px 0">' +
+              esc(leg.home) + ' <span style="color:#ffb45d">vs</span> ' + esc(leg.away) +
+            '</div>' +
+            '<div style="font-size:12px;color:#7ee787;font-weight:600">' + esc(leg.marketName || leg.market) + '</div>' +
+            '<div class="muted" style="font-size:10px">Prob: ' + pct(leg.probability) + ' • ' + esc(leg.bookmaker || 'Cuota Modelo') + '</div>' +
+          '</div>' +
+          '<div style="text-align:right">' +
+            '<span style="font-weight:900;color:#ffb45d;font-size:16px">@' + Number(leg.odds).toFixed(2) + '</span>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+      if (resultEl) {
+        resultEl.innerHTML = '<div class="card" style="background:#0b1118;border:2px solid #ffb45d;padding:14px;border-radius:12px;margin-top:10px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid #21262d;padding-bottom:10px">' +
+            '<div>' +
+              '<span class="pill" style="background:#ffb45d;color:#080b10;font-weight:900;font-size:11px;padding:3px 8px">🎰 SMART PARLAY</span>' +
+              '<div style="font-size:12px;color:#8e97a5;margin-top:4px">' + data.legs.length + ' selecciones combinadas</div>' +
+            '</div>' +
+            '<div style="text-align:right">' +
+              '<div style="font-size:11px;color:#8e97a5">Cuota Combinada</div>' +
+              '<div style="font-size:26px;font-weight:900;color:#ffb45d;line-height:1">@' + totalOdds + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">' +
+            '<div class="prob" style="text-align:center">' +
+              '<span>PROB. CONJUNTA</span>' +
+              '<b>' + probPct + '</b>' +
+            '</div>' +
+            '<div class="prob" style="text-align:center">' +
+              '<span>RETORNO ESTIMADO (10€)</span>' +
+              '<b style="color:#7ee787">' + estReturn + '€</b>' +
+            '</div>' +
+          '</div>' +
+          '<div style="margin-bottom:12px">' +
+            '<div class="section-label" style="margin-bottom:6px">Picks que forman la combinada:</div>' +
+            legsHtml +
+          '</div>' +
+          '<button type="button" class="simulate-bet-btn" style="background:#238636;color:#fff;font-weight:800" onclick="window.saveDemoParlay(\'Combinada x' + data.legs.length + ' (@' + totalOdds + ')\', ' + totalOdds + ', ' + (data.combinedProbability || 25) + ', 10)">' +
+            '📌 Simular Combinada en Mis Apuestas (10€)' +
+          '</button>' +
+        '</div>';
+      }
+    } catch (err) {
+      if (resultEl) {
+        resultEl.innerHTML = '<div style="color:#ff7b72;padding:10px;background:#1e1416;border-radius:10px;margin-top:10px;font-size:12px">' +
+          'Error: ' + esc(err.message || 'No se pudo conectar con el motor de combinadas.') +
+        '</div>';
+      }
+    } finally {
+      if (loadingEl) loadingEl.style.display = 'none';
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.innerText = btnEl.dataset.origText || '🎰 GENERAR PARLAY SUGERIDO';
+      }
     }
   }
 
@@ -4489,26 +4634,54 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('navRadar')?.addEventListener('click', () => showTab('radar'));
   document.getElementById('navParlay')?.addEventListener('click', () => showTab('parlay'));
 
+  document.getElementById('parlayBtn')?.addEventListener('click', function() {
+    fetchParlay('parlayResult', 'parlayLoading', 'parlayBtn', 3);
+  });
+
+  document.getElementById('btnRunParlayCard')?.addEventListener('click', function() {
+    fetchParlay('parlayCardResult', 'parlayCardLoading', 'btnRunParlayCard', currentParlayLegs);
+  });
+
+  document.querySelectorAll('#parlayLegsChips button').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('#parlayLegsChips button').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+      currentParlayLegs = Number(btn.dataset.legs) || 3;
+      fetchParlay('parlayCardResult', 'parlayCardLoading', 'btnRunParlayCard', currentParlayLegs);
+    });
+  });
+
   window.saveDemoParlay = function(title, odds, prob, stake) {
+    const newBet = {
+      id: 'parlay-' + Date.now(),
+      matchDate: new Date().toISOString().slice(0, 10),
+      home: 'Combinada: ' + title,
+      homeCrest: null,
+      away: 'Múltiple',
+      awayCrest: null,
+      competition: 'Smart Parlay',
+      market: 'parlay',
+      marketName: title,
+      outcome: 'won',
+      odds: Number(odds),
+      probability: Number(prob),
+      stakeEur: Number(stake) || 10,
+      confidence: 75,
+      confidenceLevel: 'Alta',
+      timestamp: Date.now()
+    };
+    const bets = getSavedBets();
+    bets.unshift(newBet);
+    saveBets(bets);
+    renderBetsView();
+
     fetch('/api/bets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        matchDate: new Date().toISOString().slice(0, 10),
-        home: 'Combinada: ' + title,
-        away: 'Múltiple',
-        competition: 'Smart Parlay',
-        market: 'parlay',
-        marketName: title + ' (@' + odds + ')',
-        outcome: 'won',
-        odds: odds,
-        probability: prob,
-        stakeEur: stake
-      })
-    })
-    .then(function(r){ return r.json(); })
-    .then(function(d){ alert(d && d.ok ? '✅ Combinada añadida al simulador de apuestas.' : 'Combinada registrada.'); })
-    .catch(function(){ alert('Añadida al simulador.'); });
+      body: JSON.stringify(newBet)
+    }).catch(function(){});
+
+    alert('✅ Combinada (@' + odds + ') guardada en "Mis apuestas" (Simulador).');
   };
 
   document.getElementById('btnToggleKelly')?.addEventListener('click', function() {
