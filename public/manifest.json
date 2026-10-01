@@ -1,0 +1,15 @@
+{
+  "short_name": "MK Bets",
+  "name": "MK Bets - Pronósticos Deportivos",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#080b10",
+  "theme_color": "#ffb45d",
+  "display": "standalone"
+}
