@@ -4578,8 +4578,14 @@ document.addEventListener('DOMContentLoaded', () => {
         '</div>';
       }).join('');
 
-      if (resultEl) {
-        resultEl.innerHTML = '<div class="card" style="background:#0b1118;border:2px solid #ffb45d;padding:14px;border-radius:12px;margin-top:10px">' +
+          window.__activeParlay = {
+            title: 'Combinada x' + data.legs.length,
+            odds: totalOdds,
+            probability: data.combinedProbability || 25,
+            stake: 10
+          };
+
+          resultEl.innerHTML = '<div class="card" style="background:#0b1118;border:2px solid #ffb45d;padding:14px;border-radius:12px;margin-top:10px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid #21262d;padding-bottom:10px">' +
             '<div>' +
               '<span class="pill" style="background:#ffb45d;color:#080b10;font-weight:900;font-size:11px;padding:3px 8px">🎰 SMART PARLAY</span>' +
@@ -4604,11 +4610,10 @@ document.addEventListener('DOMContentLoaded', () => {
             '<div class="section-label" style="margin-bottom:6px">Picks que forman la combinada:</div>' +
             legsHtml +
           '</div>' +
-          '<button type="button" class="simulate-bet-btn" style="background:#238636;color:#fff;font-weight:800" onclick="window.saveDemoParlay(\'Combinada x' + data.legs.length + ' (@' + totalOdds + ')\', ' + totalOdds + ', ' + (data.combinedProbability || 25) + ', 10)">' +
+          '<button type="button" class="simulate-bet-btn" style="background:#238636;color:#fff;font-weight:800" onclick="window.saveActiveParlay()">' +
             '📌 Simular Combinada en Mis Apuestas (10€)' +
           '</button>' +
         '</div>';
-      }
     } catch (err) {
       if (resultEl) {
         resultEl.innerHTML = '<div style="color:#ff7b72;padding:10px;background:#1e1416;border-radius:10px;margin-top:10px;font-size:12px">' +
@@ -4650,6 +4655,12 @@ document.addEventListener('DOMContentLoaded', () => {
       fetchParlay('parlayCardResult', 'parlayCardLoading', 'btnRunParlayCard', currentParlayLegs);
     });
   });
+
+  window.saveActiveParlay = function() {
+    if (!window.__activeParlay) return;
+    const p = window.__activeParlay;
+    window.saveDemoParlay(p.title + ' (@' + p.odds + ')', p.odds, p.probability, p.stake);
+  };
 
   window.saveDemoParlay = function(title, odds, prob, stake) {
     const newBet = {
