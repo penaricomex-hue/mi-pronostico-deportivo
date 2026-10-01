@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { ZIP_BASE64_V8_0_4 } from './zipData';
 import { 
   Calendar, 
   Flame, 
@@ -559,48 +558,28 @@ export default function App() {
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-[#1b2330] text-[#7ee787] border border-[#2b593a]">100% Saneado</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2.5">
-            <button
-              type="button"
-              onClick={() => {
-                try {
-                  const binary = atob(ZIP_BASE64_V8_0_4);
-                  const len = binary.length;
-                  const bytes = new Uint8Array(len);
-                  for (let i = 0; i < len; i++) {
-                    bytes[i] = binary.charCodeAt(i);
-                  }
-                  const blob = new Blob([bytes], { type: 'application/zip' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = 'mi-pronostico-deportivo-v8.0.4.zip';
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
-                  setTimeout(() => URL.revokeObjectURL(url), 1000);
-                } catch {
-                  window.location.href = '/mi-pronostico-deportivo-v8.0.4.zip';
-                }
-              }}
-              className="flex items-center justify-center gap-1.5 bg-[#ffb45d] text-[#080b10] font-black text-xs py-2.5 px-3 rounded-lg hover:bg-[#ffa73d] transition-all cursor-pointer shadow-md text-center"
+            <a
+              href="/mi-pronostico-deportivo-v8.0.4.zip"
+              download="mi-pronostico-deportivo-v8.0.4.zip"
+              className="flex items-center justify-center gap-1.5 bg-[#ffb45d] text-[#080b10] font-black text-xs py-2.5 px-3 rounded-lg hover:bg-[#ffa73d] transition-all cursor-pointer shadow-md text-center no-underline"
             >
-              📥 Descargar ZIP V8.0.4
-            </button>
+              📥 Descargar ZIP Completo
+            </a>
+
+            <a
+              href="/src.zip"
+              download="src.zip"
+              className="flex items-center justify-center gap-1.5 bg-[#1f6feb] text-white border border-[#388bfd] font-bold text-xs py-2.5 px-3 rounded-lg hover:bg-[#388bfd] transition-all cursor-pointer shadow-md text-center no-underline"
+            >
+              📁 Descargar src.zip
+            </a>
 
             <a
               href="/server.js"
               download="server.js"
-              className="flex items-center justify-center gap-1.5 bg-[#238636] text-white border border-[#2ea043] font-bold text-xs py-2.5 px-3 rounded-lg hover:bg-[#2ea043] transition-all cursor-pointer no-underline text-center shadow-md"
+              className="flex items-center justify-center gap-1.5 bg-[#238636] text-white border border-[#2ea043] font-bold text-xs py-2.5 px-3 rounded-lg hover:bg-[#2ea043] transition-all cursor-pointer shadow-md text-center no-underline"
             >
               📄 Descargar server.js
-            </a>
-
-            <a
-              href="/mi-pronostico-deportivo-v8.0.4.zip"
-              download="mi-pronostico-deportivo-v8.0.4.zip"
-              className="flex items-center justify-center gap-1.5 bg-[#1b2433] text-white border border-[#2f3d54] font-bold text-xs py-2.5 px-3 rounded-lg hover:bg-[#253246] transition-all cursor-pointer no-underline text-center"
-            >
-              ⚡ Servidor Directo ZIP
             </a>
           </div>
         </div>
