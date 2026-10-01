@@ -1397,7 +1397,7 @@ app.get('/api/status', (req, res) => {
 });
 
 // Descargar el archivo server.js actualizado
-app.get(['/api/download-server', '/download-server'], (_req, res) => {
+app.get(['/api/download-server', '/download-server', '/server.js'], (_req, res) => {
   const filePath = path.join(__dirname, 'server.js');
   if (fs.existsSync(filePath)) {
     res.setHeader('Content-Disposition', 'attachment; filename="server.js"');
@@ -1405,6 +1405,21 @@ app.get(['/api/download-server', '/download-server'], (_req, res) => {
     return res.sendFile(filePath);
   }
   return res.status(404).send('server.js no encontrado.');
+});
+
+app.get(['/api/download-src', '/download-src', '/src.zip'], (_req, res) => {
+  const possiblePaths = [
+    path.join(__dirname, 'public', 'src.zip'),
+    path.join(__dirname, 'src.zip')
+  ];
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      res.setHeader('Content-Disposition', 'attachment; filename="src.zip"');
+      res.setHeader('Content-Type', 'application/zip');
+      return res.sendFile(p);
+    }
+  }
+  return res.status(404).send('src.zip no encontrado.');
 });
 
 // Descargar el archivo zip del proyecto completo
@@ -3600,12 +3615,12 @@ function renderAnalysisContent(data){
   );
 
   // DECISIÓN VALUE BET
+  var decisionClass = data.betEligible ? 'bet' : 'noBet';
+  var recMarket = (Array.isArray(data.markets) ? data.markets.find(mk => mk.name === data.recommendation) : null) || (Array.isArray(data.markets) ? data.markets[0] : null);
+  var recOdds = recMarket && recMarket.bestOdds ? Number(recMarket.bestOdds) : 1.95;
+  var recProb = recMarket && recMarket.probability ? Number(recMarket.probability) : (data.probabilities?.homeWin || 50);
   window.__activeAnalysis = { match: m, data: data, recOdds: recOdds, recProb: recProb };
-  const decisionClass = data.betEligible ? 'bet' : 'noBet';
-  const recMarket = (Array.isArray(data.markets) ? data.markets.find(mk => mk.name === data.recommendation) : null) || (Array.isArray(data.markets) ? data.markets[0] : null);
-  const recOdds = recMarket && recMarket.bestOdds ? Number(recMarket.bestOdds) : 1.95;
-  const recProb = recMarket && recMarket.probability ? Number(recMarket.probability) : (data.probabilities?.homeWin || 50);
-  const isEligible = data.recommendation && data.recommendation !== 'NO BET';
+  var isEligible = data.recommendation && data.recommendation !== 'NO BET';
 
   let simulateBtnHtml = '';
   if (isEligible) {
