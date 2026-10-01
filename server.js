@@ -160,7 +160,7 @@ const MONTHLY_SAFETY_LIMIT = 450; // Colch&#243;n de 50 consultas de reserva
 const DAILY_SOFT_LIMIT = 18;       // 450 / 25 d&#237;as &#250;tiles
 
 const CACHE_TTLS = {
-  odds: 10,          // Cuotas: 10 minutos
+  odds: 240,          // Cuotas: 10 minutos
   analysis: 60,      // An&#225;lisis recalculable: 60 minutos
   fixtures: 180,     // Fixtures del d&#237;a: 3 horas (en vez de 25 min)
   injuries: 360,     // Bajas y lesiones: 6 horas
@@ -254,6 +254,107 @@ function recordApiCall() {
 function isQuotaSafe() {
   const q = getQuotaStatus();
   return q.used < MONTHLY_SAFETY_LIMIT;
+}
+
+/* =========================================================
+   PROTECCIÓN ESTRICTA THE ODDS API (500 CONSULTAS/MES)
+   Ahorro inteligente: TTL 4h, límite diario 15,
+   lectura de headers x-requests-remaining y x-requests-used
+========================================================= */
+const ODDS_MONTHLY_LIMIT = 500;
+const ODDS_SAFETY_LIMIT = 460;
+const ODDS_DAILY_LIMIT = 15;
+
+let oddsQuotaTracking = {
+  month: new Date().toISOString().slice(0, 7),
+  used: 0,
+  todayDate: new Date().toISOString().slice(0, 10),
+  todayUsed: 0,
+  remainingReportedByApi: null
+};
+
+try {
+  const oddsQuotaFile = path.join(process.cwd(), 'odds_quota.json');
+  if (fs.existsSync(oddsQuotaFile)) {
+    const raw = JSON.parse(fs.readFileSync(oddsQuotaFile, 'utf8'));
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    if (raw && raw.month === currentMonth) {
+      oddsQuotaTracking = { ...oddsQuotaTracking, ...raw };
+    }
+  }
+} catch (e) {}
+
+function saveOddsQuotaTracking() {
+  try {
+    const oddsQuotaFile = path.join(process.cwd(), 'odds_quota.json');
+    fs.writeFileSync(oddsQuotaFile, JSON.stringify(oddsQuotaTracking, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+function getOddsQuotaStatus() {
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  if (oddsQuotaTracking.month !== currentMonth) {
+    oddsQuotaTracking.month = currentMonth;
+    oddsQuotaTracking.used = 0;
+    oddsQuotaTracking.todayDate = todayStr;
+    oddsQuotaTracking.todayUsed = 0;
+    oddsQuotaTracking.remainingReportedByApi = null;
+    saveOddsQuotaTracking();
+  }
+
+  if (oddsQuotaTracking.todayDate !== todayStr) {
+    oddsQuotaTracking.todayDate = todayStr;
+    oddsQuotaTracking.todayUsed = 0;
+    saveOddsQuotaTracking();
+  }
+
+  const remaining = oddsQuotaTracking.remainingReportedByApi !== null
+    ? oddsQuotaTracking.remainingReportedByApi
+    : Math.max(0, ODDS_MONTHLY_LIMIT - oddsQuotaTracking.used);
+
+  const isSafe = oddsQuotaTracking.used < ODDS_SAFETY_LIMIT && oddsQuotaTracking.todayUsed < ODDS_DAILY_LIMIT && remaining > 5;
+
+  let status = 'safe';
+  if (oddsQuotaTracking.used >= ODDS_SAFETY_LIMIT || remaining <= 5) status = 'exhausted';
+  else if (oddsQuotaTracking.todayUsed >= ODDS_DAILY_LIMIT) status = 'daily_limit_reached';
+  else if (oddsQuotaTracking.used >= 380) status = 'warning';
+
+  return {
+    ok: true,
+    provider: 'the-odds-api',
+    month: oddsQuotaTracking.month,
+    used: oddsQuotaTracking.used,
+    limit: ODDS_MONTHLY_LIMIT,
+    safetyLimit: ODDS_SAFETY_LIMIT,
+    dailyLimit: ODDS_DAILY_LIMIT,
+    todayUsed: oddsQuotaTracking.todayUsed,
+    remaining,
+    remainingReportedByApi: oddsQuotaTracking.remainingReportedByApi,
+    isSafe,
+    status
+  };
+}
+
+function recordOddsApiCall(headers) {
+  getOddsQuotaStatus();
+  oddsQuotaTracking.used++;
+  oddsQuotaTracking.todayUsed++;
+
+  if (headers) {
+    const rem = typeof headers.get === 'function' ? headers.get('x-requests-remaining') : headers['x-requests-remaining'];
+    const used = typeof headers.get === 'function' ? headers.get('x-requests-used') : headers['x-requests-used'];
+    if (rem !== null && rem !== undefined && !isNaN(Number(rem))) {
+      oddsQuotaTracking.remainingReportedByApi = Number(rem);
+    }
+    if (used !== null && used !== undefined && !isNaN(Number(used))) {
+      oddsQuotaTracking.used = Number(used);
+    }
+  }
+
+  saveOddsQuotaTracking();
+  console.log();
 }
 
 const STAKE_EUR = Number(process.env.STAKE_EUR) || 10;
@@ -909,12 +1010,26 @@ async function getOddsEvents(competitionCode) {
   const cached = cacheGet(key);
   if (cached) return cached;
 
+  // Verificación Quota Shield para The Odds API
+  const quota = getOddsQuotaStatus();
+  if (!quota.isSafe) {
+    console.warn(`[ODDS QUOTA SHIELD BLOQUEO] 🛡️ No se hace llamada a The Odds API para proteger la cuenta. Motivo: ${quota.status} (Mes: ${quota.used}/${quota.limit}, Hoy: ${quota.todayUsed}/${quota.dailyLimit})`);
+    return [];
+  }
+
   try {
     const url = `${ODDS_BASE}/sports/${sport}/odds?regions=eu&markets=h2h,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(ODDS_API_KEY)}`;
-    const data = await fetchJson(url);
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[ODDS API ERROR] Status ${res.status}`);
+      return [];
+    }
+    recordOddsApiCall(res.headers);
+    const data = await res.json();
     const events = Array.isArray(data) ? data : [];
-    return cacheSetIfNotEmpty(key, events);
+    return cacheSetIfNotEmpty(key, events, 'odds');
   } catch (error) {
+    console.warn('[ODDS API FETCH ERROR]', error.message);
     return [];
   }
 }
@@ -922,7 +1037,10 @@ async function getOddsEvents(competitionCode) {
 async function getFixturesOdds(date, competitionFilter) {
   if (!ODDS_API_KEY) return [];
   const all = [];
-  const comps = competitionFilter && COMPETITIONS.includes(competitionFilter) ? [competitionFilter] : COMPETITIONS;
+  // Ahorro de cuota: si no hay filtro de competición, priorizar solo 1 liga activa en vez de quemar 7 consultas
+  const comps = competitionFilter && COMPETITIONS.includes(competitionFilter) 
+    ? [competitionFilter] 
+    : ['PD'];
 
   for (const c of comps) {
     const events = await getOddsEvents(c);
@@ -4293,7 +4411,14 @@ app.get('/', (req, res) => {
    ESTADO DE CUOTA MENSUAL (500 CONSULTAS/MES)
 ========================================================= */
 app.get('/api/quota-status', (req, res) => {
-  res.json(getQuotaStatus());
+  res.json({
+    footballData: getQuotaStatus(),
+    oddsApi: getOddsQuotaStatus()
+  });
+});
+
+app.get('/api/odds-quota', (req, res) => {
+  res.json(getOddsQuotaStatus());
 });
 
 app.get('/health', (req, res) => {
