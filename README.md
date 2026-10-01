@@ -1,31 +1,33 @@
-# MK BETS — Modelo Estadístico de Pronósticos Deportivos (V8.0)
+# Mi Pronóstico Deportivo — Modelo Cuantitativo V8.0.4
 
-Sistema de análisis y predicción cuantitativa de fútbol basado en modelado estadístico Poisson & Dixon-Coles, estimación bayesiana con regresión a la media (shrinkage), ventaja de local aprendida empíricamente, fatiga asimétrica y valor esperado (EV) contrastado contra cuotas reales.
+Sistema de análisis y predicción estadística de fútbol basado en modelado probabilístico Poisson & Dixon-Coles, estimación bayesiana con regresión a la media (shrinkage), ventaja de local empírica, fatiga asimétrica y valor esperado (EV) contrastado contra cuotas reales.
 
 ---
 
-## 🌟 Novedades V8.0 (Motor Estadístico Refactorizado)
+## 🌟 Novedades V8.0.4 (Pipeline Cuantitativo Unificado)
 
-1. **Ventaja de Local Dinámica y Aprendida**:
-   - Sustituye los multiplicadores manuales fijos por una estimación empírica bayesiana: ratio histórico de goles local vs visitante por competición con regresión hacia la media global (1.09x).
-2. **Cálculo de Lesiones Ponderado por Posición**:
-   - Fin al recorte indiscriminado (-3% por jugador). Ahora evalúa posición (portero titular, atacante principal, defensas) y acota el impacto máximo al 8% total.
-3. **Fatiga y Descanso Asimétrica y Continua**:
-   - Modela por separado la fatiga defensiva (desajustes de repliegue y concentración) y la fatiga ofensiva (pérdida de chispa) con una curva suave en lugar de saltos bruscos irreales.
-4. **Segunda Opinión Externa (Big Balls) Desacoplada**:
-   - Se presenta como referencia informativa externa. Ya no adultera ni incrementa/reduce artificialmente el score de confianza (`confidence`) del modelo propio.
-5. **Corrección de Rango de Fechas (>10 días)**:
-   - Chunking automático de peticiones a Football-Data para evitar el error `HTTP 400: Specified period must not exceed 10 days`.
-6. **Caché Multinivel con TTL Diferenciado**:
-   - Cuotas: 3 min | Análisis: 15 min | Fixtures: 25 min | Lesiones: 90 min | Historial: 4 horas | Equipos: 24 horas.
-7. **Motor de Backtesting y Calibración (V8.1 Foundation)**:
-   - Medición de Brier Score multi-clase, Log Loss y calibración empírica por tramos de probabilidad.
-8. **Radar de Oportunidades de Valor (EV+)**:
-   - Escáner automático de cuotas con discrepancia matemática favorable contra la probabilidad estimada.
-9. **Gestión de Banca con Criterio de Kelly (Quarter Kelly)**:
-   - Calculadora interactiva integrada para dimensionamiento óptimo de stake protegiendo la banca de rachas.
-10. **Exportador Rápido de Boletines de Apuestas**:
-   - Generación de tickets formateados en un clic para compartir en WhatsApp, Telegram y comunidades.
+1. **Pipeline Matemático Unificado (`predictFixture`)**:
+   - Centraliza el cálculo de Poisson, Dixon-Coles y expectativas de goles en una única función canónica compartida entre análisis individual, valor esperado (Value Bets), Parlays inteligentes y Backtesting.
+2. **Backtesting Walk-Forward Riguroso (120 Partidos Históricos)**:
+   - Ordenación estrictamente temporal sin contaminación futura (*no look-ahead bias*).
+   - Métricas estadísticas profesionales: **Brier Score multi-clase**, **Log Loss**, exactitud 1X2, Over/Under 2.5, BTTS (ambos marcan) y simulación de rendimiento ROI.
+3. **Ventaja de Local Dinámica y Empírica**:
+   - Estimación empírica bayesiana del ratio histórico local vs visitante por liga con regresión hacia la media global (1.09x).
+4. **Cálculo de Lesiones Ponderado por Posición**:
+   - Evaluación según impacto táctico (portero titular, atacante principal, defensas) con límite máximo del 8% total.
+5. **Fatiga Asimétrica Continua**:
+   - Modela por separado la fatiga defensiva y ofensiva en función de los días de descanso acumulados.
+6. **Segunda Opinión Externa (Big Balls)**:
+   - Módulo desacoplado que no distorsiona el score de confianza (`confidence`) matemático interno.
+7. **Caché Multinivel con TTLs Reales del Servidor**:
+   - **Cuotas (Odds)**: 10 min
+   - **Análisis de Partidos**: 60 min
+   - **Fixtures (Calendario)**: 180 min (3 horas)
+   - **Lesiones**: 360 min (6 horas)
+   - **Historial de Resultados**: 2880 min (48 horas)
+   - **Equipos y Plantillas**: 20160 min (14 días)
+   - **Backtest Walk-Forward**: 43200 min (30 días)
+   - **Por Defecto**: 120 min
 
 ---
 
@@ -50,14 +52,14 @@ Configura las siguientes variables en el panel de **Render** (`Environment`):
 ## 🚀 Despliegue en Render
 
 1. Haz push a tu rama principal (`main`) en GitHub.
-2. En Render, crea un **Web Service**:
-   - **Build Command**: `npm install`
+2. En Render, configura tu **Web Service**:
+   - **Build Command**: `npm ci && npm run build`
    - **Start Command**: `node server.js`
-   - **Environment Variables**: Añade `FOOTBALL_DATA_TOKEN` y opcionalmente las demás.
-3. El servicio compilará e iniciará automáticamente en `https://tu-servicio.onrender.com`.
+   - **Environment Variables**: Añade `FOOTBALL_DATA_TOKEN` y las opcionales deseadas.
+3. El servicio compilará e iniciará automáticamente en `https://mi-pronostico-deportivo.onrender.com`.
 
 ---
 
 ## 📱 Aplicación Android (APK)
 
-El proyecto incluye la carpeta `android/` configurada como un contenedor nativo seguro con WebView apuntando a tu URL de producción en Render. Al actualizar `server.js` en Render, todos los usuarios de la APK reciben las mejoras instantáneamente sin necesidad de recompilar la aplicación móvil.
+El proyecto incluye la carpeta `android/` configurada como contenedor WebView moderno (SDK 35, Java 17, Gradle 8.9) que conecta directamente con tu backend en Render. Al actualizar `server.js` en Render, todos los usuarios de la APK reciben las mejoras instantáneamente sin necesidad de redistribuir el APK.

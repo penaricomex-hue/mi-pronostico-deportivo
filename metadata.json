@@ -1,0 +1,6 @@
+{
+  "name": "MK Bets - Pronósticos Deportivos",
+  "description": "Modelo estadístico de pronósticos deportivos con xG, forma reciente, descanso calculado, ventaja de local por liga, escudos VS y análisis de valor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

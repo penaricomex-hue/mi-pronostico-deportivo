@@ -46,8 +46,14 @@ function timingSafeEqual(a, b) {
 
 if (APP_USERNAME && APP_PASSWORD) {
   app.use((req, res, next) => {
-    // Permitir health check y descargas p&#250;blicas
-    if (req.path === '/health' || req.path === '/api/download-server') return next();
+    // Permitir health check, status y descargas públicas sin auth
+    if (
+      req.path === '/health' ||
+      req.path === '/api/status' ||
+      req.path.startsWith('/api/download') ||
+      req.path.endsWith('.zip') ||
+      req.path === '/download-zip'
+    ) return next();
 
     const header = req.headers.authorization || '';
     const [scheme, encoded] = header.split(' ');
@@ -1248,8 +1254,32 @@ app.get('/api/status', (req, res) => {
 });
 
 // Descargar el archivo server.js actualizado
+app.get(['/api/download-server', '/download-server'], (_req, res) => {
+  const filePath = path.join(__dirname, 'server.js');
+  if (fs.existsSync(filePath)) {
+    res.setHeader('Content-Disposition', 'attachment; filename="server.js"');
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    return res.sendFile(filePath);
+  }
+  return res.status(404).send('server.js no encontrado.');
+});
 
 // Descargar el archivo zip del proyecto completo
+app.get(['/api/download-zip', '/download-zip', '/api/download-full-zip'], (_req, res) => {
+  const possiblePaths = [
+    path.join(__dirname, 'public', 'mi-pronostico-deportivo-v8.0.4.zip'),
+    path.join(__dirname, 'mi-pronostico-deportivo-v8.0.4.zip'),
+    path.join(__dirname, 'public', 'download.zip')
+  ];
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      res.setHeader('Content-Disposition', 'attachment; filename="mi-pronostico-deportivo-v8.0.4.zip"');
+      res.setHeader('Content-Type', 'application/zip');
+      return res.sendFile(p);
+    }
+  }
+  return res.status(404).send('ZIP no encontrado.');
+});
 
 function addDaysToDateStr(dateStr, days) {
   const d = new Date(dateStr + 'T00:00:00Z');
@@ -1676,7 +1706,7 @@ app.get('/api/parlay', async (req, res) => {
     const date = String(req.query.date || '').trim() || new Date().toISOString().slice(0, 10);
     const maxLegs = Math.min(4, Math.max(2, Number(req.query.legs) || 3));
     const comp = String(req.query.competition || '').trim().toUpperCase();
-    const cacheKey = `smart-parlay:${date}:${comp || 'ALL'}:${maxLegs}:v803`;
+    const cacheKey = `smart-parlay:${date}:${comp || 'ALL'}:${maxLegs}:${MODEL_VERSION}`;
     const cached = cacheGet(cacheKey);
     if (cached) return res.json(cached);
 
@@ -2025,7 +2055,7 @@ app.get('/api/analyze', async (req, res) => {
 app.get('/api/value-bets', async (req, res) => {
   const comp = String(req.query.competition || '').trim().toUpperCase();
   const minEv = Number(req.query.minEv) || 2.0;
-  const cacheKey = `value-bets:${comp || 'ALL'}:${minEv}:v803`;
+  const cacheKey = `value-bets:${comp || 'ALL'}:${minEv}:${MODEL_VERSION}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
@@ -2167,7 +2197,7 @@ app.get('/api/backtest', async (req, res) => {
   const comp = String(req.query.competition || 'PD').trim().toUpperCase();
   const limit = Math.min(100, Math.max(5, Number(req.query.limit) || 30));
   const minEv = Number(req.query.minEv) || 1.5;
-  const cacheKey = `backtest-wf:${comp}:${limit}:${minEv}:v803`;
+  const cacheKey = `backtest-wf:${comp}:${limit}:${minEv}:${MODEL_VERSION}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json(cached);
 
