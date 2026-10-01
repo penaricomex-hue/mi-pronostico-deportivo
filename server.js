@@ -1163,6 +1163,31 @@ function collectPrices(bookmakers, homeName, awayName, reversed = false) {
   return result;
 }
 
+function extractBestOdds(prices) {
+  const result = {
+    home: null,
+    draw: null,
+    away: null,
+    over25: null,
+    under25: null
+  };
+  if (!prices) return result;
+
+  for (const k of ['home', 'draw', 'away', 'over25', 'under25']) {
+    const list = Array.isArray(prices[k]) ? prices[k] : [];
+    if (list.length > 0) {
+      const valid = list
+        .filter(p => Number.isFinite(Number(p?.odds)) && Number(p.odds) > 1)
+        .map(p => ({ bookmaker: p.bookmaker || 'Desconocido', odds: Number(p.odds) }));
+      if (valid.length > 0) {
+        valid.sort((a, b) => b.odds - a.odds);
+        result[k] = valid[0];
+      }
+    }
+  }
+  return result;
+}
+
 function analyzePriceSet(prices) {
   const valid = prices
     .filter(item => Number.isFinite(Number(item?.odds)) && Number(item.odds) > 1)
