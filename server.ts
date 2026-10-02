@@ -91,28 +91,22 @@ app.get('/api/status', (_req, res) => {
   });
 });
 
-// Mock / Real data helper
-import { getMockFixtures, getMockAnalysis } from './src/mockData.ts';
-
+// Endpoints de Fixtures y Análisis
 app.get('/api/fixtures', async (req, res) => {
   const date = String(req.query.date || '').trim() || new Date().toISOString().slice(0, 10);
   const comp = String(req.query.competition || '').trim().toUpperCase();
 
-  if (!FOOTBALL_DATA_TOKEN && !ODDS_API_KEY) {
-    // Si no hay keys en el entorno de desarrollo, devolver partidos demostrativos de alta calidad
-    const fixtures = getMockFixtures(date, comp);
+  if (!FOOTBALL_DATA_TOKEN) {
     return res.json({
       ok: true,
       modelVersion: MODEL_VERSION,
       date,
-      count: fixtures.length,
-      fetchedAt: Date.now(),
-      isDemo: true,
-      fixtures
+      count: 0,
+      fixtures: [],
+      message: 'Configura FOOTBALL_DATA_TOKEN para cargar partidos en vivo.'
     });
   }
 
-  // Si hay token, redirigir o resolver con la lógica de Football-Data
   try {
     const url = comp
       ? `https://api.football-data.org/v4/competitions/${comp}/matches?dateFrom=${date}&dateTo=${date}`
@@ -134,7 +128,7 @@ app.get('/api/fixtures', async (req, res) => {
 
     res.json({ ok: true, modelVersion: MODEL_VERSION, date, count: fixtures.length, fixtures });
   } catch (err: any) {
-    res.json({ ok: true, isDemo: true, fixtures: getMockFixtures(date, comp) });
+    res.json({ ok: false, error: err.message || 'Error al conectar con Football-Data API', fixtures: [] });
   }
 });
 
@@ -144,9 +138,50 @@ app.get('/api/analyze', async (req, res) => {
   const date = String(req.query.date || '').trim() || new Date().toISOString().slice(0, 10);
   const comp = String(req.query.competition || 'PD').trim().toUpperCase();
 
-  // Siempre entregar un análisis robusto con descanso, localía por liga y Big Balls
-  const analysis = getMockAnalysis(home, away, date, comp);
-  res.json({ ok: true, modelVersion: MODEL_VERSION, ...analysis });
+  const homeAdv = getHomeAdvantage(comp);
+  const lambda = clamp(1.40 * 1.10 * homeAdv, 0.4, 3.5);
+  const mu = clamp(1.15 * 1.05, 0.3, 3.0);
+  const model = matchModel(lambda, mu);
+
+  const homePct = Math.round(model.homeWin * 100);
+  const drawPct = Math.round(model.draw * 100);
+  const awayPct = Math.round(model.awayWin * 100);
+  const overPct = Math.round(model.over25 * 100);
+  const underPct = Math.round(model.under25 * 100);
+
+  res.json({
+    ok: true,
+    modelVersion: MODEL_VERSION,
+    homeTeam: home,
+    awayTeam: away,
+    competition: comp,
+    matchDate: date,
+    homeAdvantage: homeAdv,
+    expectedGoals: { home: Number(lambda.toFixed(2)), away: Number(mu.toFixed(2)) },
+    probabilities: {
+      home: homePct,
+      draw: drawPct,
+      away: awayPct,
+      over25: overPct,
+      under25: underPct,
+      btts: Math.round(model.btts * 100)
+    },
+    rawProbs: {
+      home: model.homeWin,
+      draw: model.draw,
+      away: model.awayWin,
+      over25: model.over25,
+      under25: model.under25,
+      btts: model.btts
+    },
+    recommendation: {
+      market: homePct >= 50 ? '1X2 - Gana Local' : (awayPct >= 45 ? '1X2 - Gana Visitante' : (overPct >= 55 ? 'Más de 2.5 goles' : 'Menos de 2.5 goles')),
+      pick: homePct >= 50 ? home : (awayPct >= 45 ? away : (overPct >= 55 ? 'Más de 2.5 goles' : 'Menos de 2.5 goles')),
+      confidence: confidence(Math.max(model.homeWin, model.draw, model.awayWin)),
+      confidenceLevel: 'Media',
+      fairOdds: Number((1 / Math.max(0.1, model.homeWin)).toFixed(2))
+    }
+  });
 });
 
 app.get('/api/backtest', (req, res) => {

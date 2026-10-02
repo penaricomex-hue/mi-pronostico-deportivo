@@ -629,10 +629,12 @@ function namesMatch(a, b) {
 }
 
 /* =========================================================
-   BIG BALLS API & PREDICCIONES
+   BIG BALLS API & PREDICCIONES (Con Circuit Breaker Resiliente)
 ========================================================= */
+let bigBallsAuthFailed = false;
+
 async function bigBallsRequest(path) {
-  if (!BIGBALLS_KEY) return null;
+  if (!BIGBALLS_KEY || bigBallsAuthFailed) return null;
   const key = `bigballs:${path}`;
   const cached = cacheGet(key);
   if (cached) return cached;
@@ -640,14 +642,19 @@ async function bigBallsRequest(path) {
     const response = await fetch(`https://api.bigballsdata.com${path}`, {
       headers: { 'Authorization': `Bearer ${BIGBALLS_KEY}` }
     });
+    if (response.status === 401 || response.status === 403) {
+      if (!bigBallsAuthFailed) {
+        console.warn(`[BIGBALLS] Credenciales inactivas o no autorizadas (HTTP ${response.status}). Desactivando integración de Big Balls de manera transparente.`);
+        bigBallsAuthFailed = true;
+      }
+      return null;
+    }
     if (!response.ok) {
-      console.warn(`[BIGBALLS] ${path} -> HTTP ${response.status}`);
       return null;
     }
     const data = await response.json();
     return cacheSetIfNotEmpty(key, data);
   } catch (error) {
-    console.warn('[BIGBALLS] error:', path, error.message);
     return null;
   }
 }
@@ -2011,7 +2018,7 @@ app.get('/api/parlay', async (req, res) => {
 
       const compCode = f.competitionCode || f.competition?.code || comp || 'PD';
 
-      // 1. Obtener cuotas reales de casas de apuestas
+      // 1. Obtener cuotas reales de casas de apuestas (OBLIGATORIAS: sin cuota real de mercado no hay parlay)
       let odds = null;
       try {
         odds = await getOdds(homeName, awayName, compCode);
@@ -2019,19 +2026,38 @@ app.get('/api/parlay', async (req, res) => {
         odds = null;
       }
 
-      let prices = null;
-      let best = null;
-      if (odds && odds.available && Array.isArray(odds.bookmakers) && odds.bookmakers.length) {
-        prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
-        best = extractBestOdds(prices);
+      if (!odds || !odds.available || !Array.isArray(odds.bookmakers) || !odds.bookmakers.length) {
+        continue;
       }
 
-      // 2. Ejecutar el pipeline canónico unificado predictFixture
+      const prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
+      const best = extractBestOdds(prices);
+      if (!best) continue;
+
+      // Obtener estadísticas reales del equipo y descanso real (V8.0.4 Real-Data Pipeline)
+      let homeStats = null;
+      let awayStats = null;
+      let homeRest = 5;
+      let awayRest = 5;
+      try {
+        [homeStats, awayStats, homeRest, awayRest] = await Promise.all([
+          getTeamStats(homeName, compCode),
+          getTeamStats(awayName, compCode),
+          getRealRestDays(homeName, date, compCode),
+          getRealRestDays(awayName, date, compCode)
+        ]);
+      } catch (e) {}
+
+      // 2. Ejecutar el pipeline canónico unificado predictFixture con datos reales
       const pred = await predictFixture({
         homeName,
         awayName,
         competitionCode: compCode,
         matchDate: date,
+        homeStats,
+        awayStats,
+        homeRestDays: homeRest,
+        awayRestDays: awayRest,
         skipBigBalls: true
       });
 
@@ -2041,19 +2067,19 @@ app.get('/api/parlay', async (req, res) => {
       const pO25 = pred.rawProbs.over25;
       const pU25 = pred.rawProbs.under25;
 
-      // Si no hay cuotas reales de The Odds API, calcular cuotas de mercado con margen 5%
-      const homeOdds = best?.home?.odds || Number((0.95 / Math.max(0.01, pH)).toFixed(2));
-      const homeBookmaker = best?.home?.bookmaker || 'Cuota Modelo';
-      const awayOdds = best?.away?.odds || Number((0.95 / Math.max(0.01, pA)).toFixed(2));
-      const awayBookmaker = best?.away?.bookmaker || 'Cuota Modelo';
-      const overOdds = best?.over25?.odds || Number((0.95 / Math.max(0.01, pO25)).toFixed(2));
-      const overBookmaker = best?.over25?.bookmaker || 'Cuota Modelo';
-      const underOdds = best?.under25?.odds || Number((0.95 / Math.max(0.01, pU25)).toFixed(2));
-      const underBookmaker = best?.under25?.bookmaker || 'Cuota Modelo';
+      // Usar EXCLUSIVAMENTE cuotas reales de casas de apuestas
+      const homeOdds = best.home?.odds;
+      const homeBookmaker = best.home?.bookmaker || 'Pinnacle/Bet365';
+      const awayOdds = best.away?.odds;
+      const awayBookmaker = best.away?.bookmaker || 'Pinnacle/Bet365';
+      const overOdds = best.over25?.odds;
+      const overBookmaker = best.over25?.bookmaker || 'Pinnacle/Bet365';
+      const underOdds = best.under25?.odds;
+      const underBookmaker = best.under25?.bookmaker || 'Pinnacle/Bet365';
 
       const candidates = [];
 
-      if (homeOdds >= 1.25 && homeOdds <= 2.80) {
+      if (homeOdds && homeOdds >= 1.25 && homeOdds <= 2.80) {
         const evVal = (pH * homeOdds - 1) * 100;
         if (pH >= 0.48 || evVal > 0) {
           candidates.push({
@@ -2067,7 +2093,7 @@ app.get('/api/parlay', async (req, res) => {
         }
       }
 
-      if (awayOdds >= 1.25 && awayOdds <= 2.80) {
+      if (awayOdds && awayOdds >= 1.25 && awayOdds <= 2.80) {
         const evVal = (pA * awayOdds - 1) * 100;
         if (pA >= 0.48 || evVal > 0) {
           candidates.push({
@@ -2081,7 +2107,7 @@ app.get('/api/parlay', async (req, res) => {
         }
       }
 
-      if (overOdds >= 1.30 && overOdds <= 2.40) {
+      if (overOdds && overOdds >= 1.30 && overOdds <= 2.40) {
         const evVal = (pO25 * overOdds - 1) * 100;
         if (pO25 >= 0.52 || evVal > 0) {
           candidates.push({
@@ -2095,7 +2121,7 @@ app.get('/api/parlay', async (req, res) => {
         }
       }
 
-      if (underOdds >= 1.30 && underOdds <= 2.40) {
+      if (underOdds && underOdds >= 1.30 && underOdds <= 2.40) {
         const evVal = (pU25 * underOdds - 1) * 100;
         if (pU25 >= 0.52 || evVal > 0) {
           candidates.push({
@@ -2514,12 +2540,30 @@ app.get('/api/value-bets', async (req, res) => {
       const prices = collectPrices(odds.bookmakers, homeName, awayName, odds.reversed);
       const best = extractBestOdds(prices);
 
-      // 2. Pipeline matemático unificado predictFixture
+      // Obtener estadísticas reales del equipo y descanso real (V8.0.4 Real-Data Pipeline)
+      let homeStats = null;
+      let awayStats = null;
+      let homeRest = 5;
+      let awayRest = 5;
+      try {
+        [homeStats, awayStats, homeRest, awayRest] = await Promise.all([
+          getTeamStats(homeName, compCode),
+          getTeamStats(awayName, compCode),
+          getRealRestDays(homeName, today, compCode),
+          getRealRestDays(awayName, today, compCode)
+        ]);
+      } catch (e) {}
+
+      // 2. Pipeline matemático unificado predictFixture con datos reales del equipo
       const pred = await predictFixture({
         homeName,
         awayName,
         competitionCode: compCode,
         matchDate: today,
+        homeStats,
+        awayStats,
+        homeRestDays: homeRest,
+        awayRestDays: awayRest,
         skipBigBalls: true
       });
 
