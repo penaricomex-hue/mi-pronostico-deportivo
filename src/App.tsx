@@ -29,7 +29,7 @@ import {
   Check,
   Layers
 } from 'lucide-react';
-import { FixtureItem, getMockFixtures, getMockAnalysis, ValueOpportunity, getMockValueOpportunities, SmartParlay, getMockSmartParlays } from './mockData';
+import { FixtureItem, ValueOpportunity, SmartParlay } from './types';
 
 export interface FollowedBet {
   id: string;
@@ -173,13 +173,13 @@ export default function App() {
     try {
       const res = await fetch('/api/parlay');
       const data = await res.json();
-      if (data && data.ok && Array.isArray(data.parlays) && data.parlays.length > 0) {
+      if (data && data.ok && Array.isArray(data.parlays)) {
         setSmartParlays(data.parlays);
         return;
       }
-      throw new Error('Fallback needed');
+      setSmartParlays([]);
     } catch {
-      setSmartParlays(getMockSmartParlays());
+      setSmartParlays([]);
     } finally {
       setLoadingParlays(false);
     }
@@ -204,9 +204,9 @@ export default function App() {
           return;
         }
       }
-      throw new Error('Fallback needed');
+      setRadarData([]);
     } catch {
-      setRadarData(getMockValueOpportunities(comp, minEv));
+      setRadarData([]);
     } finally {
       setLoadingRadar(false);
     }
@@ -470,13 +470,13 @@ export default function App() {
     try {
       const res = await fetch(`/api/fixtures?date=${encodeURIComponent(date)}&competition=${encodeURIComponent(selectedLeague)}`);
       const data = await res.json();
-      if (data && data.fixtures) {
+      if (data && Array.isArray(data.fixtures)) {
         setFixtures(data.fixtures);
       } else {
-        setFixtures(getMockFixtures(date, selectedLeague));
+        setFixtures([]);
       }
     } catch {
-      setFixtures(getMockFixtures(date, selectedLeague));
+      setFixtures([]);
     } finally {
       setLoadingFixtures(false);
     }
@@ -492,9 +492,13 @@ export default function App() {
     try {
       const res = await fetch(`/api/analyze?home=${encodeURIComponent(f.home)}&away=${encodeURIComponent(f.away)}&date=${encodeURIComponent(date)}&competition=${encodeURIComponent(f.competitionCode || selectedLeague)}`);
       const data = await res.json();
-      setActiveAnalysis(data);
-    } catch {
-      setActiveAnalysis(getMockAnalysis(f.home, f.away, date, f.competitionCode || 'PD'));
+      if (data && !data.error) {
+        setActiveAnalysis(data);
+      } else {
+        setActiveAnalysis({ error: data?.error || 'No se pudo analizar el partido seleccionado.' });
+      }
+    } catch (err: any) {
+      setActiveAnalysis({ error: err?.message || 'Error de conexión con el motor de análisis.' });
     } finally {
       setAnalyzingMatchId(null);
     }
