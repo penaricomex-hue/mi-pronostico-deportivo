@@ -1,0 +1,31 @@
+# Render Blueprint Specification (render.yaml)
+# Despliegue automático con un solo clic en Render
+services:
+  - type: web
+    name: mi-pronostico-deportivo
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: STAKE_EUR
+        value: "10"
+      - key: FOOTBALL_DATA_TOKEN
+        sync: false
+      - key: ODDS_API_KEY
+        sync: false
+      - key: BIGBALLS_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_USERNAME
+        sync: false
+      - key: APP_PASSWORD
+        sync: false

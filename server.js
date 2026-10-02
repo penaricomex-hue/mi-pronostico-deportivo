@@ -9,9 +9,138 @@ const { Pool } = pg || {};
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Motor Estadístico Canónico V8.0.4 con Dixon-Coles
-import * as engine from './engine.js';
-console.log(`[ENGINE] Motor cargado: ${engine.ENGINE_VERSION} (${engine.matchModel(1.3, 1.1).modelName})`);
+// Motor Estadístico Canónico V8.0.4 con Dixon-Coles (Resiliente y Autónomo)
+function createAutonomousEngine() {
+  const ENGINE_VERSION = '8.0.4';
+  const DIXON_COLES_RHO = -0.11;
+
+  function clamp(value, min, max) {
+    if (!Number.isFinite(value)) return min;
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function shrinkToMean(value, baseline, sampleSize = 10) {
+    const n = Math.max(0, Number(sampleSize) || 0);
+    const m = 4;
+    const weight = n / (n + m);
+    return weight * Number(value) + (1 - weight) * Number(baseline);
+  }
+
+  function implied(odds) {
+    const o = Number(odds);
+    if (!Number.isFinite(o) || o <= 1) return null;
+    return Number(((1 / o) * 100).toFixed(1));
+  }
+
+  function ev(probability, odds) {
+    let p = Number(probability);
+    const o = Number(odds);
+    if (!Number.isFinite(p) || !Number.isFinite(o) || o <= 1) return null;
+    if (p > 1) p = p / 100;
+    return Number(((p * o - 1) * 100).toFixed(1));
+  }
+
+  function modelSignal(bestProbability, sampleSize = 10) {
+    let prob = Number(bestProbability);
+    if (!Number.isFinite(prob)) return 50;
+    if (prob > 1) prob = prob / 100;
+    const n = clamp(Number(sampleSize) || 0, 0, 15);
+    const sampleFactor = clamp(n / 10, 0.4, 1.0);
+    const edge = Math.max(0, prob - 0.333);
+    const rawScore = 35 + (edge / 0.45) * 55;
+    return Math.round(clamp(rawScore * sampleFactor, 20, 95));
+  }
+
+  function poisson(k, lambda) {
+    if (lambda <= 0 || k < 0) return 0;
+    let factorial = 1;
+    for (let i = 2; i <= k; i++) factorial *= i;
+    return (Math.exp(-lambda) * Math.pow(lambda, k)) / factorial;
+  }
+
+  function dixonColesTau(x, y, lambda, mu, rho = DIXON_COLES_RHO) {
+    if (x === 0 && y === 0) return Math.max(0, 1 - (lambda * mu * rho));
+    if (x === 0 && y === 1) return Math.max(0, 1 + (lambda * rho));
+    if (x === 1 && y === 0) return Math.max(0, 1 + (mu * rho));
+    if (x === 1 && y === 1) return Math.max(0, 1 - rho);
+    return 1.0;
+  }
+
+  function matchModel(homeXg, awayXg, rho = DIXON_COLES_RHO) {
+    const lambda = Math.max(0.15, Number(homeXg) || 1.35);
+    const mu = Math.max(0.15, Number(awayXg) || 1.15);
+    let homeWin = 0, draw = 0, awayWin = 0, over25 = 0, under25 = 0, btts = 0;
+    const maxGoals = 8;
+    const scoreMatrix = [];
+
+    for (let h = 0; h <= maxGoals; h++) {
+      scoreMatrix[h] = [];
+      for (let a = 0; a <= maxGoals; a++) {
+        const pIndep = poisson(h, lambda) * poisson(a, mu);
+        const tau = dixonColesTau(h, a, lambda, mu, rho);
+        const p = Math.max(0, pIndep * tau);
+        scoreMatrix[h][a] = p;
+        if (h > a) homeWin += p;
+        else if (h === a) draw += p;
+        else awayWin += p;
+        if (h + a >= 3) over25 += p;
+        else under25 += p;
+        if (h >= 1 && a >= 1) btts += p;
+      }
+    }
+
+    const sum1x2 = homeWin + draw + awayWin;
+    if (sum1x2 > 0) {
+      homeWin /= sum1x2;
+      draw /= sum1x2;
+      awayWin /= sum1x2;
+    }
+
+    const sumGoals = over25 + under25;
+    if (sumGoals > 0) {
+      over25 /= sumGoals;
+      under25 /= sumGoals;
+    }
+
+    return {
+      engineVersion: ENGINE_VERSION,
+      modelName: 'Dixon-Coles Bivariate Poisson (V8.0.4)',
+      homeXg: lambda,
+      awayXg: mu,
+      rho,
+      homeWin,
+      draw,
+      awayWin,
+      over25,
+      under25,
+      btts: clamp(btts, 0.05, 0.95),
+      scoreMatrix
+    };
+  }
+
+  return {
+    ENGINE_VERSION,
+    DIXON_COLES_RHO,
+    clamp,
+    shrinkToMean,
+    implied,
+    ev,
+    modelSignal,
+    confidence: modelSignal,
+    poisson,
+    dixonColesTau,
+    matchModel
+  };
+}
+
+let engine;
+try {
+  engine = await import('./engine.js');
+} catch (e) {
+  engine = createAutonomousEngine();
+}
+
+console.log(`[ENGINE] Motor cargado: ${engine.ENGINE_VERSION || '8.0.4'} (${(engine.matchModel || createAutonomousEngine().matchModel)(1.3, 1.1).modelName})`);
 
 const {
   matchModel,
@@ -75,8 +204,8 @@ if (APP_USERNAME && APP_PASSWORD) {
 const MODEL_VERSION = 'V8.0.4';
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
-const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN;
-const ODDS_API_KEY = process.env.ODDS_API_KEY;
+const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN || process.env.FOOTBALL_DATA_API_KEY || '';
+const ODDS_API_KEY = process.env.ODDS_API_KEY || process.env.THE_ODDS_API_KEY || '';
 const BIGBALLS_KEY = process.env.BIGBALLS_KEY || '';
 
 const BIGBALLS_LEAGUE_MAP = {
@@ -4813,7 +4942,7 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, modelVersion: MODEL_VERSION, uptime: process.uptime() });
 });
 
-app.listen(PORT, async () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`MK Bets ${MODEL_VERSION} running on port ${PORT}`);
   await ensureSchema();
 });

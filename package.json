@@ -3,6 +3,9 @@
   "private": true,
   "version": "8.0.4",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "start": "node server.js",
