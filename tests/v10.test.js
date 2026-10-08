@@ -138,3 +138,24 @@ test('una sola señal por partido (como en el backtest)', () => {
   const prev = e.capPerJornada([mk(4, 'C', 0.3)], new Map(), { takenMatches: new Set(['C']) });
   assert.equal(prev[0].recommended, false, 'el partido ya tenía una señal registrada');
 });
+
+test('nombres nuevos de Champions 2026-27 se resuelven', async () => {
+  const { createTeamRegistry } = await import('../server/lib/teams.js');
+  const t = createTeamRegistry();
+  for (const [n, c] of [['PAE AEK', 'AEK Athens FC'], ['Fenerbahce', 'Fenerbahçe SK'], ['LASK Linz', 'LASK'], ['Viking FK', 'Viking FK'], ['Sabah FK', 'Sabah FK']]) {
+    assert.equal(t.resolve(n, 'CL')?.canonical, c);
+  }
+});
+
+test('día sin partidos en football-data.org no consulta The Odds API', async () => {
+  const { createAnalysisService } = await import('../server/services/analysis.js');
+  let oddsCalls = 0;
+  const analysis = createAnalysisService({
+    footballData: { configured: true, getMatches: async () => [] },
+    odds: { getEvents: async () => { oddsCalls++; return { events: [] }; } },
+    ratings: {}, teams: {}, store: {}, bankroll: {}, calibration: {}, logger: { log() {}, warn() {}, error() {} }
+  });
+  const r = await analysis.getFixtures({ date: '2026-10-08' });
+  assert.equal(r.fixtures.length, 0);
+  assert.equal(oddsCalls, 0);
+});

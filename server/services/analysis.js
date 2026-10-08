@@ -50,11 +50,13 @@ export function createAnalysisService({
     }
     const { start, end } = localDayRange(date, tzOffset);
     let fixtures = [];
+    let calendarOk = false;
 
     if (footballData.configured) {
       try {
         const raw = await footballData.getMatches({ dateFrom: utcDate(start), dateTo: utcDate(end - 1), competition });
         fixtures = raw.map(normalizeFdMatch);
+        calendarOk = true;
       } catch (err) {
         warnings.push(`football-data.org no respondió: ${err.message}`);
       }
@@ -62,8 +64,9 @@ export function createAnalysisService({
       warnings.push('FOOTBALL_DATA_TOKEN no configurado: el calendario se obtiene de The Odds API.');
     }
 
-    // Respaldo: calendario desde The Odds API si no hubo calendario
-    if (!fixtures.length) {
+    // Respaldo: calendario desde The Odds API solo si football-data.org no está
+    // configurado o falló. Un día sin partidos (p. ej. parón FIFA) no gasta créditos.
+    if (!calendarOk && !fixtures.length) {
       for (const c of competition ? [competition] : ACTIVE_CODES) {
         const { events, blockedReason } = await odds.getEvents(c);
         if (blockedReason) warnings.push(blockedReason);

@@ -489,6 +489,12 @@
       "Sparta Prague",
       "Sparta Praha"
     ],
+    "AEK Athens FC": [
+      "PAE AEK",
+      "AEK Athens",
+      "AEK Athens FC",
+      "AEK"
+    ],
     "AFC Ajax": [
       "Ajax",
       "Ajax Amsterdam"
@@ -510,11 +516,6 @@
       "Athletic Bilbao",
       "Ath Bilbao"
     ],
-    "Club Atlético de Madrid": [
-      "Atlético Madrid",
-      "Atletico Madrid",
-      "Ath Madrid"
-    ],
     "BSC Young Boys": [
       "Young Boys",
       "BSC Young Boys Bern"
@@ -522,13 +523,6 @@
     "Bayer 04 Leverkusen": [
       "Bayer Leverkusen",
       "Leverkusen"
-    ],
-    "FC Bayern München": [
-      "Bayern München",
-      "Bayern Munich",
-      "Bayern Munchen",
-      "FC Bayern Munich",
-      "Bayern"
     ],
     "Bologna FC 1909": [
       "Bologna"
@@ -543,19 +537,27 @@
     "Chelsea FC": [
       "Chelsea"
     ],
+    "Club Atlético de Madrid": [
+      "Atlético Madrid",
+      "Atletico Madrid",
+      "Ath Madrid"
+    ],
     "Club Brugge KV": [
       "Club Brugge",
       "Club Bruges"
-    ],
-    "GNK Dinamo Zagreb": [
-      "Dinamo Zagreb",
-      "Dinamo Zagreb"
     ],
     "Eintracht Frankfurt": [
       "Frankfurt"
     ],
     "FC Barcelona": [
       "Barcelona"
+    ],
+    "FC Bayern München": [
+      "Bayern München",
+      "Bayern Munich",
+      "Bayern Munchen",
+      "FC Bayern Munich",
+      "Bayern"
     ],
     "FC Internazionale Milano": [
       "Inter",
@@ -593,8 +595,18 @@
       "Shakhtar Donetsk",
       "Shakhtar"
     ],
+    "Fenerbahçe SK": [
+      "Fenerbahce",
+      "Fenerbahçe",
+      "Fenerbahce SK",
+      "Fenerbahçe SK"
+    ],
     "Feyenoord Rotterdam": [
       "Feyenoord"
+    ],
+    "GNK Dinamo Zagreb": [
+      "Dinamo Zagreb",
+      "Dinamo Zagreb"
     ],
     "Galatasaray SK": [
       "Galatasaray"
@@ -604,6 +616,10 @@
     ],
     "Juventus FC": [
       "Juventus"
+    ],
+    "LASK": [
+      "LASK Linz",
+      "LASK"
     ],
     "Lille OSC": [
       "Lille"
@@ -687,28 +703,33 @@
     "SK Sturm Graz": [
       "Sturm Graz"
     ],
-    "Sport Lisboa e Benfica": [
-      "SL Benfica",
-      "Benfica"
-    ],
     "SS Lazio": [
       "Lazio"
     ],
     "SSC Napoli": [
       "Napoli"
     ],
+    "Sabah FK": [
+      "Sabah",
+      "Sabah FK",
+      "Sabah Baku"
+    ],
     "Sevilla FC": [
       "Sevilla"
     ],
-    "Sporting Clube de Portugal": [
-      "Sporting CP",
-      "Sporting Lisbon",
-      "Sporting"
+    "Sport Lisboa e Benfica": [
+      "SL Benfica",
+      "Benfica"
     ],
     "Sporting Clube de Braga": [
       "SC Braga",
       "Braga",
       "Sporting Braga"
+    ],
+    "Sporting Clube de Portugal": [
+      "Sporting CP",
+      "Sporting Lisbon",
+      "Sporting"
     ],
     "Stade Brestois 29": [
       "Brest",
@@ -720,6 +741,10 @@
     ],
     "VfB Stuttgart": [
       "Stuttgart"
+    ],
+    "Viking FK": [
+      "Viking",
+      "Viking FK"
     ],
     "Viktoria Plzeň": [
       "Viktoria Plzen",
