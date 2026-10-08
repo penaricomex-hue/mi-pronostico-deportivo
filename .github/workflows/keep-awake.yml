@@ -1,0 +1,29 @@
+# Mantiene despierto el servicio de Render (plan gratuito) en las franjas con
+# partidos de LaLiga y Champions, para que las tareas de señales, cuota de
+# cierre (CLV) y liquidación se ejecuten. Horas en UTC. Render duerme el servicio
+# tras 15 min sin peticiones; se hace ping cada 12 min.
+# Coste aproximado: ~1.100 minutos de Actions al mes (repositorio privado: 2.000 gratis).
+name: keep-awake
+
+on:
+  schedule:
+    - cron: '*/12 15-21 * * 2,3'   # Champions: martes y miércoles
+    - cron: '*/12 17-21 * * 5,1'   # LaLiga: viernes y lunes
+    - cron: '*/12 10-21 * * 6,0'   # LaLiga: sábado y domingo
+    - cron: '0 9 * * *'            # Diario: liquidación, recalibración y escaneo
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping /health
+        run: |
+          for i in 1 2 3; do
+            if curl -fsS --max-time 60 https://mi-pronostico-deportivo.onrender.com/health; then exit 0; fi
+            sleep 20
+          done
+          exit 1

@@ -5,8 +5,8 @@ import { Badge, Card, Chips, Empty, ErrorBox, Stat } from '../components/ui';
 import { kickoffDate, money, odds, signedNum } from '../lib/format';
 import type { BetsApi } from '../hooks/useBets';
 
-const STATUS_LABEL: Record<BetStatus, string> = { pending: 'Pendiente', won: 'Ganada', lost: 'Perdida', void: 'Anulada' };
-const STATUS_TONE: Record<BetStatus, 'neutral' | 'good' | 'bad' | 'warn'> = { pending: 'neutral', won: 'good', lost: 'bad', void: 'warn' };
+const STATUS_LABEL: Record<BetStatus, string> = { pending: 'Pendiente', won: 'Ganada', lost: 'Perdida', void: 'Anulada', half_won: 'Media ganada', half_lost: 'Media perdida' };
+const STATUS_TONE: Record<BetStatus, 'neutral' | 'good' | 'bad' | 'warn'> = { pending: 'neutral', won: 'good', lost: 'bad', void: 'warn', half_won: 'good', half_lost: 'bad' };
 
 export function BetsView({ bets, currency }: { bets: BetsApi; currency: string }) {
   const [filter, setFilter] = useState<'all' | BetStatus>('all');
@@ -15,14 +15,14 @@ export function BetsView({ bets, currency }: { bets: BetsApi; currency: string }
 
   const list = bets.bets.filter(b => filter === 'all' || b.status === filter);
   const stats = useMemo(() => {
-    const settled = bets.bets.filter(b => b.status === 'won' || b.status === 'lost');
+    const settled = bets.bets.filter(b => ['won', 'lost', 'half_won', 'half_lost'].includes(b.status));
     const staked = settled.reduce((s, b) => s + b.stake, 0);
     const profit = settled.reduce((s, b) => s + (b.profit || 0), 0);
     const clv = bets.bets.filter(b => b.clvPct != null);
     return {
       staked, profit,
       roi: staked ? (100 * profit) / staked : null,
-      hit: settled.length ? (100 * settled.filter(b => b.status === 'won').length) / settled.length : null,
+      hit: settled.length ? (100 * settled.filter(b => b.status === 'won' || b.status === 'half_won').length) / settled.length : null,
       clv: clv.length ? clv.reduce((s, b) => s + (b.clvPct || 0), 0) / clv.length : null,
       clvN: clv.length,
       pending: bets.bets.filter(b => b.status === 'pending').length

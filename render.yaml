@@ -44,12 +44,39 @@ services:
         value: "0.25"
       - key: MAX_STAKE_PCT
         value: "0.02"
-      # Protección de créditos de The Odds API
+      # The Odds API (plan gratuito: 500 créditos/mes)
+      - key: ODDS_MARKETS
+        value: h2h,totals,spreads
+      - key: ODDS_EXTRA_MARKETS
+        value: btts,double_chance
+      - key: ODDS_EXTRAS_DAILY_BUDGET
+        value: "4"
       - key: ODDS_CACHE_MINUTES
-        value: "20"
+        value: "240"
       - key: ODDS_DAILY_CREDIT_BUDGET
-        value: "30"
+        value: "16"
+      - key: ODDS_CLOSING_RESERVE_CREDITS
+        value: "6"
       - key: ODDS_RESERVE_CREDITS
-        value: "40"
+        value: "20"
       - key: TRACK_CLOSING_ODDS
-        value: "false"
+        value: "true"
+      # v10: motor de valor, calibración y paper trading
+      - key: EXECUTION_BOOKMAKER
+        sync: false
+      - key: VALUE_MIN_EV
+        value: "0.05"
+      - key: VALUE_MAX_MARKET_GAP
+        value: "0.10"
+      - key: VALUE_MIN_ODDS
+        value: "1.50"
+      - key: VALUE_MAX_ODDS
+        value: "4.00"
+      - key: VALUE_MAX_BETS_PER_JORNADA
+        value: "3"
+      - key: TRADING_MODE
+        value: paper
+      - key: CALIBRATION_METHOD
+        value: auto
+      - key: SIGNAL_SCAN_EVERY_MINUTES
+        value: "120"

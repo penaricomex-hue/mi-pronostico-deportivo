@@ -1,14 +1,17 @@
 /**
- * Apuestas de valor y combinadas construidas solo con selecciones que pasan
- * las reglas del pipeline. Las cuotas atípicas nunca entran en una combinada.
+ * Selecciones recomendadas por el ValueBettingEngine y combinadas construidas
+ * solo con ellas. La cuota usada siempre es la de ejecución (la que se puede tomar).
  */
 import { kellyStake } from '../model/market.js';
 
-function pickRow(a, s, { unvalidated = false } = {}) {
+function pickRow(a, s) {
   return {
     fixtureId: a.id,
+    matchId: a.matchId ?? null,
     competitionCode: a.competitionCode,
+    competitionSlug: a.competitionSlug,
     competition: a.competition,
+    jornadaKey: s.jornadaKey,
     kickoff: a.kickoff,
     home: a.home,
     away: a.away,
@@ -16,33 +19,48 @@ function pickRow(a, s, { unvalidated = false } = {}) {
     awayCrest: a.awayCrest,
     selection: s.selection,
     market: s.market,
+    line: s.line ?? 0,
     label: s.label,
     probability: s.probability,
+    modelProbability: s.modelProbability,
+    calibratedProbability: s.calibratedProbability,
+    marketProbability: s.marketProbability,
+    pushProbability: s.pushProbability ?? null,
     fairOdds: s.fairOdds,
-    bestOdds: s.bestOdds,
-    bestBookmaker: s.bestBookmaker,
-    referenceOdds: s.referenceOdds,
+    executionOdds: s.executionOdds,
+    executionBookmaker: s.executionBookmaker,
+    avgMarketOdds: s.avgMarketOdds,
+    minimumOdds: s.minimumOdds,
     bookmakerCount: s.bookmakerCount,
     ev: s.ev,
+    marketGap: s.marketGap,
+    recommended: Boolean(s.recommended),
+    alreadySignaled: Boolean(s.alreadySignaled),
+    reason: s.reason,
+    blockers: s.blockers || [],
+    calibration: s.calibration || null,
     suggestedStake: s.suggestedStake,
     flatStake: s.flatStake,
-    validated: !unvalidated,
-    reasons: s.reasons,
+    oddsCapturedAt: a.odds?.capturedAt || null,
     dataQuality: a.dataQuality
   };
 }
 
-export function collectValuePicks(analyses, { includeUnvalidated = false } = {}) {
-  const validated = [];
-  const unvalidated = [];
+/**
+ * @returns {{ recommended: Array, nearMisses: Array }}
+ *   nearMisses: EV positivo pero bloqueadas por alguna regla (para transparencia).
+ */
+export function collectValuePicks(analyses, { includeNearMisses = false } = {}) {
+  const recommended = [];
+  const nearMisses = [];
   for (const a of analyses) {
     for (const s of a.selections || []) {
-      if (s.isValue) validated.push(pickRow(a, s));
-      else if (includeUnvalidated && s.passesRules) unvalidated.push(pickRow(a, s, { unvalidated: true }));
+      if (s.recommended) recommended.push(pickRow(a, s));
+      else if (includeNearMisses && s.ev != null && s.ev > 0) nearMisses.push(pickRow(a, s));
     }
   }
   const byEv = (x, y) => y.ev - x.ev;
-  return { validated: validated.sort(byEv), unvalidated: unvalidated.sort(byEv) };
+  return { recommended: recommended.sort(byEv), nearMisses: nearMisses.sort(byEv).slice(0, 30) };
 }
 
 function combinations(arr, k, start = 0, acc = [], out = []) {
@@ -60,7 +78,6 @@ function combinations(arr, k, start = 0, acc = [], out = []) {
  * Supone independencia entre partidos (se indica en la respuesta).
  */
 export function buildParlays(picks, { maxLegs = 3, limit = 5, bankroll } = {}) {
-  // Una selección por partido: la de mayor EV
   const perMatch = new Map();
   for (const p of picks) {
     const prev = perMatch.get(p.fixtureId);
@@ -71,7 +88,7 @@ export function buildParlays(picks, { maxLegs = 3, limit = 5, bankroll } = {}) {
   const parlays = [];
   for (let k = 2; k <= Math.min(maxLegs, pool.length); k++) {
     for (const legs of combinations(pool, k)) {
-      const odds = legs.reduce((s, l) => s * l.bestOdds, 1);
+      const odds = legs.reduce((s, l) => s * l.executionOdds, 1);
       const probability = legs.reduce((s, l) => s * l.probability, 1);
       const ev = probability * odds - 1;
       if (!(ev > 0)) continue;
@@ -81,7 +98,7 @@ export function buildParlays(picks, { maxLegs = 3, limit = 5, bankroll } = {}) {
         combinedOdds: Number(odds.toFixed(2)),
         combinedProbability: probability,
         ev,
-        validated: legs.every(l => l.validated),
+        validated: legs.every(l => l.recommended),
         suggestedStake: bankroll
           ? kellyStake({ probability, odds, bankroll: bankroll.bankroll, fraction: bankroll.kellyFraction / 2, maxPct: bankroll.maxStakePct / 2 })
           : 0

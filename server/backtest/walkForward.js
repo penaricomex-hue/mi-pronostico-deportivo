@@ -1,16 +1,23 @@
 /**
- * Backtest walk-forward sin fuga de información.
+ * Backtest walk-forward v10 sin fuga de información (solo LaLiga y Champions).
  *
  * 1. Recorre los partidos en orden cronológico.
  * 2. Antes de cada semana reajusta Dixon-Coles SOLO con partidos anteriores.
- * 3. Predice con el mismo pipeline de producción (predictMatch + evaluateSelections).
- * 4. Aprende los pesos de mezcla modelo/mercado en temporadas de entrenamiento
- *    y mide en temporadas de prueba que el ajuste nunca vio.
+ * 3. Guarda la probabilidad ORIGINAL del modelo.
+ * 4. Ajusta la calibración (isotónica / Platt) en temporadas de entrenamiento y
+ *    mide en temporadas de prueba que nunca vio.
+ * 5. Si la competición tiene cuotas históricas (LaLiga), simula el
+ *    ValueBettingEngine con las mismas reglas que producción:
+ *    EV ≥ 5%, |modelo − mercado| ≤ 10 pts, cuotas 1.50–4.00, máx. 3 por jornada.
  */
 import { fitDixonColes, DEFAULT_FIT_OPTIONS } from '../model/dixonColes.js';
 import { devig } from '../model/market.js';
-import { predictMatch, blendProbabilities, evaluateSelections, pickBestByRules, DEFAULT_VALUE_RULES } from '../model/predict.js';
-import { createScorer, calibrationTable, outcomeOf, UNIFORM_1X2, verdict } from '../model/metrics.js';
+import { predictMatch } from '../model/predict.js';
+import { createScorer, outcomeOf, UNIFORM_1X2, verdict } from '../model/metrics.js';
+import { emptyBins, addObservation, fitCalibration, calibrateVector, mergeBins } from '../model/calibration.js';
+import { createValueBettingEngine, VALUE_RULES } from '../model/valueEngine.js';
+import { selectionLabel, settleSelection, profitMultiplier } from '../model/markets.js';
+import { jornadaKey } from '../competitions.js';
 
 const DAY_MS = 86400000;
 
@@ -29,22 +36,9 @@ export function fairFromOdds(o) {
   return r;
 }
 
-/** Precios del backtest con la misma forma que en producción. */
-export function pricesFromHistory(m, minBookmakers = DEFAULT_VALUE_RULES.minBookmakers) {
-  const map = { home: 'h', draw: 'd', away: 'a', over25: 'o25', under25: 'u25' };
-  const out = {};
-  for (const [sel, k] of Object.entries(map)) {
-    const best = m.max?.[k] || m.open?.[k] || null;
-    const reference = m.open?.[k] || null;
-    if (!best) continue;
-    out[sel] = { best, bestBookmaker: 'Máximo de mercado', secondBest: null, reference, count: minBookmakers };
-  }
-  return out;
-}
+const PRICE_KEYS = { home: 'h', draw: 'd', away: 'a', over25: 'o25', under25: 'u25' };
 
-/**
- * Genera las predicciones del modelo (sin mezcla) para cada partido evaluable.
- */
+/** Predicciones originales del modelo para cada partido evaluable. */
 export function generateRecords(matches, { evalFrom, xi = DEFAULT_FIT_OPTIONS.xi, refitDays = 7 } = {}) {
   const sorted = [...matches].sort((a, b) => a.date.localeCompare(b.date));
   const records = [];
@@ -60,160 +54,199 @@ export function generateRecords(matches, { evalFrom, xi = DEFAULT_FIT_OPTIONS.xi
     }
     if (!ratings) continue;
 
-    const market = fairFromOdds(m.open);
     const pred = predictMatch({ ratings, home: m.home, away: m.away, market: null, params: { w1x2: 1, wOU: 1 } });
     if (!pred.model) continue;
 
     records.push({
       season: m.season,
       date: m.date,
+      time: m.time || null,
       home: m.home,
       away: m.away,
       hg: m.hg,
       ag: m.ag,
-      model: pred.model,
-      xg: pred.xg,
-      market,
+      model: { ...pred.model, btts_yes: pred.model.btts, btts_no: 1 - pred.model.btts },
+      market: fairFromOdds(m.open),
       close: fairFromOdds(m.close),
-      prices: pricesFromHistory(m)
+      open: m.open,
+      max: m.max
     });
   }
   return records;
 }
 
-function blendRecord(r, w1x2, wOU) {
-  return blendProbabilities(r.model, r.market, { w1x2, wOU }).final;
-}
-
-/** Predicción con la misma mezcla que producción, sin reajustar el modelo. */
-function predictMatchFromRecord(r, w1x2, wOU) {
-  return { modelAvailable: true, final: blendRecord(r, w1x2, wOU) };
-}
-
-/** Busca el peso de mezcla que minimiza el log-loss en los registros dados. */
-export function learnBlendWeights(records) {
-  const grid = Array.from({ length: 21 }, (_, i) => i / 20);
-  const withMarket = records.filter(r => r.market?.home != null);
-  const withOU = records.filter(r => r.market?.over25 != null);
-  let best1 = { w: 0, ll: Infinity };
-  let bestOU = { w: 0, ll: Infinity };
-  for (const w of grid) {
-    let ll = 0;
-    for (const r of withMarket) {
-      const p = blendRecord(r, w, 0);
-      ll += -Math.log(Math.max(1e-6, p[outcomeOf(r.hg, r.ag)]));
-    }
-    ll /= Math.max(1, withMarket.length);
-    if (ll < best1.ll) best1 = { w, ll };
-
-    let ll2 = 0;
-    for (const r of withOU) {
-      const p = blendRecord(r, 0, w);
-      const over = r.hg + r.ag >= 3;
-      ll2 += -Math.log(Math.max(1e-6, over ? p.over25 : p.under25));
-    }
-    ll2 /= Math.max(1, withOU.length);
-    if (ll2 < bestOU.ll) bestOU = { w, ll: ll2 };
-  }
-  return { w1x2: best1.w, wOU: bestOU.w };
-}
-
-/** Evalúa un conjunto de registros con pesos dados. */
-export function evaluateRecords(records, { w1x2, wOU, rules = DEFAULT_VALUE_RULES } = {}) {
-  const sModel = createScorer();
-  const sBlend = createScorer();
-  const sMarket = createScorer();
-  const sUniform = createScorer();
-  const calib = [];
-
-  let bets = 0, won = 0, staked = 0, profit = 0, balance = 0, peak = 0, maxDd = 0;
-  let clvSum = 0, clvN = 0, clvPositive = 0;
-  const betLog = [];
-
+/** Observaciones por grupo de calibración a partir de registros. */
+export function calibrationBins(records) {
+  const bins = { '1x2': emptyBins(), over_under: emptyBins(), btts: emptyBins() };
   for (const r of records) {
-    const outcome = outcomeOf(r.hg, r.ag);
-    const isOver = r.hg + r.ag >= 3;
-    const pred = predictMatchFromRecord(r, w1x2, wOU);
+    const o = outcomeOf(r.hg, r.ag);
+    const over = r.hg + r.ag >= 3;
+    const both = r.hg > 0 && r.ag > 0;
+    for (const k of ['home', 'draw', 'away']) addObservation(bins['1x2'], r.model[k], o === k);
+    addObservation(bins.over_under, r.model.over25, over);
+    addObservation(bins.over_under, r.model.under25, !over);
+    addObservation(bins.btts, r.model.btts_yes, both);
+    addObservation(bins.btts, r.model.btts_no, !both);
+  }
+  return bins;
+}
 
-    sModel.add(r.model, outcome, r.model.over25, isOver);
-    sBlend.add(pred.final, outcome, pred.final.over25, isOver);
-    if (r.market?.home != null) {
-      sMarket.add(r.market, outcome, r.market.over25, r.market.over25 != null ? isOver : null);
-      sUniform.add(UNIFORM_1X2, outcome);
+export function fitMaps(bins, method = 'auto') {
+  return Object.fromEntries(Object.entries(bins).map(([g, b]) => [g, fitCalibration(b, { method })]));
+}
+
+export function calibrateRecord(r, maps) {
+  const c1 = calibrateVector(maps['1x2'], { home: r.model.home, draw: r.model.draw, away: r.model.away });
+  const c2 = calibrateVector(maps.over_under, { over25: r.model.over25, under25: r.model.under25 });
+  const c3 = calibrateVector(maps.btts, { btts_yes: r.model.btts_yes, btts_no: r.model.btts_no });
+  return { ...c1, ...c2, ...c3 };
+}
+
+/** Tabla de calibración por bandas (50–60, 60–70, 70–80) para todas las selecciones. */
+function bandTable(records, probsOf, bands = [[0.5, 0.6], [0.6, 0.7], [0.7, 0.8]]) {
+  const obs = [];
+  for (const r of records) {
+    const p = probsOf(r);
+    const o = outcomeOf(r.hg, r.ag);
+    const over = r.hg + r.ag >= 3;
+    const both = r.hg > 0 && r.ag > 0;
+    obs.push([p.home, o === 'home'], [p.draw, o === 'draw'], [p.away, o === 'away'],
+      [p.over25, over], [p.under25, !over], [p.btts_yes, both], [p.btts_no, !both]);
+  }
+  return bands.map(([lo, hi]) => {
+    const sel = obs.filter(([p]) => p >= lo && p < hi);
+    return {
+      range: `${Math.round(lo * 100)}–${Math.round(hi * 100)}%`,
+      samples: sel.length,
+      predictedPct: sel.length ? Number((100 * sel.reduce((a, [p]) => a + p, 0) / sel.length).toFixed(1)) : null,
+      actualPct: sel.length ? Number((100 * sel.filter(([, y]) => y).length / sel.length).toFixed(1)) : null
+    };
+  });
+}
+
+function scoreBinary(list) {
+  if (!list.length) return { n: 0, brier: null, logLoss: null };
+  let b = 0, l = 0;
+  for (const [p, y] of list) { b += (p - (y ? 1 : 0)) ** 2; l += -Math.log(Math.max(1e-6, y ? p : 1 - p)); }
+  return { n: list.length, brier: Number((b / list.length).toFixed(4)), logLoss: Number((l / list.length).toFixed(4)) };
+}
+
+/**
+ * Simulación del ValueBettingEngine. `priceMode`:
+ *   'average' → cuota media de mercado (conservador; lo que casi cualquier casa paga)
+ *   'best'    → mejor cuota del mercado (optimista; requiere cuentas en muchas casas)
+ */
+export function simulateBetting(records, maps, { slug, rules = VALUE_RULES, priceMode = 'average' } = {}) {
+  const engine = createValueBettingEngine(rules);
+  const candidates = [];
+  for (const r of records) {
+    if (!r.market) continue;
+    const p = calibrateRecord(r, maps);
+    for (const sel of ['home', 'draw', 'away', 'over25', 'under25']) {
+      const k = PRICE_KEYS[sel];
+      const odds = priceMode === 'best' ? (r.max?.[k] || r.open?.[k]) : r.open?.[k];
+      if (!(odds > 1) || r.market[sel] == null) continue;
+      const ev = engine.evaluate({
+        selection: sel, modelProbability: p[sel], marketProbability: r.market[sel], executionOdds: odds,
+        bookmakerCount: rules.minBookmakers, modelAvailable: true
+      });
+      candidates.push({ ...ev, r, selection: sel, probability: p[sel], rawProbability: r.model[sel], jornadaKey: jornadaKey(slug, `${r.date}T${r.time || '20:00'}:00Z`) });
     }
+  }
+  // Una selección por partido (la de mayor EV) y máximo 3 por jornada
+  const bestPerMatch = new Map();
+  for (const c of candidates.filter(x => x.recommended)) {
+    const key = `${c.r.date}|${c.r.home}`;
+    if (!bestPerMatch.has(key) || c.ev > bestPerMatch.get(key).ev) bestPerMatch.set(key, c);
+  }
+  const capped = engine.capPerJornada([...bestPerMatch.values()]).filter(c => c.recommended)
+    .sort((a, b) => a.r.date.localeCompare(b.r.date));
 
-    calib.push({
-      p: pred.final,
-      actual: { home: outcome === 'home', draw: outcome === 'draw', away: outcome === 'away', over25: isOver }
-    });
-
-    // Mismas reglas que producción; aquí ignoramos valueEnabled para medir la estrategia.
-    const sels = evaluateSelections(pred, r.prices, { valueEnabled: true, rules });
-    const pick = pickBestByRules(sels);
-    if (!pick) continue;
-
-    const hit = pick.selection === 'over25' ? isOver
-      : pick.selection === 'under25' ? !isOver
-      : pick.selection === outcome;
-    const pnl = hit ? pick.bestOdds - 1 : -1;
-    bets++; staked += 1; profit += pnl; if (hit) won++;
+  let won = 0, staked = 0, profit = 0, balance = 0, peak = 0, maxDd = 0, evSum = 0;
+  let clvSum = 0, clvN = 0, clvPositive = 0;
+  const byMarket = {};
+  const log = [];
+  for (const c of capped) {
+    const status = settleSelection(c.selection, 0, c.r.hg, c.r.ag);
+    const pnl = profitMultiplier(status, c.executionOdds);
+    staked += 1; profit += pnl; evSum += c.ev; if (status === 'won') won++;
     balance += pnl; peak = Math.max(peak, balance); maxDd = Math.max(maxDd, peak - balance);
-
-    const closeP = r.close?.[pick.selection];
+    const closeP = c.r.close?.[c.selection];
     let clv = null;
-    if (closeP) {
-      clv = pick.bestOdds * closeP - 1; // cuota tomada vs cuota justa de cierre
-      clvSum += clv; clvN++; if (clv > 0) clvPositive++;
-    }
-    betLog.push({
-      date: r.date, home: r.home, away: r.away, score: `${r.hg}-${r.ag}`,
-      selection: pick.selection, label: pick.label,
-      probabilityPct: Number((pick.probability * 100).toFixed(1)),
-      odds: pick.bestOdds, evPct: Number((pick.ev * 100).toFixed(1)),
+    if (closeP) { clv = c.executionOdds * closeP - 1; clvSum += clv; clvN++; if (clv > 0) clvPositive++; }
+    const mk = c.market;
+    byMarket[mk] = byMarket[mk] || { bets: 0, won: 0, profit: 0 };
+    byMarket[mk].bets++; byMarket[mk].profit += pnl; if (status === 'won') byMarket[mk].won++;
+    log.push({
+      date: c.r.date, home: c.r.home, away: c.r.away, score: `${c.r.hg}-${c.r.ag}`,
+      selection: c.selection, label: selectionLabel(c.selection),
+      rawProbabilityPct: Number((c.rawProbability * 100).toFixed(1)),
+      probabilityPct: Number((c.probability * 100).toFixed(1)),
+      marketPct: Number(((c.probability - c.marketGap) * 100).toFixed(1)),
+      odds: c.executionOdds, evPct: Number((c.ev * 100).toFixed(1)),
       clvPct: clv != null ? Number((clv * 100).toFixed(1)) : null,
-      result: hit ? 'won' : 'lost', profitUnits: Number(pnl.toFixed(2))
+      result: status, profitUnits: Number(pnl.toFixed(2))
     });
   }
+  const bets = capped.length;
+  return {
+    priceMode,
+    bets,
+    won,
+    hitRatePct: bets ? Number(((100 * won) / bets).toFixed(1)) : null,
+    stakedUnits: staked,
+    profitUnits: Number(profit.toFixed(2)),
+    yieldPct: staked ? Number(((100 * profit) / staked).toFixed(2)) : null,
+    roiPct: staked ? Number(((100 * profit) / staked).toFixed(2)) : null,
+    avgEvPct: bets ? Number(((100 * evSum) / bets).toFixed(2)) : null,
+    maxDrawdownUnits: Number(maxDd.toFixed(2)),
+    avgClvPct: clvN ? Number(((100 * clvSum) / clvN).toFixed(2)) : null,
+    clvPositivePct: clvN ? Number(((100 * clvPositive) / clvN).toFixed(1)) : null,
+    byMarket: Object.fromEntries(Object.entries(byMarket).map(([k, v]) => [k, { ...v, profit: Number(v.profit.toFixed(2)), hitRatePct: Number(((100 * v.won) / v.bets).toFixed(1)) }])),
+    recentBets: log.slice(-40).reverse()
+  };
+}
 
-  const model = sModel.result();
-  const blended = sBlend.result();
-  const market = sMarket.result();
-  const uniform = sUniform.result();
-
+/** Evalúa probabilísticamente un conjunto (modelo original vs calibrado vs mercado). */
+export function evaluateRecords(records, maps) {
+  const sModel = createScorer(), sCal = createScorer(), sMarket = createScorer(), sUniform = createScorer();
+  const bttsRaw = [], bttsCal = [];
+  for (const r of records) {
+    const o = outcomeOf(r.hg, r.ag);
+    const over = r.hg + r.ag >= 3;
+    const both = r.hg > 0 && r.ag > 0;
+    const c = calibrateRecord(r, maps);
+    sModel.add(r.model, o, r.model.over25, over);
+    sCal.add(c, o, c.over25, over);
+    sUniform.add(UNIFORM_1X2, o);
+    if (r.market?.home != null) sMarket.add(r.market, o, r.market.over25, r.market.over25 != null ? over : null);
+    bttsRaw.push([r.model.btts_yes, both]);
+    bttsCal.push([c.btts_yes, both]);
+  }
+  const model = sModel.result(), calibrated = sCal.result(), market = sMarket.result(), uniform = sUniform.result();
   return {
     matches: records.length,
-    metrics: { model, blended, market, uniform },
+    metrics: { model, calibrated, market, uniform, bttsModel: scoreBinary(bttsRaw), bttsCalibrated: scoreBinary(bttsCal) },
     verdicts: {
       modelBrier: verdict(model.brier, market.brier, uniform.brier),
-      blendedBrier: verdict(blended.brier, market.brier, uniform.brier),
+      calibratedBrier: verdict(calibrated.brier, market.brier, uniform.brier),
       modelLogLoss: verdict(model.logLoss, market.logLoss, uniform.logLoss),
-      blendedLogLoss: verdict(blended.logLoss, market.logLoss, uniform.logLoss)
+      calibratedLogLoss: verdict(calibrated.logLoss, market.logLoss, uniform.logLoss)
     },
-    calibration: calibrationTable(calib),
-    betting: {
-      bets,
-      won,
-      hitRatePct: bets ? Number(((100 * won) / bets).toFixed(1)) : null,
-      stakedUnits: staked,
-      profitUnits: Number(profit.toFixed(2)),
-      roiPct: staked ? Number(((100 * profit) / staked).toFixed(2)) : null,
-      maxDrawdownUnits: Number(maxDd.toFixed(2)),
-      avgClvPct: clvN ? Number(((100 * clvSum) / clvN).toFixed(2)) : null,
-      clvPositivePct: clvN ? Number(((100 * clvPositive) / clvN).toFixed(1)) : null,
-      recentBets: betLog.slice(-40).reverse()
+    calibration: {
+      model: bandTable(records, r => r.model),
+      calibrated: bandTable(records, r => calibrateRecord(r, maps))
     }
   };
 }
 
 /**
- * Backtest completo de una liga: ajusta ξ y pesos en entrenamiento, mide en prueba.
+ * Backtest completo de una competición.
+ * @returns informe + bins de calibración (semilla para producción)
  */
-export function runLeagueBacktest(matches, { trainSeasons, testSeasons, xiGrid = [0.0012, 0.0019, 0.003, 0.005], rules = DEFAULT_VALUE_RULES, minTestBets = 50 } = {}) {
+export function runLeagueBacktest(matches, { slug, trainSeasons, testSeasons, xiGrid = [0.0012, 0.0019, 0.003, 0.005], rules = VALUE_RULES, method = 'auto', hasOdds = true } = {}) {
   const evalFrom = trainSeasons[0];
-  let bestXi = xiGrid[0];
-  let bestLL = Infinity;
-  let bestRecords = null;
-
+  let bestXi = xiGrid[0], bestLL = Infinity, bestRecords = null;
   for (const xi of xiGrid) {
     const recs = generateRecords(matches, { evalFrom, xi });
     const train = recs.filter(r => trainSeasons.includes(r.season));
@@ -223,24 +256,29 @@ export function runLeagueBacktest(matches, { trainSeasons, testSeasons, xiGrid =
 
   const train = bestRecords.filter(r => trainSeasons.includes(r.season));
   const test = bestRecords.filter(r => testSeasons.includes(r.season));
-  const weights = learnBlendWeights(train);
+  const trainMaps = fitMaps(calibrationBins(train), method);
 
-  const trainEval = evaluateRecords(train, { ...weights, rules });
-  const testEval = evaluateRecords(test, { ...weights, rules });
-
-  const b = testEval.betting;
-  // Criterio conservador: muestra suficiente, CLV medio positivo y ROI no negativo
-  // en temporadas que el ajuste nunca vio.
-  const valueEnabled = b.bets >= minTestBets && b.avgClvPct != null && b.avgClvPct > 0 && b.roiPct != null && b.roiPct >= 0;
-
-  return {
+  const out = {
+    competitionSlug: slug,
     xi: bestXi,
-    weights,
     trainSeasons,
     testSeasons,
-    valueEnabled,
-    valueRule: `Valor habilitado solo si en prueba hay ≥${minTestBets} apuestas, CLV medio > 0 y ROI ≥ 0`,
-    train: trainEval,
-    test: testEval
+    rules,
+    calibrationMaps: Object.fromEntries(Object.entries(trainMaps).map(([g, m]) => [g, { method: m.method, samples: m.samples }])),
+    train: evaluateRecords(train, trainMaps),
+    test: evaluateRecords(test, trainMaps),
+    betting: null,
+    bettingBestPrice: null
   };
+
+  if (hasOdds) {
+    out.betting = simulateBetting(test, trainMaps, { slug, rules, priceMode: 'average' });
+    out.bettingBestPrice = simulateBetting(test, trainMaps, { slug, rules, priceMode: 'best' });
+  }
+
+  // Semilla de producción: TODOS los registros fuera de muestra (entrenamiento + prueba)
+  const seed = calibrationBins(bestRecords);
+  return { report: out, seed };
 }
+
+export { mergeBins };

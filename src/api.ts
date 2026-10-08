@@ -1,4 +1,4 @@
-import type { Analysis, BacktestLeague, Bet, BetStatus, BetSummary, Fixture, Parlay, Pick, Status } from './types';
+import type { Analysis, BacktestLeague, Bet, BetStatus, BetSummary, Fixture, Parlay, Performance, Pick, Signal, Status, ValueRules } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -43,15 +43,19 @@ export const api = {
     return request<{ analysis: Analysis }>(`/api/analyze?${qs({ id, date, competition: f.competitionCode })}`);
   },
 
-  valueBets: (competition: string, days: number, includeUnvalidated: boolean) =>
-    request<{ analyzed: number; withOdds: number; picks: Pick[]; unvalidatedPicks: Pick[]; warnings: string[] }>(
-      `/api/value-bets?${qs({ competition, days, includeUnvalidated })}`
+  valueBets: (competition: string, days: number, includeNearMisses: boolean) =>
+    request<{
+      analyzed: number; withOdds: number; picks: Pick[]; nearMisses: Pick[]; recorded: number; rules: ValueRules;
+      execution: { bookmaker: string | null; mode: 'fixed' | 'best' | null }; warnings: string[];
+    }>(`/api/value-bets?${qs({ competition, days, includeNearMisses })}`),
+
+  parlays: (competition: string, legs: number) =>
+    request<{ parlays: Parlay[]; candidates: number; assumption: string; warnings: string[] }>(
+      `/api/parlay?${qs({ competition, legs })}`
     ),
 
-  parlays: (competition: string, legs: number, includeUnvalidated: boolean) =>
-    request<{ parlays: Parlay[]; candidates: number; assumption: string; warnings: string[] }>(
-      `/api/parlay?${qs({ competition, legs, includeUnvalidated })}`
-    ),
+  performance: (days: number) => request<Performance>(`/api/performance?days=${days}`),
+  signals: (days = 90) => request<{ signals: Signal[] }>(`/api/signals?days=${days}`),
 
   backtest: (competition: string) => request<BacktestLeague>(`/api/backtest?competition=${encodeURIComponent(competition)}`),
 

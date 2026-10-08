@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import type { Bet, BetStatus, Pick, Parlay } from '../types';
 
-const LOCAL_KEY = 'mkbets_v9_bets';
+const LOCAL_KEY = 'mkbets_v10_bets';
 
 function readLocal(): Bet[] {
   try {
@@ -19,7 +19,9 @@ function writeLocal(bets: Bet[]) {
 
 function profitFor(status: BetStatus, stake: number, odds: number) {
   if (status === 'won') return Number((stake * (odds - 1)).toFixed(2));
+  if (status === 'half_won') return Number((stake * (odds - 1) / 2).toFixed(2));
   if (status === 'lost') return -stake;
+  if (status === 'half_lost') return Number((-stake / 2).toFixed(2));
   return status === 'void' ? 0 : null;
 }
 
@@ -55,7 +57,8 @@ export function useBets(currency: string) {
   const addPick = useCallback(async (p: Pick, stake: number) => {
     const body = {
       fixtureId: p.fixtureId, competition: p.competitionCode, kickoff: p.kickoff, home: p.home, away: p.away,
-      selection: p.selection, odds: p.bestOdds, probability: p.probability, stake
+      selection: p.selection, odds: p.executionOdds, probability: p.probability, stake,
+      line: p.line ?? null, bookmaker: p.executionBookmaker
     };
     if (mode === 'server') {
       await api.bets.create(body);
@@ -64,7 +67,7 @@ export function useBets(currency: string) {
     const bet: Bet = {
       id: `local-${Date.now()}`, createdAt: new Date().toISOString(), matchDate: p.kickoff.slice(0, 10), kickoff: p.kickoff,
       fixtureId: p.fixtureId, home: p.home, away: p.away, competition: p.competitionCode, market: p.market,
-      selection: p.selection, label: p.label, odds: p.bestOdds, probability: p.probability, stake, currency,
+      selection: p.selection, label: p.label, odds: p.executionOdds, probability: p.probability, stake, currency, line: p.line, bookmaker: p.executionBookmaker,
       status: 'pending', profit: null, settledAt: null, score: null, closingOdds: null, clvPct: null, legs: null
     };
     const next = [bet, ...readLocal()];
@@ -80,7 +83,7 @@ export function useBets(currency: string) {
       selection: 'parlay', odds: parlay.combinedOdds, probability: parlay.combinedProbability, stake,
       legs: parlay.legs.map(l => ({
         fixtureId: l.fixtureId, competition: l.competitionCode, kickoff: l.kickoff, home: l.home, away: l.away,
-        selection: l.selection, odds: l.bestOdds, label: l.label
+        selection: l.selection, odds: l.executionOdds, label: l.label, line: l.line
       }))
     };
     if (mode === 'server') {
