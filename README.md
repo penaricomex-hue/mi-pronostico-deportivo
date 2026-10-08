@@ -1,76 +1,85 @@
 # MK Bets · mi-pronostico-deportivo
 
-Pronósticos de fútbol con un modelo **Dixon-Coles** ajustado por máxima verosimilitud, **cuotas reales** de varias casas y un **backtest fuera de muestra** que decide, liga por liga, si el modelo merece confianza.
+Pronósticos de **LaLiga EA Sports** y **UEFA Champions League** con un modelo **Dixon-Coles**, **calibración** por competición y mercado, un **ValueBettingEngine** con reglas estrictas, **cuotas reales con hora exacta** y un **panel de rendimiento** que mide lo único que demuestra ventaja: el **CLV** (si tomamos la cuota antes de que el mercado la corrija).
 
-Versión del modelo: **V9.0.0**. Producción: <https://mi-pronostico-deportivo.onrender.com> (requiere usuario y contraseña).
+Versión: **V10.0.0**. Producción: <https://mi-pronostico-deportivo.onrender.com> (requiere usuario y contraseña).
 
-## Resultados honestos del backtest
+## Alcance v10
 
-Entrenamiento con 2023-24 y 2024-25; prueba con 2025-26 y 2026-27 (partidos que el ajuste nunca vio). Brier 1X2, más bajo es mejor; 0.667 equivale a adivinar al azar.
+- Solo `la_liga` y `champions_league`. Premier League, Serie A, Bundesliga, Ligue 1 y Europa League están **desactivadas sin borrar histórico** (`competition_slug = 'excluded'`).
+- Todas las consultas de partidos, predicciones, señales, backtest y panel filtran `WHERE competition_slug IN ('la_liga', 'champions_league')`.
+- **Paper trading** por defecto (`TRADING_MODE=paper`) durante 30–60 días; objetivo: 300–500 señales reales antes de sacar conclusiones.
+- **Casa de ejecución configurable** (`EXECUTION_BOOKMAKER`). Vacío = mejor cuota no atípica entre las casas disponibles. Caliente.mx no está en ninguna fuente gratuita de cuotas, por eso no es la casa principal.
 
-| Liga | Partidos de prueba | Modelo propio | Mercado (cuotas sin margen) | Apuestas de valor | ROI | CLV medio |
-|---|---|---|---|---|---|---|
-| Premier League | 430 | 0.6157 | 0.6128 | 29 | +44.4% | +4.26% |
-| LaLiga | 449 | 0.5786 | 0.5696 | 31 | −38.6% | +1.59% |
-| Serie A | 430 | 0.5887 | 0.5781 | 18 | −32.6% | +4.64% |
-| Bundesliga | 342 | 0.5806 | 0.5637 | 24 | −42.0% | +3.18% |
-| Ligue 1 | 351 | 0.6047 | 0.5859 | 25 | +13.7% | +2.72% |
+## Cómo decide una apuesta
 
-Qué significa:
+1. Calendario de football-data.org (o The Odds API como respaldo).
+2. Goles esperados con Dixon-Coles (decaimiento temporal; Champions completada con la temporada en curso de football-data.org).
+3. **Probabilidad original del modelo** → se guarda en `model_predictions`.
+4. **Calibración** con mapas `la_liga_1x2`, `la_liga_over_under`, `la_liga_btts`, `champions_league_1x2`, `champions_league_over_under`, `champions_league_btts` (isotónica o Platt según muestra). Ejemplo en la app: «El modelo dijo 68%, pero en ese rango ha ganado 61% históricamente; probabilidad calibrada: 61%».
+5. **Mercado sin margen**: consenso de 3 a 6+ casas (`bookmaker_odds` guarda apertura, capturas intermedias y cierre con `captured_at`).
+6. **ValueBettingEngine** (`server/model/valueEngine.js`):
+   - EV = p_calibrada × cuota_ejecución − 1 ≥ **5%**
+   - |p_calibrada − p_mercado| ≤ **10 pts** («El modelo se desvía demasiado del mercado»)
+   - Cuota entre **1.50 y 4.00** durante la validación
+   - Mercados: 1X2, doble oportunidad, más/menos 2.5, ambos marcan, hándicap asiático (línea principal)
+   - **Máximo 3 señales por jornada** y competición
+7. Cada recomendación se registra en `value_signals` con la cuota, la casa y la hora exactas.
+8. Antes del inicio se captura la **cuota de cierre** y se calcula el **CLV** = cuota tomada × probabilidad justa de cierre − 1.
+9. Al terminar cada jornada se liquidan señales y predicciones y se **reajustan los mapas de calibración** (también semanalmente).
 
-- El modelo propio **no supera al mercado** en ninguna liga. Por eso el peso aprendido del modelo en 1X2 es 0% y la probabilidad final de 1X2 es la del mercado. En goles (más/menos de 2.5) el modelo aporta entre 0% y 10%.
-- El CLV (cuota tomada frente a la cuota justa de cierre) es positivo en todas las ligas, pero con menos de 50 apuestas por liga el ROI es sobre todo ruido.
-- Regla de activación: una liga marca "valor" solo si en prueba hay **≥ 50 apuestas, CLV medio > 0 y ROI ≥ 0**. Hoy ninguna liga la cumple, así que la app **no recomienda apuestas**. Puedes ver las candidatas activando "Mostrar ligas no validadas", bajo tu propio riesgo.
+## Backtest walk-forward (fuera de muestra)
 
-El informe completo está en `data/backtest-report.json` y en la pestaña **Backtest** de la app.
+Mismas reglas que producción. Calibración ajustada solo con temporadas de entrenamiento.
+
+| Competición | Prueba | Brier 1X2 modelo → calibrado | Mercado | Señales | Yield (cuota media) | CLV (cuota media) | Yield (mejor cuota) | CLV (mejor cuota) |
+|---|---|---|---|---|---|---|---|---|
+| LaLiga | 2025-26, 2026-27 (449 partidos) | 0.5786 → 0.5770 | 0.5696 | 119 | −7.6% | −6.55% | +0.9% | −2.99% |
+| Champions | 2024-25, 2025-26 (378 partidos) | 0.5432 → 0.5432 | sin cuotas históricas | — | — | — | — | — |
+
+Lectura honesta: el modelo aún **no supera al mercado** en LaLiga, y con la cuota media el CLV es negativo. Solo más/menos 2.5 sale positivo en ambos escenarios (+5.0 u y +7.2 u). Por eso v10 arranca en paper trading y la métrica que decide es el CLV real del panel **Rendimiento**. Para la Champions no hay cuotas históricas gratuitas (los resultados vienen de openfootball), así que su rentabilidad solo se medirá con señales reales.
 
 ## Arquitectura
 
 ```
-server.js                 Punto de entrada (Render): importa server/index.js
 server/
-  index.js                Arranque: configuración, BD, proveedores, servicios y tareas
-  app.js                  Express: seguridad, Basic Auth, /health, /api y frontend compilado
-  config.js               Variables de entorno
-  db.js                   PostgreSQL y migraciones versionadas
-  routes/api.js           Endpoints REST
-  model/                  Poisson, Dixon-Coles, mercado (devig, Kelly, atípicas), predicción y métricas
-  backtest/walkForward.js Backtest walk-forward (reajuste semanal, sin fuga de información)
-  providers/              football-data.org, The Odds API, football-data.co.uk (historial), Big Balls
-  services/               Ratings, análisis, selecciones de valor, combinadas y apuestas simuladas
-  lib/                    HTTP, caché persistente, limitador de llamadas, CSV, nombres de equipos
-src/                      Frontend React + Tailwind (pestañas Partidos, Valor, Combinadas, Mis apuestas, Backtest, Estado)
-data/
-  history/*.json          Resultados y cuotas reales de 5 temporadas por liga (football-data.co.uk)
-  teams.json              Alias de equipos por liga (evita confundir Milan con Inter o PSG con Paris FC)
-  model-params.json       Parámetros aprendidos en el backtest (ξ y pesos de mezcla por liga)
-  backtest-report.json    Informe del backtest
-scripts/                  fetch-history, run-backtest, check-syntax
-tests/                    Pruebas con node:test
-android/                  App Android (WebView endurecida)
+  competitions.js         Competiciones activas/desactivadas, competition_slug, jornadas
+  model/markets.js        Mercados, selecciones, hándicap asiático, liquidación (incl. medias)
+  model/valueEngine.js    ValueBettingEngine (evaluateBet + reglas + límite por jornada)
+  model/calibration.js    Isotónica (PAV), Platt, mapas por cubetas
+  model/marketBook.js     Mercado sin margen y cuota de ejecución
+  services/ingest.js      matches, bookmaker_odds (apertura/cierre), model_predictions
+  services/calibration.js Mapas de calibración (semilla del backtest + resultados reales)
+  services/signals.js     value_signals, cierre/CLV, liquidación, Performance Lab
+  services/analysis.js    Análisis de partido
+  backtest/walkForward.js Backtest walk-forward v10
+src/views/PerformanceView.tsx  Pestaña Rendimiento (7/30/60/90 días)
+data/calibration-seed.json     Observaciones fuera de muestra para la calibración inicial
+data/history/PD.json, CL.json  Historial (football-data.co.uk y openfootball)
 ```
 
-Flujo de una predicción:
+Tablas: `matches` (con `competition_slug` + índice), `bookmaker_odds`, `model_predictions`, `value_signals`, `calibration_maps`, `simulated_bets` (apuestas manuales; histórico conservado).
 
-1. Calendario de football-data.org (o de The Odds API si no hay token).
-2. Nombres de equipo normalizados con `data/teams.json`.
-3. Goles esperados con Dixon-Coles ajustado sobre 3 temporadas con decaimiento temporal.
-4. Probabilidad de mercado: consenso sin margen de todas las casas.
-5. Probabilidad final = peso aprendido × modelo + (1 − peso) × mercado.
-6. Valor: EV ≥ 2%, probabilidad ≥ 20%, cuota ≤ 5, ≥ 3 casas, sin cuota atípica y liga validada.
-7. Stake: Kelly fraccional (¼) sobre el bankroll, con tope del 2%.
+API nueva: `GET /api/performance?days=7|30|60|90`, `GET /api/signals`, `GET /api/calibration`, `POST /api/signals/scan`, `POST /api/signals/settle`.
 
 ## Variables de entorno
 
-Consulta `.env.example`. Las imprescindibles en Render:
+Consulta `.env.example`. Las principales:
 
 | Variable | Uso |
 |---|---|
 | `APP_USERNAME`, `APP_PASSWORD` | Obligatorias. Sin ellas la app responde 503 |
-| `FOOTBALL_DATA_TOKEN` | Calendario y resultados (plan gratuito: 10 llamadas/min, sin Europa League) |
-| `ODDS_API_KEY` | Cuotas (cada consulta de liga gasta 2 créditos: 1X2 + goles) |
-| `DATABASE_URL` | Apuestas simuladas, caché y consumo de cuota que sobreviven a reinicios |
-| `CURRENCY`, `STAKE`, `BANKROLL`, `KELLY_FRACTION`, `MAX_STAKE_PCT` | Banca |
+| `FOOTBALL_DATA_TOKEN` | Calendario y resultados |
+| `ODDS_API_KEY` | Cuotas (plan gratuito: 500 créditos/mes) |
+| `DATABASE_URL` | Señales, cuotas, predicciones y calibración persistentes |
+| `EXECUTION_BOOKMAKER` | Casa de ejecución; vacío = mejor cuota no atípica |
+| `VALUE_MIN_EV`, `VALUE_MAX_MARKET_GAP`, `VALUE_MIN_ODDS`, `VALUE_MAX_ODDS`, `VALUE_MAX_BETS_PER_JORNADA` | Reglas del motor |
+| `ODDS_MARKETS`, `ODDS_EXTRA_MARKETS`, `ODDS_EXTRAS_*` | Mercados de The Odds API (BTTS y doble oportunidad cuestan créditos por partido) |
+| `ODDS_DAILY_CREDIT_BUDGET`, `ODDS_CLOSING_RESERVE_CREDITS`, `ODDS_CACHE_MINUTES` | Presupuesto diario; parte reservada para la cuota de cierre |
+| `TRACK_CLOSING_ODDS` | `true` por defecto (necesario para el CLV) |
+| `TRADING_MODE` | `paper` (por defecto) o `live` |
+| `CALIBRATION_METHOD` | `auto`, `isotonic` o `platt` |
+| `SIGNAL_SCAN_EVERY_MINUTES` | Frecuencia del escaneo automático de señales |
 
 ## Comandos
 
@@ -82,8 +91,8 @@ npm run lint           # TypeScript + sintaxis del servidor
 npm test               # pruebas
 npm run build          # compilar el frontend a dist/
 npm start              # producción (sirve dist/ y la API)
-npm run fetch-history  # actualizar data/history desde football-data.co.uk
-npm run backtest       # recalcular backtest y parámetros del modelo
+npm run fetch-history  # actualizar data/history (LaLiga: football-data.co.uk; Champions: openfootball)
+npm run backtest       # recalcular backtest, parámetros y semilla de calibración
 ```
 
 Después de `npm run fetch-history` ejecuta siempre `npm run backtest` y revisa el informe antes de subir los cambios.
@@ -106,7 +115,8 @@ Consulta [SECURITY.md](SECURITY.md).
 
 ## Fuentes de datos
 
-- Resultados y cuotas históricas: [football-data.co.uk](https://www.football-data.co.uk/)
+- Resultados y cuotas históricas de LaLiga: [football-data.co.uk](https://www.football-data.co.uk/)
+- Resultados históricos de la Champions: [openfootball](https://github.com/openfootball/champions-league)
 - Calendario y resultados en vivo: [football-data.org](https://www.football-data.org/)
 - Cuotas en vivo: [The Odds API](https://the-odds-api.com/)
 

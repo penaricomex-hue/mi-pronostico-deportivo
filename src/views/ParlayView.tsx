@@ -8,7 +8,6 @@ import type { BetsApi } from '../hooks/useBets';
 export function ParlayView({ bets, currency }: { bets: BetsApi; currency: string }) {
   const [competition, setCompetition] = useState('');
   const [legs, setLegs] = useState('3');
-  const [includeUnvalidated, setIncludeUnvalidated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Awaited<ReturnType<typeof api.parlays>> | null>(null);
@@ -18,7 +17,7 @@ export function ParlayView({ bets, currency }: { bets: BetsApi; currency: string
     setLoading(true);
     setError(null);
     try {
-      setResult(await api.parlays(competition, Number(legs), includeUnvalidated));
+      setResult(await api.parlays(competition, Number(legs)));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -40,17 +39,14 @@ export function ParlayView({ bets, currency }: { bets: BetsApi; currency: string
     <div className="space-y-4">
       <Card>
         <p className="mb-3 text-sm text-muted">
-          Combina selecciones con valor de partidos distintos. Las cuotas atípicas nunca entran en una combinada.
-          La probabilidad combinada supone que los partidos son independientes.
+          Combina solo selecciones que el motor de valor recomendó (EV ≥ 5%, cuota 1.50–4.00, cerca del mercado),
+          de partidos distintos. La probabilidad combinada supone independencia entre partidos. Las combinadas no
+          cuentan para el límite de 3 señales por jornada ni para el panel de rendimiento.
         </p>
         <div className="space-y-3">
-          <Chips options={COMPETITIONS.filter(c => c.code !== 'EL').map(c => ({ value: c.code, label: c.name }))} value={competition} onChange={setCompetition} />
+          <Chips options={COMPETITIONS.map(c => ({ value: c.code, label: c.name }))} value={competition} onChange={setCompetition} />
           <div className="flex flex-wrap items-center gap-3">
             <Chips options={[{ value: '2', label: 'Dobles' }, { value: '3', label: 'Hasta 3' }, { value: '4', label: 'Hasta 4' }]} value={legs} onChange={setLegs} />
-            <label className="flex items-center gap-2 text-xs text-muted">
-              <input type="checkbox" checked={includeUnvalidated} onChange={e => setIncludeUnvalidated(e.target.checked)} />
-              Incluir ligas no validadas (riesgo alto)
-            </label>
             <button type="button" onClick={load} disabled={loading} className="ml-auto rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-ink disabled:opacity-60">
               {loading ? 'Calculando…' : 'Generar combinadas'}
             </button>
@@ -64,7 +60,7 @@ export function ParlayView({ bets, currency }: { bets: BetsApi; currency: string
         <>
           <Warnings items={result.warnings} />
           {result.parlays.length === 0 ? (
-            <Empty>No hay combinadas con EV positivo ({result.candidates} selecciones candidatas).</Empty>
+            <Empty>No hay combinadas: hacen falta al menos 2 selecciones recomendadas de partidos distintos ({result.candidates} disponibles).</Empty>
           ) : (
             <div className="space-y-3">
               {result.parlays.map(p => (
@@ -72,7 +68,7 @@ export function ParlayView({ bets, currency }: { bets: BetsApi; currency: string
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex gap-2">
                       <Badge tone="accent">{p.legs.length} patas</Badge>
-                      {p.validated ? <Badge tone="good">Validada</Badge> : <Badge tone="warn">Incluye ligas no validadas</Badge>}
+                      <Badge tone="warn">Riesgo alto</Badge>
                     </div>
                     <div className="text-xs text-muted tabular-nums">
                       Cuota {odds(p.combinedOdds)} · Prob. {pct(p.combinedProbability)} · EV <span className="text-good">{signedPct(p.ev)}</span>
@@ -82,7 +78,7 @@ export function ParlayView({ bets, currency }: { bets: BetsApi; currency: string
                     {p.legs.map(l => (
                       <li key={`${l.fixtureId}:${l.selection}`} className="flex justify-between gap-2">
                         <span className="min-w-0 truncate">{l.home} vs {l.away} <span className="text-muted">· {kickoffDate(l.kickoff)}</span></span>
-                        <span className="shrink-0 tabular-nums">{l.label} @ {odds(l.bestOdds)}</span>
+                        <span className="shrink-0 tabular-nums">{l.label} @ {odds(l.executionOdds)}</span>
                       </li>
                     ))}
                   </ul>

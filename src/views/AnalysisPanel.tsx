@@ -3,19 +3,23 @@ import { X } from 'lucide-react';
 import { api } from '../api';
 import type { Analysis, Fixture, Pick, SelectionEval } from '../types';
 import { Badge, Card, Crest, ErrorBox, ProbRow, Spinner, Warnings } from '../components/ui';
+import { CalibrationNote } from './ValueView';
 import { kickoffDate, kickoffTime, money, odds, pct, signedPct } from '../lib/format';
 import type { BetsApi } from '../hooks/useBets';
 
 function toPick(a: Analysis, s: SelectionEval): Pick {
   return {
-    fixtureId: a.id, competitionCode: a.competitionCode, competition: a.competition, kickoff: a.kickoff,
-    home: a.home, away: a.away, homeCrest: a.homeCrest, awayCrest: a.awayCrest, selection: s.selection,
-    market: s.market, label: s.label, probability: s.probability, fairOdds: s.fairOdds, bestOdds: s.bestOdds,
-    bestBookmaker: s.bestBookmaker, referenceOdds: s.referenceOdds, bookmakerCount: s.bookmakerCount, ev: s.ev,
-    suggestedStake: s.suggestedStake, flatStake: s.flatStake, validated: s.isValue, reasons: s.reasons,
-    dataQuality: a.dataQuality
+    ...s,
+    fixtureId: a.id, matchId: a.matchId, competitionCode: a.competitionCode, competitionSlug: a.competitionSlug,
+    competition: a.competition, kickoff: a.kickoff, home: a.home, away: a.away, homeCrest: a.homeCrest, awayCrest: a.awayCrest,
+    oddsCapturedAt: a.odds.capturedAt, dataQuality: a.dataQuality
   };
 }
+
+const MARKET_ORDER = ['1x2', 'double_chance', 'over_under', 'btts', 'asian_handicap'] as const;
+const MARKET_LABEL: Record<string, string> = {
+  '1x2': '1X2', double_chance: 'Doble oportunidad', over_under: 'Más/Menos 2.5', btts: 'Ambos marcan', asian_handicap: 'Hándicap asiático'
+};
 
 export function AnalysisPanel({ fixture, date, onClose, bets }: { fixture: Fixture; date: string; onClose: () => void; bets: BetsApi }) {
   const [data, setData] = useState<Analysis | null>(null);
@@ -37,7 +41,7 @@ export function AnalysisPanel({ fixture, date, onClose, bets }: { fixture: Fixtu
     const stake = s.suggestedStake > 0 ? s.suggestedStake : s.flatStake;
     try {
       await bets.addPick(toPick(data, s), stake);
-      setSaved(s.selection);
+      setSaved(`${s.selection}:${s.line}`);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -73,9 +77,10 @@ export function AnalysisPanel({ fixture, date, onClose, bets }: { fixture: Fixtu
             {data.modelAvailable ? <Badge tone="accent">Modelo Dixon-Coles</Badge> : <Badge tone="warn">Sin modelo propio</Badge>}
             {data.dataQuality && <Badge tone={data.dataQuality === 'alta' ? 'good' : data.dataQuality === 'media' ? 'neutral' : 'warn'}>Datos: {data.dataQuality}</Badge>}
             {data.odds.available ? <Badge>{data.odds.bookmakers} casas</Badge> : <Badge tone="warn">Sin cuotas</Badge>}
-            <Badge tone={data.league.valueEnabled ? 'good' : 'neutral'} title="Según el backtest fuera de muestra">
-              {data.league.valueEnabled ? 'Liga con ventaja validada' : 'Liga sin ventaja validada'}
+            <Badge tone="neutral" title="Casa cuya cuota se usa para calcular el EV">
+              Ejecución: {data.odds.executionMode === 'fixed' ? data.odds.executionBookmaker : 'mejor cuota no atípica'}
             </Badge>
+            {data.bestValue ? <Badge tone="good">Apuesta con valor</Badge> : <Badge tone="neutral">Sin recomendación</Badge>}
           </div>
 
           {data.xg && (
@@ -88,60 +93,91 @@ export function AnalysisPanel({ fixture, date, onClose, bets }: { fixture: Fixtu
 
           <div className="space-y-3">
             <div className="text-xs text-muted">
-              Probabilidad final = {Math.round(data.weights.w1x2 * 100)}% modelo + {100 - Math.round(data.weights.w1x2 * 100)}% mercado (1X2), peso aprendido en el backtest.
+              Barra = probabilidad calibrada (lo que históricamente ha pasado cuando el modelo dijo eso). Debajo: modelo original y mercado sin margen.
             </div>
-            <ProbRow label="Gana local" model={data.probabilities.model?.home} market={data.probabilities.market?.home} final={data.probabilities.final.home} />
-            <ProbRow label="Empate" model={data.probabilities.model?.draw} market={data.probabilities.market?.draw} final={data.probabilities.final.draw} />
-            <ProbRow label="Gana visitante" model={data.probabilities.model?.away} market={data.probabilities.market?.away} final={data.probabilities.final.away} />
-            <ProbRow label="Más de 2.5 goles" model={data.probabilities.model?.over25} market={data.probabilities.market?.over25} final={data.probabilities.final.over25} />
+            <ProbRow label="Gana local" model={data.probabilities.model?.home} market={data.probabilities.market?.home} final={data.probabilities.calibrated?.home ?? null} />
+            <ProbRow label="Empate" model={data.probabilities.model?.draw} market={data.probabilities.market?.draw} final={data.probabilities.calibrated?.draw ?? null} />
+            <ProbRow label="Gana visitante" model={data.probabilities.model?.away} market={data.probabilities.market?.away} final={data.probabilities.calibrated?.away ?? null} />
+            <ProbRow label="Más de 2.5 goles" model={data.probabilities.model?.over25} market={data.probabilities.market?.over25} final={data.probabilities.calibrated?.over25 ?? null} />
+            <ProbRow label="Ambos marcan" model={data.probabilities.model?.btts_yes} market={data.probabilities.market?.btts_yes} final={data.probabilities.calibrated?.btts_yes ?? null} />
           </div>
 
           {data.selections.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px] text-sm">
-                <thead>
-                  <tr className="border-b border-line text-left text-[11px] uppercase text-muted">
-                    <th className="py-2 font-medium">Mercado</th>
-                    <th className="whitespace-nowrap py-2.5 pl-4 text-right font-medium">Prob.</th>
-                    <th className="whitespace-nowrap py-2.5 pl-4 text-right font-medium">Cuota justa</th>
-                    <th className="whitespace-nowrap py-2.5 pl-4 text-right font-medium">Mejor cuota</th>
-                    <th className="whitespace-nowrap py-2.5 pl-4 text-right font-medium">EV</th>
-                    <th className="py-2 pl-3 font-medium">Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.selections.map(s => (
-                    <tr key={s.selection} className="border-b border-line/60 align-top">
-                      <td className="whitespace-nowrap py-2.5 pr-2">{s.label}</td>
-                      <td className="whitespace-nowrap py-2.5 pl-4 text-right tabular-nums">{pct(s.probability)}</td>
-                      <td className="whitespace-nowrap py-2.5 pl-4 text-right tabular-nums">{odds(s.fairOdds)}</td>
-                      <td className="whitespace-nowrap py-2.5 pl-4 text-right tabular-nums">
-                        {odds(s.bestOdds)}
-                        <div className="text-[10px] text-muted">{s.bestBookmaker}</div>
-                      </td>
-                      <td className={`whitespace-nowrap py-2.5 pl-4 text-right tabular-nums ${s.ev > 0 ? 'text-good' : 'text-muted'}`}>{signedPct(s.ev)}</td>
-                      <td className="py-2 pl-3">
-                        {s.isValue ? (
-                          <div className="space-y-1">
-                            <Badge tone="good">Valor</Badge>
-                            <div className="text-[11px] text-muted">Stake: {money(s.suggestedStake, data.currency)}</div>
-                          </div>
-                        ) : (
-                          <div className="text-[11px] text-muted">{s.reasons.join(' · ')}</div>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => save(s)}
-                          disabled={saved === s.selection}
-                          className="mt-1 text-[11px] text-accent hover:underline disabled:text-muted"
-                        >
-                          {saved === s.selection ? 'Guardada' : 'Simular apuesta'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-4">
+              {MARKET_ORDER.map(mk => {
+                const rows = data.selections.filter(s => s.market === mk);
+                if (!rows.length) return null;
+                return (
+                  <div key={mk}>
+                    <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">{MARKET_LABEL[mk]}</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[640px] text-sm">
+                        <thead>
+                          <tr className="border-b border-line text-left text-[11px] uppercase text-muted">
+                            <th className="py-2 font-medium">Selección</th>
+                            <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Calibrada</th>
+                            <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Mercado</th>
+                            <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Cuota</th>
+                            <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Mín.</th>
+                            <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">EV</th>
+                            <th className="py-2 pl-3 font-medium">Decisión</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map(s => {
+                            const key = `${s.selection}:${s.line}`;
+                            return (
+                              <tr key={key} className="border-b border-line/60 align-top">
+                                <td className="py-2.5 pr-2">
+                                  <div className="whitespace-nowrap">{s.label}</div>
+                                  {s.calibration?.message && s.selection !== 'ah_home' && s.selection !== 'ah_away' && (
+                                    <details className="mt-1 text-[11px] text-muted">
+                                      <summary className="cursor-pointer select-none">Calibración</summary>
+                                      <div className="mt-1 max-w-xs"><CalibrationNote message={s.calibration.message} /></div>
+                                    </details>
+                                  )}
+                                </td>
+                                <td className="whitespace-nowrap py-2.5 pl-3 text-right tabular-nums">
+                                  {pct(s.calibratedProbability)}
+                                  <div className="text-[10px] text-muted">modelo {pct(s.modelProbability)}</div>
+                                  {s.pushProbability ? <div className="text-[10px] text-muted">nula {pct(s.pushProbability)}</div> : null}
+                                </td>
+                                <td className="whitespace-nowrap py-2.5 pl-3 text-right tabular-nums">
+                                  {pct(s.marketProbability)}
+                                  <div className={`text-[10px] ${s.marketGap != null && Math.abs(s.marketGap) > 0.1 ? 'text-warn' : 'text-muted'}`}>dif. {signedPct(s.marketGap)}</div>
+                                </td>
+                                <td className="whitespace-nowrap py-2.5 pl-3 text-right tabular-nums">
+                                  {odds(s.executionOdds)}
+                                  <div className="max-w-[90px] truncate text-[10px] text-muted">{s.executionBookmaker}</div>
+                                </td>
+                                <td className="whitespace-nowrap py-2.5 pl-3 text-right tabular-nums text-muted">{odds(s.minimumOdds)}</td>
+                                <td className={`whitespace-nowrap py-2.5 pl-3 text-right tabular-nums ${s.ev > 0 ? 'text-good' : 'text-muted'}`}>{signedPct(s.ev)}</td>
+                                <td className="py-2.5 pl-3">
+                                  {s.recommended ? (
+                                    <div className="space-y-1">
+                                      <Badge tone="good">{s.reason}</Badge>
+                                      <div className="text-[11px] text-muted">Stake: {money(s.suggestedStake, data.currency)}</div>
+                                      <button type="button" onClick={() => save(s)} disabled={saved === key}
+                                        className="text-[11px] text-accent hover:underline disabled:text-muted">
+                                        {saved === key ? 'Guardada' : 'Registrar en Mis apuestas'}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="max-w-[220px] text-[11px] text-muted">{s.reason}</div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })}
+              <p className="text-[11px] text-muted">
+                EV = probabilidad calibrada × cuota − 1. «Mín.» es la cuota mínima para alcanzar el EV exigido.
+              </p>
             </div>
           )}
 

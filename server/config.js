@@ -37,12 +37,46 @@ export const config = {
     apiKey: process.env.ODDS_API_KEY || process.env.THE_ODDS_API_KEY || '',
     baseUrl: process.env.ODDS_API_BASE_URL || 'https://api.the-odds-api.com/v4',
     regions: process.env.ODDS_REGIONS || 'eu',
-    cacheMinutes: num('ODDS_CACHE_MINUTES', 20),
+    // Con 2 competiciones y 3 mercados cada llamada cuesta 3 créditos: 60 min de caché por defecto.
+    cacheMinutes: num('ODDS_CACHE_MINUTES', 60),  // en Render se recomienda 240 con el plan gratuito
+    markets: process.env.ODDS_MARKETS || 'h2h,totals,spreads',
+    // Mercados por evento (cuestan créditos por partido). Vacío = desactivados.
+    extraMarkets: process.env.ODDS_EXTRA_MARKETS ?? 'btts,double_chance',
+    extrasCacheMinutes: num('ODDS_EXTRAS_CACHE_MINUTES', 720),
+    extrasHours: num('ODDS_EXTRAS_HOURS', 30),
+    extrasDailyBudget: num('ODDS_EXTRAS_DAILY_BUDGET', 4),
     // Créditos que nunca se gastan (reserva). The Odds API devuelve los restantes en cada respuesta.
-    reserveCredits: num('ODDS_RESERVE_CREDITS', 40),
-    dailyCreditBudget: num('ODDS_DAILY_CREDIT_BUDGET', 30),
+    reserveCredits: num('ODDS_RESERVE_CREDITS', 20),
+    // Plan gratuito: 500 créditos/mes ≈ 16 al día. Parte se reserva para las cuotas de cierre (CLV).
+    dailyCreditBudget: num('ODDS_DAILY_CREDIT_BUDGET', 16),
+    closingReserveCredits: num('ODDS_CLOSING_RESERVE_CREDITS', 6),
     preferredBookmaker: process.env.PREFERRED_BOOKMAKER || ''
   },
+
+  /**
+   * Casa de ejecución: la cuota que REALMENTE puedes tomar. Si se deja vacío se
+   * usa la mejor cuota no atípica entre las casas disponibles. Para fijar una
+   * casa usa su nombre o clave de The Odds API (p. ej. "Pinnacle", "betsson").
+   */
+  execution: {
+    bookmaker: process.env.EXECUTION_BOOKMAKER || process.env.PREFERRED_BOOKMAKER || ''
+  },
+
+  valueRules: {
+    minEv: num('VALUE_MIN_EV', 0.05),
+    maxMarketGap: num('VALUE_MAX_MARKET_GAP', 0.10),
+    minOdds: num('VALUE_MIN_ODDS', 1.5),
+    maxOdds: num('VALUE_MAX_ODDS', 4.0),
+    minBookmakers: num('VALUE_MIN_BOOKMAKERS', 3),
+    maxBetsPerJornada: num('VALUE_MAX_BETS_PER_JORNADA', 3)
+  },
+
+  calibration: {
+    method: process.env.CALIBRATION_METHOD || 'auto' // auto | isotonic | platt
+  },
+
+  /** paper = simulación (sin dinero real). Recomendado 30–60 días antes de apostar dinero. */
+  tradingMode: process.env.TRADING_MODE === 'live' ? 'live' : 'paper',
 
   bigBalls: {
     apiKey: process.env.BIGBALLS_KEY || ''
@@ -62,7 +96,10 @@ export const config = {
   jobs: {
     enabled: bool('ENABLE_JOBS', true),
     settleEveryMinutes: num('SETTLE_EVERY_MINUTES', 60),
-    trackClosingOdds: bool('TRACK_CLOSING_ODDS', false)
+    // Genera y registra señales automáticamente (paper trading).
+    scanEveryMinutes: num('SIGNAL_SCAN_EVERY_MINUTES', 120),
+    // Cuota de cierre: imprescindible para medir CLV. Activado por defecto en v10.
+    trackClosingOdds: bool('TRACK_CLOSING_ODDS', true)
   }
 };
 
@@ -78,6 +115,12 @@ export function publicConfig() {
     kellyFraction: config.bankroll.kellyFraction,
     maxStakePct: config.bankroll.maxStakePct,
     oddsCacheMinutes: config.odds.cacheMinutes,
-    trackClosingOdds: config.jobs.trackClosingOdds
+    oddsMarkets: config.odds.markets,
+    oddsExtraMarkets: config.odds.extraMarkets,
+    trackClosingOdds: config.jobs.trackClosingOdds,
+    executionBookmaker: config.execution.bookmaker || null,
+    valueRules: config.valueRules,
+    tradingMode: config.tradingMode,
+    calibrationMethod: config.calibration.method
   };
 }

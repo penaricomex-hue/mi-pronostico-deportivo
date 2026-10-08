@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { MODEL_VERSION, MODEL_NAME } from '../version.js';
 import { publicConfig } from '../config.js';
 import { ALL_COMPETITIONS, COMPETITION_NAMES } from '../services/analysis.js';
+import { ACTIVE_COMPETITIONS, DISABLED_COMPETITIONS } from '../competitions.js';
 import { collectValuePicks, buildParlays } from '../services/picks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,7 +15,12 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function parseCommon(req) {
   const comp = String(req.query.competition || '').trim().toUpperCase();
-  const competition = ALL_COMPETITIONS.includes(comp) ? comp : null;
+  if (comp && !ALL_COMPETITIONS.includes(comp)) {
+    const err = new Error('Competición desactivada: MK Bets v10 solo trabaja con LaLiga EA Sports y UEFA Champions League.');
+    err.status = 400;
+    throw err;
+  }
+  const competition = comp || null;
   const tzRaw = Number(req.query.tz);
   const tzOffset = Number.isFinite(tzRaw) && Math.abs(tzRaw) <= 840 ? tzRaw : 0;
   const dateRaw = String(req.query.date || '').trim();
@@ -41,7 +47,7 @@ function loadReport() {
   return reportCache;
 }
 
-export function createApiRouter({ analysis, bets, ratings, footballData, odds, store, teams, bankroll }) {
+export function createApiRouter({ analysis, bets, signals, calibration, ratings, footballData, odds, store, teams, bankroll }) {
   const r = express.Router();
 
   r.get('/status', wrap(async (_req, res) => {
@@ -53,7 +59,11 @@ export function createApiRouter({ analysis, bets, ratings, footballData, odds, s
       config: publicConfig(),
       persistentStore: store.persistent,
       competitions: COMPETITION_NAMES,
+      activeCompetitions: ACTIVE_COMPETITIONS,
+      disabledCompetitions: DISABLED_COMPETITIONS,
       model: ratings.summary(),
+      calibration: calibration ? calibration.summary() : null,
+      valueRules: analysis.engine?.rules || null,
       providers: {
         footballData: footballData.stats(),
         oddsApi: await odds.quotaStatus()
@@ -76,24 +86,30 @@ export function createApiRouter({ analysis, bets, ratings, footballData, odds, s
     if (!id && (!home || !away)) return res.status(400).json({ ok: false, error: 'Indica id o home y away.' });
     const fixture = await analysis.findFixture({ id, date, competition, tzOffset, home, away });
     if (!fixture) return res.status(404).json({ ok: false, error: 'No se encontró el partido en esa fecha.' });
-    const result = await analysis.analyzeFixture(fixture);
+    let result = await analysis.analyzeFixture(fixture);
+    if (signals) [result] = await signals.applyJornadaCap([result]);
     res.json({ ok: true, modelVersion: MODEL_VERSION, analysis: result });
   }));
 
   r.get('/value-bets', wrap(async (req, res) => {
     const { competition, tzOffset, date } = parseCommon(req);
     const days = Math.min(5, Math.max(1, Number(req.query.days) || 3));
-    const includeUnvalidated = req.query.includeUnvalidated === 'true';
-    const { analyses, warnings } = await analysis.analyzeRange({ fromDate: date, days, competition, tzOffset });
-    const picks = collectValuePicks(analyses, { includeUnvalidated });
+    const includeNearMisses = req.query.includeNearMisses === 'true' || req.query.includeUnvalidated === 'true';
+    const { analyses: raw, warnings } = await analysis.analyzeRange({ fromDate: date, days, competition, tzOffset, withInfo: false });
+    const analyses = signals ? await signals.applyJornadaCap(raw) : raw;
+    // Paper trading: cada recomendación queda registrada con la cuota exacta del momento.
+    const recorded = signals ? (await signals.recordFromAnalyses(analyses).catch(() => ({ recorded: 0 }))).recorded : 0;
+    const picks = collectValuePicks(analyses, { includeNearMisses });
     res.json({
       ok: true,
       modelVersion: MODEL_VERSION,
       analyzed: analyses.length,
       withOdds: analyses.filter(a => a.odds.available).length,
-      picks: picks.validated,
-      unvalidatedPicks: picks.unvalidated,
-      leagues: ratings.summary().leagues,
+      picks: picks.recommended,
+      nearMisses: picks.nearMisses,
+      recorded,
+      rules: analysis.engine.rules,
+      execution: { bookmaker: analyses[0]?.odds?.executionBookmaker || null, mode: analyses[0]?.odds?.executionMode || null },
       warnings
     });
   }));
@@ -101,10 +117,9 @@ export function createApiRouter({ analysis, bets, ratings, footballData, odds, s
   r.get('/parlay', wrap(async (req, res) => {
     const { competition, tzOffset, date } = parseCommon(req);
     const legs = Math.min(4, Math.max(2, Number(req.query.legs) || 3));
-    const includeUnvalidated = req.query.includeUnvalidated === 'true';
-    const { analyses, warnings } = await analysis.analyzeRange({ fromDate: date, days: 3, competition, tzOffset });
-    const picks = collectValuePicks(analyses, { includeUnvalidated });
-    const pool = includeUnvalidated ? [...picks.validated, ...picks.unvalidated] : picks.validated;
+    const { analyses: raw, warnings } = await analysis.analyzeRange({ fromDate: date, days: 3, competition, tzOffset });
+    const analyses = signals ? await signals.applyJornadaCap(raw) : raw;
+    const pool = collectValuePicks(analyses).recommended;
     res.json({
       ok: true,
       modelVersion: MODEL_VERSION,
@@ -141,18 +156,41 @@ export function createApiRouter({ analysis, bets, ratings, footballData, odds, s
     });
   }));
 
+  // Señales del ValueBettingEngine (paper trading) y Performance Lab
+  r.get('/signals', wrap(async (req, res) => {
+    if (!signals) return res.status(503).json({ ok: false, error: 'Señales no disponibles.' });
+    const days = Math.min(365, Math.max(1, Number(req.query.days) || 90));
+    res.json({ ok: true, signals: await signals.list({ days, status: String(req.query.status || '') }) });
+  }));
+  r.get('/performance', wrap(async (req, res) => {
+    if (!signals) return res.status(503).json({ ok: false, error: 'Panel no disponible.' });
+    res.json({ ok: true, ...(await signals.performance({ days: Number(req.query.days) || 30 })) });
+  }));
+  r.post('/signals/scan', wrap(async (_req, res) => {
+    res.json({ ok: true, ...(await signals.scan()) });
+  }));
+  r.post('/signals/settle', wrap(async (_req, res) => {
+    res.json({ ok: true, ...(await signals.settle()) });
+  }));
+  r.get('/calibration', wrap(async (_req, res) => {
+    if (!calibration) return res.status(503).json({ ok: false, error: 'Calibración no disponible.' });
+    res.json({ ok: true, ...calibration.summary() });
+  }));
+
   r.get('/backtest', wrap(async (req, res) => {
     const report = loadReport();
     if (!report) return res.status(404).json({ ok: false, error: 'No hay informe. Ejecuta npm run backtest.' });
     const { competition } = parseCommon(req);
+    const active = Object.fromEntries(Object.entries(report.leagues || {}).filter(([k]) => ALL_COMPETITIONS.includes(k)));
     if (competition) {
-      const lg = report.leagues[competition];
-      if (!lg) return res.status(404).json({ ok: false, error: 'Esta competición no tiene backtest (sin historial con cuotas).' });
-      return res.json({ ok: true, modelVersion: report.modelVersion, generatedAt: report.generatedAt, competition, ...lg });
+      const lg = active[competition];
+      if (!lg) return res.status(404).json({ ok: false, error: 'Esta competición no tiene backtest.' });
+      return res.json({ ok: true, modelVersion: report.modelVersion, generatedAt: report.generatedAt, code: competition, ...lg });
     }
-    const leagues = Object.fromEntries(Object.entries(report.leagues).map(([k, v]) => [k, {
-      xi: v.xi, weights: v.weights, valueEnabled: v.valueEnabled, trainSeasons: v.trainSeasons, testSeasons: v.testSeasons,
-      test: { matches: v.test.matches, metrics: v.test.metrics, verdicts: v.test.verdicts, betting: { ...v.test.betting, recentBets: undefined } }
+    const leagues = Object.fromEntries(Object.entries(active).map(([k, v]) => [k, {
+      competition: v.competition, xi: v.xi, trainSeasons: v.trainSeasons, testSeasons: v.testSeasons,
+      test: { matches: v.test.matches, metrics: v.test.metrics, verdicts: v.test.verdicts },
+      betting: v.betting ? { ...v.betting, recentBets: undefined } : null
     }]));
     res.json({ ok: true, modelVersion: report.modelVersion, generatedAt: report.generatedAt, leagues });
   }));

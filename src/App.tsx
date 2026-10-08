@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, BarChart3, Calendar, Layers, ShieldCheck, Settings, Wallet } from 'lucide-react';
+import { Activity, BarChart3, Calendar, Gauge, Layers, ShieldCheck, Settings, Wallet } from 'lucide-react';
 import { api } from './api';
 import type { Status } from './types';
 import { useBets } from './hooks/useBets';
@@ -10,12 +10,14 @@ import { ParlayView } from './views/ParlayView';
 import { BacktestView } from './views/BacktestView';
 import { BetsView } from './views/BetsView';
 import { StatusView } from './views/StatusView';
+import { PerformanceView } from './views/PerformanceView';
 
-type Tab = 'matches' | 'value' | 'parlay' | 'bets' | 'backtest' | 'status';
+type Tab = 'matches' | 'value' | 'performance' | 'parlay' | 'bets' | 'backtest' | 'status';
 
 const TABS: Array<{ id: Tab; label: string; short: string; icon: typeof Calendar; title: string; subtitle: string }> = [
   { id: 'matches', label: 'Partidos', short: 'Partidos', icon: Calendar, title: 'Partidos', subtitle: 'Elige un partido para ver probabilidades, cuotas y valor.' },
-  { id: 'value', label: 'Valor', short: 'Valor', icon: Activity, title: 'Apuestas de valor', subtitle: 'Cuotas que pagan más de lo que dice la probabilidad.' },
+  { id: 'value', label: 'Valor', short: 'Valor', icon: Activity, title: 'Apuestas de valor', subtitle: 'EV ≥ 5%, cerca del mercado, cuotas 1.50–4.00 y máximo 3 por jornada.' },
+  { id: 'performance', label: 'Rendimiento', short: 'Rendim.', icon: Gauge, title: 'Rendimiento — LaLiga y Champions', subtitle: 'Señales registradas, ROI, yield, CLV y calibración.' },
   { id: 'parlay', label: 'Combinadas', short: 'Combis', icon: Layers, title: 'Combinadas', subtitle: 'Selecciones de valor de partidos distintos.' },
   { id: 'bets', label: 'Mis apuestas', short: 'Apuestas', icon: Wallet, title: 'Mis apuestas', subtitle: 'Tu registro simulado, resultados y CLV.' },
   { id: 'backtest', label: 'Backtest', short: 'Backtest', icon: BarChart3, title: 'Backtest', subtitle: 'Cómo le habría ido al modelo con partidos reales.' },
@@ -43,16 +45,16 @@ function Hero({ status, compact }: { status: Status | null; compact: boolean }) 
             <LogoMark size={compact ? 48 : 72} className="shrink-0 drop-shadow-[0_8px_24px_rgba(255,160,70,0.35)]" />
             <div className="min-w-0">
               <h1><Wordmark className={compact ? 'text-4xl' : 'text-5xl md:text-6xl'} /></h1>
-              <p className="mt-1.5 text-[13px] text-text/80 md:text-sm">Pronósticos de fútbol con modelo estadístico y cuotas reales</p>
+              <p className="mt-1.5 text-[13px] text-text/80 md:text-sm">LaLiga y Champions · modelo calibrado y cuotas reales</p>
             </div>
           </div>
           {!compact && (
             <div className="mt-6 flex flex-wrap gap-2 text-[12px]">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">
-                <ShieldCheck className="h-3.5 w-3.5 text-accent" aria-hidden /> Modelo {status?.modelVersion || 'V9'}
+                <ShieldCheck className="h-3.5 w-3.5 text-accent" aria-hidden /> Modelo {status?.modelVersion || 'V10'}
               </span>
-              <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">5 ligas · 7 competiciones</span>
-              <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">Cuotas de +10 casas</span>
+              <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">LaLiga EA Sports · UEFA Champions League</span>
+              <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">Paper trading con CLV</span>
             </div>
           )}
         </div>
@@ -115,6 +117,7 @@ export default function App() {
         <div key={tab} className="fade-in">
           {tab === 'matches' && <MatchesView bets={bets} />}
           {tab === 'value' && <ValueView bets={bets} currency={currency} />}
+          {tab === 'performance' && <PerformanceView />}
           {tab === 'parlay' && <ParlayView bets={bets} currency={currency} />}
           {tab === 'bets' && <BetsView bets={bets} currency={currency} />}
           {tab === 'backtest' && <BacktestView />}
@@ -125,14 +128,14 @@ export default function App() {
 
       {/* Barra inferior en móvil */}
       <nav className="safe-bottom safe-x fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.08] bg-ink/85 backdrop-blur-xl md:hidden" aria-label="Secciones">
-        <ul className="grid grid-cols-6">
+        <ul className="grid grid-cols-7">
           {TABS.map(t => {
             const Icon = t.icon;
             const active = tab === t.id;
             return (
               <li key={t.id}>
                 <button type="button" onClick={() => setTab(t.id)} aria-current={active ? 'page' : undefined}
-                  className={`relative flex w-full flex-col items-center gap-1 px-1 pb-2.5 pt-3 text-[10.5px] font-medium ${active ? 'text-accent' : 'text-muted'}`}>
+                  className={`relative flex w-full flex-col items-center gap-1 px-1 pb-2.5 pt-3 text-[10px] font-medium ${active ? 'text-accent' : 'text-muted'}`}>
                   {active && <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-accent" aria-hidden />}
                   <span className="relative">
                     <Icon className="h-5 w-5" aria-hidden />

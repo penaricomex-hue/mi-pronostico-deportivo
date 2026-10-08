@@ -8,7 +8,10 @@
 import { fetchJson, HttpError } from '../lib/http.js';
 import { createRateLimiter } from '../lib/rateLimiter.js';
 
-export const FOOTBALL_DATA_COMPETITIONS = ['PL', 'PD', 'SA', 'BL1', 'FL1', 'CL'];
+import { ACTIVE_CODES } from '../competitions.js';
+
+/** v10: solo LaLiga (PD) y Champions (CL). */
+export const FOOTBALL_DATA_COMPETITIONS = ACTIVE_CODES;
 
 export function createFootballDataProvider({ token, baseUrl, requestsPerMinute = 10, store, logger = console, fetchImpl = fetch }) {
   const limiter = createRateLimiter({ limit: requestsPerMinute, windowMs: 60000 });
@@ -53,6 +56,13 @@ export function createFootballDataProvider({ token, baseUrl, requestsPerMinute =
     return Array.isArray(data?.matches) ? data.matches : [];
   }
 
+  /** Partidos terminados de una competición y temporada (para el modelo de Champions). */
+  async function getCompetitionMatches(code, { season = null, status = 'FINISHED', ttlSeconds = 6 * 3600 } = {}) {
+    const q = [status ? `status=${status}` : null, season ? `season=${season}` : null].filter(Boolean).join('&');
+    const data = await request(`/competitions/${encodeURIComponent(code)}/matches${q ? `?${q}` : ''}`, { ttlSeconds });
+    return Array.isArray(data?.matches) ? data.matches : [];
+  }
+
   async function getMatch(id, { ttlSeconds = 1800 } = {}) {
     const data = await request(`/matches/${encodeURIComponent(id)}`, { ttlSeconds });
     return data?.match || data || null;
@@ -62,6 +72,7 @@ export function createFootballDataProvider({ token, baseUrl, requestsPerMinute =
     configured: Boolean(token),
     getMatches,
     getMatch,
+    getCompetitionMatches,
     stats: () => ({ ...stats, limiter: limiter.stats() })
   };
 }

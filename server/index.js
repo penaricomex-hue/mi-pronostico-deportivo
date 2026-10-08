@@ -10,6 +10,10 @@ import { createHistoryProvider } from './providers/history.js';
 import { createRatingsService } from './services/ratings.js';
 import { createAnalysisService } from './services/analysis.js';
 import { createBetsService } from './services/bets.js';
+import { createCalibrationService } from './services/calibration.js';
+import { createIngestService } from './services/ingest.js';
+import { createSignalsService } from './services/signals.js';
+import { ACTIVE_CODES } from './competitions.js';
 import { createApp } from './app.js';
 
 const logger = console;
@@ -31,12 +35,24 @@ const footballData = createFootballDataProvider({ ...config.footballData, store,
 const odds = createOddsProvider({ ...config.odds, store, logger });
 const bigBalls = createBigBallsProvider({ apiKey: config.bigBalls.apiKey, store, teams, logger });
 const history = createHistoryProvider({ store, logger });
-const ratings = createRatingsService({ history, logger });
-const analysis = createAnalysisService({ footballData, odds, bigBalls, ratings, teams, store, bankroll: config.bankroll, logger });
+const ratings = createRatingsService({ history, footballData, teams, logger });
+const dbPool = store.persistent ? pool : null;
+const calibration = createCalibrationService({ pool: dbPool, method: config.calibration.method, logger });
+const ingest = createIngestService({ pool: dbPool, logger, modelVersion: MODEL_VERSION });
+const analysis = createAnalysisService({
+  footballData, odds, bigBalls, ratings, teams, store, bankroll: config.bankroll, calibration, ingest,
+  executionBookmaker: config.execution.bookmaker, valueRules: config.valueRules, logger
+});
 const bets = createBetsService({ pool, footballData, odds, analysis, teams, bankroll: config.bankroll, logger });
+const signals = createSignalsService({
+  pool: dbPool, analysis, footballData, odds, teams, ingest, calibration, bankroll: config.bankroll,
+  mode: config.tradingMode, modelVersion: MODEL_VERSION, logger
+});
+
+calibration.refit().catch(err => logger.warn(`[calibration] ${err.message}`));
 
 const app = createApp(
-  { analysis, bets, ratings, footballData, odds, store, teams, bankroll: config.bankroll },
+  { analysis, bets, signals, calibration, ratings, footballData, odds, store, teams, bankroll: config.bankroll },
   {
     auth: config.auth,
     production: config.auth.required,
@@ -60,23 +76,44 @@ app.listen(config.port, '0.0.0.0', () => {
 
 // Tareas periódicas (en Render free solo corren mientras el servicio está despierto)
 if (config.jobs.enabled && pool) {
-  const settleMs = config.jobs.settleEveryMinutes * 60000;
-  setInterval(() => {
+  const runSettle = () => {
     bets.autoSettle()
-      .then(r => r.settled && logger.log(`[jobs] ${r.settled} apuestas liquidadas`))
+      .then(r => r.settled && logger.log(`[jobs] ${r.settled} apuestas manuales liquidadas`))
       .catch(err => logger.warn(`[jobs] autoSettle: ${err.message}`));
-  }, settleMs).unref();
+    // Señales + predicciones; si se resolvió alguna predicción, se recalibra (aprendizaje por jornada)
+    return signals.settle()
+      .then(r => (r.settled || r.predictions) && logger.log(`[jobs] ${r.settled} señales y ${r.predictions} predicciones liquidadas${r.recalibrated ? ' · calibración actualizada' : ''}`))
+      .catch(err => logger.warn(`[jobs] settle señales: ${err.message}`));
+  };
+  // Escaneo de valor: registra señales nuevas (paper trading) con la cuota del momento
+  const runScan = () => signals.scan()
+    .then(r => logger.log(`[jobs] Escaneo: ${r.analyzed} partidos analizados · ${r.recorded} señales nuevas`))
+    .catch(err => logger.warn(`[jobs] scan: ${err.message}`));
+  const runClosing = () => {
+    bets.captureClosingOdds().catch(() => {});
+    return signals.captureClosing()
+      .then(r => r.matches && logger.log(`[jobs] Cierre guardado en ${r.matches} partidos · CLV de ${r.signals} señales`))
+      .catch(err => logger.warn(`[jobs] closing: ${err.message}`));
+  };
 
-  if (config.jobs.trackClosingOdds) {
-    setInterval(() => {
-      bets.captureClosingOdds()
-        .then(r => r.captured && logger.log(`[jobs] ${r.captured} cuotas de cierre guardadas`))
-        .catch(err => logger.warn(`[jobs] closingOdds: ${err.message}`));
-    }, 10 * 60000).unref();
-  }
+  setInterval(runSettle, config.jobs.settleEveryMinutes * 60000).unref();
+  setInterval(runScan, config.jobs.scanEveryMinutes * 60000).unref();
+  if (config.jobs.trackClosingOdds) setInterval(runClosing, 5 * 60000).unref();
 
-  setInterval(() => store.purgeExpired().catch(() => {}), 6 * 3600000).unref();
+  // Al arrancar (o al despertar en Render free) no esperar al primer intervalo
+  setTimeout(() => {
+    if (config.jobs.trackClosingOdds) runClosing();
+    runSettle().finally(() => setTimeout(runScan, 30000));
+  }, 45000).unref();
+
+  setInterval(() => {
+    store.purgeExpired().catch(() => {});
+    ingest.purgeOldSnapshots(30).catch(() => {});
+  }, 6 * 3600000).unref();
+
+  // Recalibración semanal de respaldo (además de la que ocurre tras cada liquidación)
+  setInterval(() => calibration.refit().catch(() => {}), 7 * 86400000).unref();
 }
 
-// Calentar los modelos de liga en segundo plano
-for (const lg of ['PL', 'PD', 'SA', 'BL1', 'FL1']) ratings.getRatings(lg).catch(() => {});
+// Calentar los modelos (solo LaLiga y Champions) en segundo plano
+for (const lg of ACTIVE_CODES) ratings.getRatings(lg).catch(() => {});

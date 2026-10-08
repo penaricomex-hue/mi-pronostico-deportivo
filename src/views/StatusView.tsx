@@ -34,6 +34,8 @@ export function StatusView({ status, error }: { status: Status | null; error: st
             <Flag ok={status.persistentStore} label="Caché persistente" />
             <Flag ok={status.config.bigBallsConfigured} label="Big Balls" />
             <Flag ok={status.config.trackClosingOdds} label="Cuota de cierre" />
+            <Badge tone="accent">Competiciones: {Object.values(status.activeCompetitions || {}).map(c => c.name).join(' · ') || 'LaLiga · Champions'}</Badge>
+            {status.disabledCompetitions && <Badge>Desactivadas (histórico conservado): {Object.keys(status.disabledCompetitions).join(', ')}</Badge>}
           </div>
           <div className="mt-3 grid gap-1 text-xs text-muted sm:grid-cols-2">
             <div>Modelo: {status.modelVersion} · {status.modelName}</div>
@@ -41,6 +43,20 @@ export function StatusView({ status, error }: { status: Status | null; error: st
             <div>The Odds API: {status.providers.oddsApi.remaining ?? '?'} créditos restantes · hoy {status.providers.oddsApi.todayUsed}/{status.providers.oddsApi.dailyBudget}</div>
             <div>football-data.org: {status.providers.footballData.calls} llamadas · {status.providers.footballData.limiter.usedInWindow}/{status.providers.footballData.limiter.limit} en el último minuto</div>
           </div>
+          {status.valueRules && (
+            <div className="mt-3 text-xs text-muted">
+              Motor de valor: EV ≥ {Math.round(status.valueRules.minEv * 100)}% · diferencia con el mercado ≤ {Math.round(status.valueRules.maxMarketGap * 100)} pts ·
+              cuotas {status.valueRules.minOdds.toFixed(2)}–{status.valueRules.maxOdds.toFixed(2)} · máx. {status.valueRules.maxBetsPerJornada} por jornada ·
+              ejecución: {(status.config as Record<string, unknown>).executionBookmaker as string || 'mejor cuota no atípica'} · modo {String((status.config as Record<string, unknown>).tradingMode || 'paper')}
+            </div>
+          )}
+          {status.calibration && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {Object.entries(status.calibration.maps).map(([k, m]) => (
+                <Badge key={k} title={`Ajustado ${new Date(m.fittedAt).toLocaleString('es-MX')}`}>{k}: {m.method} · {m.samples} obs. ({m.liveSamples} reales)</Badge>
+              ))}
+            </div>
+          )}
           {status.providers.oddsApi.blocked && <div className="mt-2 text-xs text-warn">{status.providers.oddsApi.blockedReason}</div>}
           {status.unresolvedTeams.length > 0 && (
             <div className="mt-2 text-xs text-warn">Equipos sin resolver (añadir a data/teams.json): {status.unresolvedTeams.join(', ')}</div>
