@@ -28,12 +28,13 @@ function PickCard({ p, currency, onSave, saved, nearMiss }: { p: Pick; currency:
       </div>
       <div className="mb-2 text-sm font-semibold text-accent">{p.label}</div>
       <div className="grid grid-cols-4 gap-2 text-center text-xs">
-        <div><div className="text-muted">Prob. calibrada</div><div className="font-semibold tabular-nums">{pct(p.calibratedProbability)}</div><div className="text-[10px] text-muted">modelo {pct(p.modelProbability)}</div></div>
+        <div><div className="text-muted">Prob. decisión</div><div className="font-semibold tabular-nums">{pct(p.probability)}</div><div className="text-[10px] text-muted">calibrada {pct(p.calibratedProbability)}</div></div>
         <div><div className="text-muted">Mercado</div><div className="font-semibold tabular-nums">{pct(p.marketProbability)}</div><div className="text-[10px] text-muted">dif. {signedPct(p.marketGap)}</div></div>
         <div><div className="text-muted">Cuota</div><div className="font-semibold tabular-nums">{odds(p.executionOdds)}</div><div className="truncate text-[10px] text-muted">{p.executionBookmaker}</div></div>
         <div><div className="text-muted">EV</div><div className={`font-semibold tabular-nums ${p.ev > 0 ? 'text-good' : 'text-muted'}`}>{signedPct(p.ev)}</div><div className="text-[10px] text-muted">mín. {odds(p.minimumOdds)}</div></div>
       </div>
       <p className={`mt-3 text-[11px] ${nearMiss ? 'text-warn' : 'text-good'}`}>{p.reason}</p>
+      {p.blend?.message && <p className="mt-2 text-[11px] text-muted">{p.blend.message}</p>}
       {p.calibration?.message && <div className="mt-2"><CalibrationNote message={p.calibration.message} /></div>}
       {!nearMiss && (
         <div className="mt-3 flex items-center justify-between text-xs">

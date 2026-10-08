@@ -12,6 +12,7 @@ import { kellyStake } from '../model/market.js';
 import { buildMarketBook } from '../model/marketBook.js';
 import { MARKETS, SELECTION_MARKET, FIXED_SELECTIONS, selectionLabel, ahSelectionProbability, expandProbabilities } from '../model/markets.js';
 import { createValueBettingEngine } from '../model/valueEngine.js';
+import { blendProbabilities, poolBinary, createBlendResolver, weightGroupFor } from '../model/blend.js';
 import { ACTIVE_CODES, COMPETITION_NAMES, isActiveCompetition, slugForCode, jornadaKey } from '../competitions.js';
 
 export { COMPETITION_NAMES };
@@ -38,9 +39,21 @@ function dataQuality(homeSample, awaySample) {
 
 export function createAnalysisService({
   footballData, odds, bigBalls, ratings, teams, store, bankroll, calibration, ingest = null,
-  executionBookmaker = '', valueRules = {}, logger = console
+  executionBookmaker = '', valueRules = {}, blend = null, logger = console
 }) {
   const engine = createValueBettingEngine(valueRules);
+  const blender = blend?.weightsFor ? blend : createBlendResolver(blend || {});
+
+  function blendInfo(weights, sel, calibratedP, blendedP, marketP) {
+    const w = weights[weightGroupFor(sel)];
+    if (blendedP == null || calibratedP == null) return null;
+    const pct = x => `${(100 * x).toFixed(1)}%`;
+    return {
+      modelWeight: w,
+      probability: blendedP,
+      message: `Mezcla modelo ${Math.round(w * 100)}% + mercado ${Math.round((1 - w) * 100)}%: modelo calibrado ${pct(calibratedP)}, mercado ${marketP != null ? pct(marketP) : '—'} → probabilidad de decisión ${pct(blendedP)}.`
+    };
+  }
 
   /** Partidos de un día local (solo competiciones activas). */
   async function getFixtures({ date, competition = null, tzOffset = 0 }) {
@@ -204,6 +217,8 @@ export function createAnalysisService({
     const jk = jornadaKey(slug, fixture.kickoff);
     const names = { home: fixture.home, away: fixture.away };
     const selections = [];
+    const weights = blender.weightsFor(slug);
+    const blended = market.available && cal ? blendProbabilities(cal, market.fair, weights) : null;
 
     if (market.available) {
       for (const sel of FIXED_SELECTIONS) {
@@ -211,10 +226,13 @@ export function createAnalysisService({
         if (!pr) continue;
         const raw = rawModel?.[sel] ?? null;
         const p = cal?.[sel] ?? null;
+        const pb = blended?.[sel] ?? null;
+        const pDecision = pb ?? p;
         const group = groupFor(sel);
         const ev = engine.evaluate({
           selection: sel,
           modelProbability: p,
+          decisionProbability: pb,
           marketProbability: market.fair[sel] ?? null,
           executionOdds: pr.odds,
           bookmakerCount: pr.fairCount,
@@ -228,9 +246,11 @@ export function createAnalysisService({
           label: selectionLabel(sel, null, names),
           modelProbability: raw,
           calibratedProbability: p,
-          probability: p,
+          blendedProbability: pb,
+          probability: pDecision,
           marketProbability: market.fair[sel] ?? null,
-          fairOdds: p > 0 ? 1 / p : null,
+          fairOdds: pDecision > 0 ? 1 / pDecision : null,
+          blend: blendInfo(weights, sel, p, pb, market.fair[sel] ?? null),
           executionOdds: pr.odds,
           executionBookmaker: pr.bookmaker,
           avgMarketOdds: pr.median,
@@ -246,10 +266,14 @@ export function createAnalysisService({
           const pr = market.ah.prices[sel];
           if (!pr) continue;
           const r = ahSelectionProbability(m.matrix, sel, market.ah.line);
+          const pMkt = market.ah.fair?.[sel] ?? null;
+          const pb = poolBinary(r.probability, pMkt, weights['1x2']);
+          const pDecision = pb ?? r.probability;
           const ev = engine.evaluate({
             selection: sel,
             modelProbability: r.probability,
-            marketProbability: market.ah.fair?.[sel] ?? null,
+            decisionProbability: pb,
+            marketProbability: pMkt,
             executionOdds: pr.odds,
             bookmakerCount: pr.fairCount,
             pushProbability: r.push,
@@ -262,10 +286,12 @@ export function createAnalysisService({
             label: selectionLabel(sel, market.ah.line, names),
             modelProbability: r.probability,
             calibratedProbability: r.probability,
-            probability: r.probability,
+            blendedProbability: pb,
+            probability: pDecision,
             pushProbability: r.push,
-            marketProbability: market.ah.fair?.[sel] ?? null,
-            fairOdds: r.probability > 0 ? 1 / r.probability : null,
+            marketProbability: pMkt,
+            fairOdds: pDecision > 0 ? 1 / pDecision : null,
+            blend: blendInfo(weights, sel, r.probability, pb, pMkt),
             executionOdds: pr.odds,
             executionBookmaker: pr.bookmaker,
             avgMarketOdds: pr.median,
@@ -376,5 +402,5 @@ export function createAnalysisService({
     return { analyses, warnings: [...new Set(warnings)] };
   }
 
-  return { getFixtures, findFixture, analyzeFixture, analyzeRange, getMarket, engine };
+  return { blender, getFixtures, findFixture, analyzeFixture, analyzeRange, getMarket, engine };
 }

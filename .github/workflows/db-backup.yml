@@ -1,0 +1,78 @@
+# Respaldo semanal de la base de datos (Neon) como artefacto de GitHub Actions.
+# El plan gratuito de Neon solo permite restaurar las últimas 6 horas; esto
+# protege las señales, evaluaciones, cuotas y calibración del seguimiento.
+#
+# Requiere el secreto NEON_DATABASE_URL (la misma cadena que DATABASE_URL en Render).
+# Se usa la conexión directa (sin "-pooler"), recomendada para pg_dump.
+# Restaurar:  pg_restore --no-owner --no-privileges --clean --if-exists -d "$DESTINO" mkbets.dump
+name: db-backup
+
+on:
+  schedule:
+    - cron: '30 9 * * 1'   # lunes 09:30 UTC (03:30 en Ciudad de México)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Volcado con pg_dump (PostgreSQL 18)
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::Falta el secreto NEON_DATABASE_URL en el repositorio."
+            exit 1
+          fi
+          URL="${DATABASE_URL/-pooler./.}"
+          mkdir -p backup
+          cat > backup/rows.sql <<'SQL'
+          SELECT relname, n_live_tup FROM pg_stat_user_tables
+           WHERE relname IN ('matches', 'bookmaker_odds', 'model_predictions', 'value_signals',
+                             'value_evaluations', 'calibration_maps', 'simulated_bets')
+           ORDER BY relname;
+          SQL
+          docker run --rm -e URL="$URL" -v "$PWD/backup:/out" postgres:18-alpine sh -ec '
+            pg_dump "$URL" --format=custom --compress=9 --no-owner --no-privileges --file=/out/mkbets.dump
+            pg_restore --list /out/mkbets.dump > /out/contents.txt
+            psql "$URL" -At -F " | " -f /out/rows.sql > /out/rows.txt
+            psql "$URL" -At -c "SELECT version()" > /out/server.txt
+          '
+          SIZE=$(du -h backup/mkbets.dump | cut -f1)
+          TABLES=$(grep -c "TABLE DATA" backup/contents.txt || true)
+          if [ "$TABLES" -lt 5 ]; then
+            echo "::error::El respaldo parece incompleto ($TABLES tablas con datos)."
+            exit 1
+          fi
+          echo "STAMP=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+          {
+            echo "## Respaldo de la base de datos"
+            echo ""
+            echo "- Tamaño: $SIZE · tablas con datos: $TABLES"
+            echo "- Servidor: $(cut -c1-60 backup/server.txt)"
+            echo ""
+            echo "| Tabla | Filas (aprox.) |"
+            echo "|---|---|"
+            sed 's/^/| /; s/$/ |/' backup/rows.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar artefacto (90 días)
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-backup-${{ env.STAMP }}
+          path: |
+            backup/mkbets.dump
+            backup/contents.txt
+            backup/rows.txt
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error

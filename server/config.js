@@ -75,6 +75,12 @@ export const config = {
     method: process.env.CALIBRATION_METHOD || 'auto' // auto | isotonic | platt
   },
 
+  /** Mezcla modelo + mercado para el EV (pesos ajustados en data/blend-weights.json). */
+  blend: {
+    enabled: process.env.BLEND_ENABLED !== 'false',
+    modelWeight: num('BLEND_MODEL_WEIGHT', null)
+  },
+
   /** paper = simulación (sin dinero real). Recomendado 30–60 días antes de apostar dinero. */
   tradingMode: process.env.TRADING_MODE === 'live' ? 'live' : 'paper',
 
@@ -121,6 +127,7 @@ export function publicConfig() {
     executionBookmaker: config.execution.bookmaker || null,
     valueRules: config.valueRules,
     tradingMode: config.tradingMode,
-    calibrationMethod: config.calibration.method
+    calibrationMethod: config.calibration.method,
+    blend: config.blend
   };
 }

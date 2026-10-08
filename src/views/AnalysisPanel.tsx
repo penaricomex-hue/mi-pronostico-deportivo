@@ -115,7 +115,7 @@ export function AnalysisPanel({ fixture, date, onClose, bets }: { fixture: Fixtu
                         <thead>
                           <tr className="border-b border-line text-left text-[11px] uppercase text-muted">
                             <th className="py-2 font-medium">Selección</th>
-                            <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Calibrada</th>
+                            <th className="whitespace-nowrap py-2 pl-3 text-right font-medium" title="Probabilidad de decisión: mezcla modelo + mercado">Prob.</th>
                             <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Mercado</th>
                             <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Cuota</th>
                             <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Mín.</th>
@@ -130,15 +130,17 @@ export function AnalysisPanel({ fixture, date, onClose, bets }: { fixture: Fixtu
                               <tr key={key} className="border-b border-line/60 align-top">
                                 <td className="py-2.5 pr-2">
                                   <div className="whitespace-nowrap">{s.label}</div>
-                                  {s.calibration?.message && s.selection !== 'ah_home' && s.selection !== 'ah_away' && (
+                                  {(s.blend?.message || (s.calibration?.message && s.selection !== 'ah_home' && s.selection !== 'ah_away')) && (
                                     <details className="mt-1 text-[11px] text-muted">
-                                      <summary className="cursor-pointer select-none">Calibración</summary>
-                                      <div className="mt-1 max-w-xs"><CalibrationNote message={s.calibration.message} /></div>
+                                      <summary className="cursor-pointer select-none">Calibración y mezcla</summary>
+                                      {s.calibration?.message && s.selection !== 'ah_home' && s.selection !== 'ah_away' && <div className="mt-1 max-w-xs"><CalibrationNote message={s.calibration.message} /></div>}
+                                      {s.blend?.message && <div className="mt-1 max-w-xs">{s.blend.message}</div>}
                                     </details>
                                   )}
                                 </td>
                                 <td className="whitespace-nowrap py-2.5 pl-3 text-right tabular-nums">
-                                  {pct(s.calibratedProbability)}
+                                  {pct(s.probability)}
+                                  <div className="text-[10px] text-muted">calibrada {pct(s.calibratedProbability)}</div>
                                   <div className="text-[10px] text-muted">modelo {pct(s.modelProbability)}</div>
                                   {s.pushProbability ? <div className="text-[10px] text-muted">nula {pct(s.pushProbability)}</div> : null}
                                 </td>

@@ -26,6 +26,7 @@ const generatedAt = new Date().toISOString();
 const reportFile = path.join(DATA_DIR, 'backtest-report.json');
 const paramsFile = path.join(DATA_DIR, 'model-params.json');
 const seedFile = path.join(DATA_DIR, 'calibration-seed.json');
+const weightsFile = path.join(DATA_DIR, 'blend-weights.json');
 
 const readJson = (f, fallback) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fallback; } };
 const report = { modelVersion: MODEL_VERSION, generatedAt, leagues: {} };
@@ -35,6 +36,8 @@ const params = { modelVersion: MODEL_VERSION, generatedAt, leagues: {} };
 const prevParams = readJson(paramsFile, { leagues: {} });
 for (const k of Object.keys(ACTIVE_COMPETITIONS)) if (prevParams.leagues?.[k] && !leagues.includes(k)) params.leagues[k] = prevParams.leagues[k];
 const seed = readJson(seedFile, { maps: {} });
+const blendOut = { modelVersion: MODEL_VERSION, generatedAt, note: 'Peso del modelo en la mezcla modelo + mercado (0 = solo mercado, 1 = solo modelo), ajustado por mínima log-loss en temporadas de entrenamiento.', competitions: readJson(weightsFile, { competitions: {} }).competitions || {} };
+let fittedReference = null;
 seed.modelVersion = MODEL_VERSION;
 seed.generatedAt = generatedAt;
 seed.note = 'Cubetas de 1 punto: n = predicciones fuera de muestra, wins = aciertos. Probabilidad ORIGINAL del modelo.';
@@ -52,7 +55,7 @@ for (const league of leagues) {
   const trainSeasons = league === 'CL' ? seasons.slice(1, 2) : seasons.slice(1, 3);
   const testSeasons = league === 'CL' ? seasons.slice(2) : seasons.slice(3);
 
-  const { report: res, seed: bins } = runLeagueBacktest(matches, {
+  const { report: res, seed: bins, weights } = runLeagueBacktest(matches, {
     slug: comp.slug, trainSeasons, testSeasons, hasOdds: comp.hasHistoricalOdds,
     xiGrid: league === 'CL' ? [0.0008, 0.0012, 0.0019, 0.003] : [0.0012, 0.0019, 0.003, 0.005]
   });
@@ -65,6 +68,10 @@ for (const league of leagues) {
     testClvPct: res.betting?.avgClvPct ?? null
   };
   for (const [g, b] of Object.entries(bins)) seed.maps[mapKey(comp.slug, g)] = b;
+  if (weights) {
+    blendOut.competitions[comp.slug] = { ...weights, source: `ajustado en ${comp.name} (${trainSeasons.join(', ')})`, detail: res.blendWeights };
+    fittedReference = fittedReference || { slug: comp.slug, name: comp.name, weights };
+  }
 
   const t = res.test;
   const b = res.betting;
@@ -72,11 +79,24 @@ for (const league of leagues) {
     `${league} (${((Date.now() - t0) / 1000).toFixed(1)}s) ξ=${res.xi} | prueba n=${t.matches} ` +
     `Brier modelo=${t.metrics.model.brier} calibrado=${t.metrics.calibrated.brier} mercado=${t.metrics.market.brier} | ` +
     `LogLoss modelo=${t.metrics.model.logLoss} calibrado=${t.metrics.calibrated.logLoss} mercado=${t.metrics.market.logLoss}` +
-    (b ? ` | señales=${b.bets} yield=${b.yieldPct}% CLV=${b.avgClvPct}% CLV+=${b.clvPositivePct}%` : ' | sin cuotas históricas')
+    (t.metrics.blended ? ` | mezcla Brier=${t.metrics.blended.brier} LogLoss=${t.metrics.blended.logLoss}` : '') +
+    (b ? ` | señales=${b.bets} yield=${b.yieldPct}% CLV=${b.avgClvPct}% CLV+=${b.clvPositivePct}%` : ' | sin cuotas históricas') +
+    (res.bettingModelOnly ? ` | solo modelo: señales=${res.bettingModelOnly.bets} yield=${res.bettingModelOnly.yieldPct}% CLV=${res.bettingModelOnly.avgClvPct}%` : '') +
+    (weights ? ` | pesos ${JSON.stringify(weights)}` : '')
   );
+}
+
+// Competiciones sin cuotas históricas (Champions): heredan los pesos de LaLiga
+for (const comp of Object.values(ACTIVE_COMPETITIONS)) {
+  if (blendOut.competitions[comp.slug]?.source?.startsWith('ajustado')) continue;
+  const ref = fittedReference || (blendOut.competitions.la_liga ? { name: 'LaLiga', weights: blendOut.competitions.la_liga } : null);
+  if (!ref) continue;
+  const { source, detail, ...w } = ref.weights;
+  blendOut.competitions[comp.slug] = { ...w, source: `heredado de ${ref.name} (sin cuotas históricas propias)` };
 }
 
 fs.writeFileSync(reportFile, JSON.stringify(report, null, 1));
 fs.writeFileSync(paramsFile, JSON.stringify(params, null, 2));
 fs.writeFileSync(seedFile, JSON.stringify(seed));
-console.log('Guardado: data/backtest-report.json, data/model-params.json y data/calibration-seed.json');
+fs.writeFileSync(weightsFile, JSON.stringify(blendOut, null, 2));
+console.log('Guardado: data/backtest-report.json, data/model-params.json, data/calibration-seed.json y data/blend-weights.json');

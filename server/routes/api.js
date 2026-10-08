@@ -64,6 +64,7 @@ export function createApiRouter({ analysis, bets, signals, calibration, ratings,
       model: ratings.summary(),
       calibration: calibration ? calibration.summary() : null,
       valueRules: analysis.engine?.rules || null,
+      blend: analysis.blender ? analysis.blender.summary() : null,
       providers: {
         footballData: footballData.stats(),
         oddsApi: await odds.quotaStatus()
@@ -99,6 +100,7 @@ export function createApiRouter({ analysis, bets, signals, calibration, ratings,
     const analyses = signals ? await signals.applyJornadaCap(raw) : raw;
     // Paper trading: cada recomendación queda registrada con la cuota exacta del momento.
     const recorded = signals ? (await signals.recordFromAnalyses(analyses).catch(() => ({ recorded: 0 }))).recorded : 0;
+    if (signals) signals.recordEvaluations(analyses).catch(() => {});
     const picks = collectValuePicks(analyses, { includeNearMisses });
     res.json({
       ok: true,
@@ -166,6 +168,10 @@ export function createApiRouter({ analysis, bets, signals, calibration, ratings,
     if (!signals) return res.status(503).json({ ok: false, error: 'Panel no disponible.' });
     res.json({ ok: true, ...(await signals.performance({ days: Number(req.query.days) || 30 })) });
   }));
+  r.get('/evaluations/thresholds', wrap(async (req, res) => {
+    if (!signals) return res.status(503).json({ ok: false, error: 'Estudio no disponible.' });
+    res.json({ ok: true, ...(await signals.thresholdStudy({ days: Number(req.query.days) || 90 })) });
+  }));
   r.post('/signals/scan', wrap(async (_req, res) => {
     res.json({ ok: true, ...(await signals.scan()) });
   }));
@@ -190,7 +196,11 @@ export function createApiRouter({ analysis, bets, signals, calibration, ratings,
     const leagues = Object.fromEntries(Object.entries(active).map(([k, v]) => [k, {
       competition: v.competition, xi: v.xi, trainSeasons: v.trainSeasons, testSeasons: v.testSeasons,
       test: { matches: v.test.matches, metrics: v.test.metrics, verdicts: v.test.verdicts },
-      betting: v.betting ? { ...v.betting, recentBets: undefined } : null
+      blendWeights: v.blendWeights || null,
+      betting: v.betting ? { ...v.betting, recentBets: undefined } : null,
+      bettingBestPrice: v.bettingBestPrice ? { ...v.bettingBestPrice, recentBets: undefined } : null,
+      bettingModelOnly: v.bettingModelOnly ? { ...v.bettingModelOnly, recentBets: undefined } : null,
+      bettingModelOnlyBestPrice: v.bettingModelOnlyBestPrice ? { ...v.bettingModelOnlyBestPrice, recentBets: undefined } : null
     }]));
     res.json({ ok: true, modelVersion: report.modelVersion, generatedAt: report.generatedAt, leagues });
   }));

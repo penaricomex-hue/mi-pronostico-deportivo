@@ -1,0 +1,49 @@
+{
+  "modelVersion": "V10.1.0",
+  "generatedAt": "2026-10-08T15:05:02.498Z",
+  "note": "Peso del modelo en la mezcla modelo + mercado (0 = solo mercado, 1 = solo modelo), ajustado por mínima log-loss en temporadas de entrenamiento.",
+  "competitions": {
+    "la_liga": {
+      "1x2": 0.25,
+      "over_under": 0.3,
+      "btts": 0.3,
+      "source": "ajustado en LaLiga EA Sports (2324, 2425)",
+      "detail": {
+        "1x2": {
+          "weight": 0.25,
+          "optimumWeight": 0,
+          "tolerance": 0.001,
+          "samples": 760,
+          "fitted": true,
+          "logLoss": 0.9521,
+          "logLossOptimum": 0.9512,
+          "logLossMarketOnly": 0.9512,
+          "logLossModelOnly": 0.9664
+        },
+        "over_under": {
+          "weight": 0.3,
+          "optimumWeight": 0.05,
+          "tolerance": 0.001,
+          "samples": 760,
+          "fitted": true,
+          "logLoss": 0.6607,
+          "logLossOptimum": 0.6598,
+          "logLossMarketOnly": 0.6598,
+          "logLossModelOnly": 0.6713
+        },
+        "btts": {
+          "weight": 0.3,
+          "samples": 0,
+          "fitted": false,
+          "inheritedFrom": "over_under"
+        }
+      }
+    },
+    "champions_league": {
+      "1x2": 0.25,
+      "over_under": 0.3,
+      "btts": 0.3,
+      "source": "heredado de LaLiga EA Sports (sin cuotas históricas propias)"
+    }
+  }
+}

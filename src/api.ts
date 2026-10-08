@@ -1,4 +1,4 @@
-import type { Analysis, BacktestLeague, Bet, BetStatus, BetSummary, Fixture, Parlay, Performance, Pick, Signal, Status, ValueRules } from './types';
+import type { Analysis, BacktestLeague, Bet, BetStatus, BetSummary, Fixture, Parlay, Performance, Pick, Signal, Status, ThresholdStudy, ValueRules } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -55,6 +55,7 @@ export const api = {
     ),
 
   performance: (days: number) => request<Performance>(`/api/performance?days=${days}`),
+  thresholds: (days: number) => request<ThresholdStudy>(`/api/evaluations/thresholds?days=${days}`),
   signals: (days = 90) => request<{ signals: Signal[] }>(`/api/signals?days=${days}`),
 
   backtest: (competition: string) => request<BacktestLeague>(`/api/backtest?competition=${encodeURIComponent(competition)}`),

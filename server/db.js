@@ -207,6 +207,59 @@ export const MIGRATIONS = [
       END
       WHERE competition_slug IS NULL;
       CREATE INDEX IF NOT EXISTS idx_simulated_bets_competition ON simulated_bets (competition_slug, created_at);`
+  },
+  {
+    id: 4,
+    name: 'v10.1: mezcla modelo + mercado y registro de todas las evaluaciones',
+    sql: `
+      ALTER TABLE value_signals ADD COLUMN IF NOT EXISTS blended_probability NUMERIC(8, 5);
+      ALTER TABLE value_signals ADD COLUMN IF NOT EXISTS model_weight NUMERIC(4, 3);
+      ALTER TABLE value_signals ADD COLUMN IF NOT EXISTS ev_model NUMERIC(8, 5);
+
+      -- Cada evaluación del motor (recomendada o no), una fila por captura de cuotas.
+      -- Permite estudiar después qué umbral de EV habría funcionado mejor.
+      CREATE TABLE IF NOT EXISTS value_evaluations (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        fixture_id TEXT NOT NULL,
+        match_id INTEGER REFERENCES matches(id),
+        competition_slug VARCHAR(50) NOT NULL,
+        jornada_key TEXT,
+        kickoff_utc TIMESTAMPTZ,
+        home TEXT NOT NULL,
+        away TEXT NOT NULL,
+        market VARCHAR(50) NOT NULL,
+        selection VARCHAR(50) NOT NULL,
+        line NUMERIC(6, 2) NOT NULL DEFAULT 0,
+        bookmaker TEXT,
+        odds NUMERIC(10, 3) NOT NULL,
+        odds_captured_at TIMESTAMPTZ NOT NULL,
+        avg_market_odds NUMERIC(10, 3),
+        bookmaker_count INT,
+        model_probability NUMERIC(8, 5),
+        calibrated_probability NUMERIC(8, 5),
+        blended_probability NUMERIC(8, 5),
+        model_weight NUMERIC(4, 3),
+        market_probability NUMERIC(8, 5),
+        push_probability NUMERIC(8, 5),
+        ev NUMERIC(8, 5),
+        ev_model NUMERIC(8, 5),
+        market_gap NUMERIC(8, 5),
+        rules_ok BOOLEAN NOT NULL DEFAULT false,
+        recommended BOOLEAN NOT NULL DEFAULT false,
+        reason TEXT,
+        model_version TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        home_goals INT,
+        away_goals INT,
+        settled_at TIMESTAMPTZ,
+        closing_fair_probability NUMERIC(8, 5),
+        clv NUMERIC(8, 5),
+        UNIQUE (fixture_id, market, selection, line, odds_captured_at)
+      );
+      CREATE INDEX IF NOT EXISTS idx_value_evaluations_comp ON value_evaluations (competition_slug, kickoff_utc);
+      CREATE INDEX IF NOT EXISTS idx_value_evaluations_fixture ON value_evaluations (fixture_id);
+      CREATE INDEX IF NOT EXISTS idx_value_evaluations_status ON value_evaluations (status, kickoff_utc);`
   }
 ];
 

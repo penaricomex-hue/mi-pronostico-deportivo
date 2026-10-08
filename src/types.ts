@@ -31,6 +31,12 @@ export interface CalibrationInfo {
   samples?: number;
 }
 
+export interface BlendInfo {
+  modelWeight: number;
+  probability: number;
+  message: string;
+}
+
 export interface SelectionEval {
   selection: Selection;
   market: MarketKey;
@@ -38,6 +44,11 @@ export interface SelectionEval {
   label: string;
   modelProbability: number | null;
   calibratedProbability: number | null;
+  /** Mezcla modelo + mercado: es la probabilidad con la que se calcula el EV */
+  blendedProbability?: number | null;
+  blend?: BlendInfo | null;
+  evModel?: number | null;
+  rulesOk?: boolean;
   probability: number | null;
   marketProbability: number | null;
   pushProbability?: number | null;
@@ -157,6 +168,7 @@ export interface BacktestBet {
   selection: Selection;
   label: string;
   rawProbabilityPct: number;
+  calibratedPct?: number;
   probabilityPct: number;
   marketPct: number;
   odds: number;
@@ -184,7 +196,7 @@ export interface BacktestBetting {
 
 export interface BacktestSplit {
   matches: number;
-  metrics: { model: ScoreMetrics; calibrated: ScoreMetrics; market: ScoreMetrics; uniform: ScoreMetrics; bttsModel: { n: number; brier: number | null; logLoss: number | null }; bttsCalibrated: { n: number; brier: number | null; logLoss: number | null } };
+  metrics: { model: ScoreMetrics; calibrated: ScoreMetrics; blended?: ScoreMetrics | null; market: ScoreMetrics; uniform: ScoreMetrics; bttsModel: { n: number; brier: number | null; logLoss: number | null }; bttsCalibrated: { n: number; brier: number | null; logLoss: number | null } };
   verdicts: Record<string, string>;
   calibration: { model: BandRow[]; calibrated: BandRow[] };
 }
@@ -202,6 +214,9 @@ export interface BacktestLeague {
   test: BacktestSplit;
   betting: BacktestBetting | null;
   bettingBestPrice: BacktestBetting | null;
+  bettingModelOnly?: BacktestBetting | null;
+  bettingModelOnlyBestPrice?: BacktestBetting | null;
+  blendWeights?: Record<string, { weight: number; optimumWeight?: number; samples: number; fitted: boolean; logLoss?: number; logLossMarketOnly?: number; logLossModelOnly?: number; inheritedFrom?: string }> | null;
   generatedAt: string;
   modelVersion: string;
 }
@@ -226,8 +241,11 @@ export interface Signal {
   oddsCapturedAt: string;
   modelProbability: number | null;
   calibratedProbability: number | null;
+  blendedProbability: number | null;
+  modelWeight: number | null;
   marketProbability: number | null;
   ev: number;
+  evModel: number | null;
   marketGap: number | null;
   avgMarketOdds: number | null;
   stake: number;
@@ -241,7 +259,14 @@ export interface Signal {
   clv: number | null;
 }
 
+export interface MeanCI { n: number; mean: number | null; lo: number | null; hi: number | null; se: number | null }
+export interface PropCI { n: number; pct: number | null; lo: number | null; hi: number | null }
+export interface Verdict { level: 'insufficient' | 'positive' | 'negative' | 'warning' | 'review' | 'inconclusive'; title: string; text: string; remaining: number }
+
 export interface PerfAgg {
+  yieldCI: MeanCI;
+  clvCI: MeanCI;
+  hitRateCI: PropCI;
   signals: number;
   resolved: number;
   hitRatePct: number | null;
@@ -260,7 +285,10 @@ export interface Performance {
   currency: string;
   bankroll: number;
   totals: PerfAgg & { pending: number; roiPct: number | null; settledStaked: number; netProfit: number };
-  keyMetric: { question: string; signalsWithClv: number; beatClosingPct: number | null; avgClvPct: number | null; target: string; progressPct: number };
+  keyMetric: {
+    question: string; signalsWithClv: number; beatClosingPct: number | null; avgClvPct: number | null; target: string; progressPct: number;
+    clvCI: MeanCI; beatClosingCI: PropCI; verdict: Verdict; stopRule: string;
+  };
   byCompetition: Array<PerfAgg & { competitionSlug: string; competition: string }>;
   byMarket: Array<PerfAgg & { competitionSlug: string; competition: string; market: MarketKey; marketLabel: string }>;
   bestMarkets: Array<PerfAgg & { competition: string; marketLabel: string }>;
@@ -270,6 +298,36 @@ export interface Performance {
   modelCalibration: Record<string, Array<{ range: string; samples: number; predicted: number | null; actual: number | null }>> | null;
   execVsMarket: { sample: number; avgExecutionOdds: number | null; avgMarketOdds: number | null; priceEdgePct: number | null; bookmakers: Array<{ bookmaker: string; signals: number }> };
   recent: Signal[];
+}
+
+export interface ThresholdRow {
+  variant: 'blend' | 'model';
+  variantLabel: string;
+  minEvPct: number;
+  candidates: number;
+  settled: number;
+  avgEvPct: number | null;
+  hitRateCI: PropCI;
+  yieldCI: MeanCI;
+  clvCI: MeanCI;
+  beatClosingCI: PropCI;
+  verdict: Verdict;
+}
+
+export interface ThresholdStudy {
+  days: number;
+  evaluations: number;
+  evaluationsSettled: number;
+  evaluationsWithClv: number;
+  currentMinEvPct: number;
+  method: string;
+  table: ThresholdRow[];
+}
+
+export interface BlendSummary {
+  enabled: boolean;
+  override: number | null;
+  competitions: Record<string, { '1x2': number; over_under: number; btts: number; source: string }>;
 }
 
 export interface Bet {
@@ -338,6 +396,7 @@ export interface Status {
   activeCompetitions?: Record<string, { name: string; slug: string }>;
   disabledCompetitions?: Record<string, { name: string; slug: string }>;
   valueRules?: ValueRules | null;
+  blend?: BlendSummary | null;
   calibration?: { lastFit: string | null; seedGeneratedAt: string | null; maps: Record<string, { method: string; samples: number; liveSamples: number; fittedAt: string }> } | null;
   model: {
     modelVersion: string | null;

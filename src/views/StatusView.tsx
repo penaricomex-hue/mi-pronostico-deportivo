@@ -50,6 +50,13 @@ export function StatusView({ status, error }: { status: Status | null; error: st
               ejecución: {(status.config as Record<string, unknown>).executionBookmaker as string || 'mejor cuota no atípica'} · modo {String((status.config as Record<string, unknown>).tradingMode || 'paper')}
             </div>
           )}
+          {status.blend && (
+            <div className="mt-2 text-xs text-muted">
+              Mezcla modelo + mercado: {status.blend.enabled ? Object.entries(status.blend.competitions).map(([slug, w]) =>
+                `${slug === 'la_liga' ? 'LaLiga' : 'Champions'} 1X2 ${Math.round(w['1x2'] * 100)}% · Más/Menos ${Math.round(w.over_under * 100)}% · Ambos marcan ${Math.round(w.btts * 100)}% (${w.source})`
+              ).join(' — ') : 'desactivada (solo modelo)'}
+            </div>
+          )}
           {status.calibration && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {Object.entries(status.calibration.maps).map(([k, m]) => (
