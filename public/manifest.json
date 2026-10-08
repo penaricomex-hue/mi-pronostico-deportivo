@@ -1,15 +1,9 @@
 {
   "short_name": "MK Bets",
-  "name": "MK Bets - Pronósticos Deportivos",
-  "icons": [
-    {
-      "src": "/favicon.svg",
-      "type": "image/svg+xml",
-      "sizes": "192x192 512x512"
-    }
-  ],
+  "name": "MK Bets · Pronósticos de fútbol",
+  "icons": [{ "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" }],
   "start_url": "/",
-  "background_color": "#080b10",
-  "theme_color": "#ffb45d",
+  "background_color": "#06090d",
+  "theme_color": "#06090d",
   "display": "standalone"
 }

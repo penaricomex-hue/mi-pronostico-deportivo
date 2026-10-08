@@ -45,22 +45,22 @@ export function AnalysisPanel({ fixture, date, onClose, bets }: { fixture: Fixtu
 
   return (
     <Card className="relative">
-      <button type="button" onClick={onClose} className="absolute right-3 top-3 rounded p-1 text-muted hover:text-text" aria-label="Cerrar análisis">
+      <button type="button" onClick={onClose} className="absolute right-3 top-3 rounded-full bg-white/[0.06] p-2 text-muted hover:text-text" aria-label="Cerrar análisis">
         <X className="h-4 w-4" />
       </button>
 
-      <div className="mb-4 flex items-center justify-center gap-4 pr-6">
-        <div className="flex flex-1 items-center justify-end gap-2 text-right">
-          <span className="font-semibold">{fixture.home}</span>
-          <Crest src={fixture.homeCrest} name={fixture.home} size={36} />
+      <div className="mb-5 grid grid-cols-[1fr_auto_1fr] items-start gap-3 px-6 pt-1">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <Crest src={fixture.homeCrest} name={fixture.home} size={48} />
+          <span className="font-display text-lg font-semibold leading-tight">{fixture.home}</span>
         </div>
-        <div className="text-center text-xs text-muted">
-          <div>{kickoffDate(fixture.kickoff)}</div>
-          <div className="font-semibold text-text">{kickoffTime(fixture.kickoff)}</div>
+        <div className="pt-2 text-center">
+          <div className="font-display text-2xl font-bold leading-none tabular-nums">{kickoffTime(fixture.kickoff)}</div>
+          <div className="mt-1.5 text-[11px] uppercase tracking-wide text-muted">{kickoffDate(fixture.kickoff)}</div>
         </div>
-        <div className="flex flex-1 items-center gap-2">
-          <Crest src={fixture.awayCrest} name={fixture.away} size={36} />
-          <span className="font-semibold">{fixture.away}</span>
+        <div className="flex flex-col items-center gap-2 text-center">
+          <Crest src={fixture.awayCrest} name={fixture.away} size={48} />
+          <span className="font-display text-lg font-semibold leading-tight">{fixture.away}</span>
         </div>
       </div>
 
@@ -98,28 +98,28 @@ export function AnalysisPanel({ fixture, date, onClose, bets }: { fixture: Fixtu
 
           {data.selections.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] text-sm">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead>
                   <tr className="border-b border-line text-left text-[11px] uppercase text-muted">
                     <th className="py-2 font-medium">Mercado</th>
-                    <th className="py-2 text-right font-medium">Prob.</th>
-                    <th className="py-2 text-right font-medium">Cuota justa</th>
-                    <th className="py-2 text-right font-medium">Mejor cuota</th>
-                    <th className="py-2 text-right font-medium">EV</th>
+                    <th className="whitespace-nowrap py-2.5 pl-4 text-right font-medium">Prob.</th>
+                    <th className="whitespace-nowrap py-2.5 pl-4 text-right font-medium">Cuota justa</th>
+                    <th className="whitespace-nowrap py-2.5 pl-4 text-right font-medium">Mejor cuota</th>
+                    <th className="whitespace-nowrap py-2.5 pl-4 text-right font-medium">EV</th>
                     <th className="py-2 pl-3 font-medium">Estado</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.selections.map(s => (
                     <tr key={s.selection} className="border-b border-line/60 align-top">
-                      <td className="py-2">{s.label}</td>
-                      <td className="py-2 text-right tabular-nums">{pct(s.probability)}</td>
-                      <td className="py-2 text-right tabular-nums">{odds(s.fairOdds)}</td>
-                      <td className="py-2 text-right tabular-nums">
+                      <td className="whitespace-nowrap py-2.5 pr-2">{s.label}</td>
+                      <td className="whitespace-nowrap py-2.5 pl-4 text-right tabular-nums">{pct(s.probability)}</td>
+                      <td className="whitespace-nowrap py-2.5 pl-4 text-right tabular-nums">{odds(s.fairOdds)}</td>
+                      <td className="whitespace-nowrap py-2.5 pl-4 text-right tabular-nums">
                         {odds(s.bestOdds)}
                         <div className="text-[10px] text-muted">{s.bestBookmaker}</div>
                       </td>
-                      <td className={`py-2 text-right tabular-nums ${s.ev > 0 ? 'text-good' : 'text-muted'}`}>{signedPct(s.ev)}</td>
+                      <td className={`whitespace-nowrap py-2.5 pl-4 text-right tabular-nums ${s.ev > 0 ? 'text-good' : 'text-muted'}`}>{signedPct(s.ev)}</td>
                       <td className="py-2 pl-3">
                         {s.isValue ? (
                           <div className="space-y-1">
