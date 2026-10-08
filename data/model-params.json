@@ -1,13 +1,13 @@
 {
-  "modelVersion": "V10.0.0",
-  "generatedAt": "2026-10-08T08:06:18.594Z",
+  "modelVersion": "V10.1.0",
+  "generatedAt": "2026-10-08T15:05:02.498Z",
   "leagues": {
     "PD": {
       "xi": 0.0012,
       "slug": "la_liga",
-      "testBets": 119,
-      "testYieldPct": -7.56,
-      "testClvPct": -6.55
+      "testBets": 0,
+      "testYieldPct": null,
+      "testClvPct": null
     },
     "CL": {
       "xi": 0.0008,

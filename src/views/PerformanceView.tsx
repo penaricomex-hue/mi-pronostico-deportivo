@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { PerfAgg, Performance } from '../types';
+import type { MeanCI, PerfAgg, Performance, PropCI, ThresholdStudy, Verdict } from '../types';
 import { Badge, Card, Chips, Empty, ErrorBox, SectionTitle, Spinner, Stat } from '../components/ui';
 import { kickoffDate, money, odds, pct, signedNum, signedPct } from '../lib/format';
 
@@ -15,6 +15,105 @@ const short = (n: string) => SHORT[n] || n;
 
 const tone = (v: number | null | undefined) => (v == null ? undefined : v >= 0 ? 'good' : 'bad') as 'good' | 'bad' | undefined;
 
+/** "−3.1% a +2.4%" o null si no hay intervalo. */
+function ciText(ci: MeanCI | null | undefined, digits = 1) {
+  if (!ci || ci.lo == null || ci.hi == null) return null;
+  return `${signedNum(ci.lo, digits, '%')} a ${signedNum(ci.hi, digits, '%')}`;
+}
+function propText(ci: PropCI | null | undefined) {
+  if (!ci || ci.lo == null || ci.hi == null) return null;
+  return `${ci.lo}% a ${ci.hi}%`;
+}
+/** Tono por intervalo: verde solo si TODO el intervalo es positivo. */
+function ciTone(ci: MeanCI | null | undefined): 'good' | 'bad' | undefined {
+  if (!ci || ci.lo == null || ci.hi == null) return undefined;
+  if (ci.lo > 0) return 'good';
+  if (ci.hi < 0) return 'bad';
+  return undefined;
+}
+
+const VERDICT_STYLE: Record<Verdict['level'], string> = {
+  insufficient: 'border-line bg-white/[0.03] text-muted',
+  inconclusive: 'border-line bg-white/[0.03] text-text',
+  positive: 'border-good/40 bg-good/10 text-good',
+  warning: 'border-warn/40 bg-warn/10 text-warn',
+  negative: 'border-bad/40 bg-bad/10 text-bad',
+  review: 'border-bad/40 bg-bad/10 text-bad'
+};
+
+function VerdictBox({ v }: { v: Verdict }) {
+  return (
+    <div className={`rounded-lg border px-3 py-2 text-sm ${VERDICT_STYLE[v.level]}`} role="status">
+      <div className="font-semibold">{v.title}</div>
+      <div className="mt-0.5 text-xs opacity-90">{v.text}</div>
+    </div>
+  );
+}
+
+function ThresholdCard({ days }: { days: string }) {
+  const [data, setData] = useState<ThresholdStudy | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setData(null); setError(null);
+    api.thresholds(Number(days)).then(d => alive && setData(d)).catch(err => alive && setError((err as Error).message));
+    return () => { alive = false; };
+  }, [days]);
+  return (
+    <Card>
+      <SectionTitle>Estudio de umbrales de EV</SectionTitle>
+      <p className="mb-3 text-xs text-muted">
+        Se guardan todas las evaluaciones del motor, también las rechazadas. Así se puede ver qué EV mínimo habría funcionado mejor y si la mezcla con el mercado mejora al modelo solo. La métrica que decide es el CLV.
+      </p>
+      <ErrorBox error={error} />
+      {!data && !error && <Spinner label="Calculando…" />}
+      {data && (
+        data.evaluations === 0 ? (
+          <Empty>Aún no hay evaluaciones registradas en este periodo. Se guardan en cada escaneo de cuotas.</Empty>
+        ) : (
+          <>
+            <div className="mb-2 text-[11px] text-muted">{data.evaluations} evaluaciones válidas · {data.evaluationsWithClv} con cuota de cierre · {data.evaluationsSettled} liquidadas. {data.method}</div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm tabular-nums">
+                <thead>
+                  <tr className="border-b border-line text-left text-[11px] uppercase text-muted">
+                    <th className="py-2 font-medium">Variante</th>
+                    <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">EV mín.</th>
+                    <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Apuestas</th>
+                    <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">CLV medio (IC 95%)</th>
+                    <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Ganan al cierre</th>
+                    <th className="whitespace-nowrap py-2 pl-3 text-right font-medium">Yield (IC 95%)</th>
+                    <th className="py-2 pl-3 font-medium">Lectura</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.table.map(r => {
+                    const current = r.variant === 'blend' && r.minEvPct === data.currentMinEvPct;
+                    return (
+                      <tr key={`${r.variant}${r.minEvPct}`} className={`border-b border-line/60 ${current ? 'bg-accent/[0.06]' : ''}`}>
+                        <td className="py-1.5 pr-2 text-xs">{r.variant === 'blend' ? 'Mezcla' : 'Solo modelo'}{current && <span className="ml-1 text-[10px] text-accent">(actual)</span>}</td>
+                        <td className="py-1.5 pl-3 text-right">{r.minEvPct}%</td>
+                        <td className="py-1.5 pl-3 text-right">{r.candidates}<div className="text-[10px] text-muted">{r.settled} liquid.</div></td>
+                        <td className={`py-1.5 pl-3 text-right ${ciTone(r.clvCI) === 'good' ? 'text-good' : ciTone(r.clvCI) === 'bad' ? 'text-bad' : ''}`}>
+                          {signedNum(r.clvCI.mean, 2, '%')}<div className="text-[10px] text-muted">{ciText(r.clvCI) ?? `n=${r.clvCI.n}`}</div>
+                        </td>
+                        <td className="py-1.5 pl-3 text-right">{r.beatClosingCI.pct != null ? `${r.beatClosingCI.pct}%` : '—'}<div className="text-[10px] text-muted">{propText(r.beatClosingCI) ?? ''}</div></td>
+                        <td className="py-1.5 pl-3 text-right">{signedNum(r.yieldCI.mean, 1, '%')}<div className="text-[10px] text-muted">{ciText(r.yieldCI, 0) ?? `n=${r.yieldCI.n}`}</div></td>
+                        <td className="py-1.5 pl-3 text-xs text-muted">{r.verdict.title}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[11px] text-muted">Las evaluaciones del mismo partido están correlacionadas: los intervalos son orientativos. Para cambiar el umbral en producción se usa la variable VALUE_MIN_EV.</p>
+          </>
+        )
+      )}
+    </Card>
+  );
+}
+
 function AggRow({ label, a }: { label: string; a: PerfAgg }) {
   return (
     <tr className="border-b border-line/60">
@@ -23,9 +122,9 @@ function AggRow({ label, a }: { label: string; a: PerfAgg }) {
       <td className="py-2 pl-3 text-right">{a.resolved}</td>
       <td className="py-2 pl-3 text-right">{a.hitRatePct != null ? `${a.hitRatePct}%` : '—'}</td>
       <td className={`py-2 pl-3 text-right ${a.profit >= 0 ? 'text-good' : 'text-bad'}`}>{signedNum(a.profit, 0)}</td>
-      <td className="py-2 pl-3 text-right">{signedNum(a.yieldPct, 1, '%')}</td>
+      <td className="py-2 pl-3 text-right">{signedNum(a.yieldPct, 1, '%')}{ciText(a.yieldCI, 0) && <div className="text-[10px] text-muted">{ciText(a.yieldCI, 0)}</div>}</td>
       <td className="py-2 pl-3 text-right">{signedNum(a.avgEvPct, 1, '%')}</td>
-      <td className={`py-2 pl-3 text-right ${(a.avgClvPct ?? 0) > 0 ? 'text-good' : a.avgClvPct != null ? 'text-bad' : ''}`}>{signedNum(a.avgClvPct, 1, '%')}</td>
+      <td className={`py-2 pl-3 text-right ${ciTone(a.clvCI) === 'good' ? 'text-good' : ciTone(a.clvCI) === 'bad' ? 'text-bad' : ''}`}>{signedNum(a.avgClvPct, 1, '%')}{ciText(a.clvCI) && <div className="text-[10px] text-muted">{ciText(a.clvCI)}</div>}</td>
       <td className="py-2 pl-3 text-right">{a.clvPositivePct != null ? `${a.clvPositivePct}%` : '—'}</td>
     </tr>
   );
@@ -84,15 +183,16 @@ export function PerformanceView() {
           <Card>
             <SectionTitle>La métrica clave</SectionTitle>
             <p className="mb-3 text-sm text-muted">{k.question} Si tomamos cuotas mejores que la de cierre de forma consistente (CLV positivo), hay ventaja real aunque el resultado a corto plazo sea negativo.</p>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              <Stat label="CLV medio" value={signedNum(k.avgClvPct, 2, '%')} tone={tone(k.avgClvPct)} hint={`${k.signalsWithClv} señales con cierre`} />
-              <Stat label="Ganan al cierre" value={k.beatClosingPct != null ? `${k.beatClosingPct}%` : '—'} tone={k.beatClosingPct != null ? (k.beatClosingPct >= 50 ? 'good' : 'bad') : undefined} hint="% de señales con CLV > 0" />
-              <div className="col-span-2 sm:col-span-1"><Stat label="Muestra" value={`${t.signals}`} hint={`${k.progressPct}% de 300 señales`} /></div>
+            <VerdictBox v={k.verdict} />
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <Stat label="CLV medio" value={signedNum(k.avgClvPct, 2, '%')} tone={ciTone(k.clvCI)} hint={ciText(k.clvCI) ? `IC 95%: ${ciText(k.clvCI)}` : `${k.signalsWithClv} señales con cierre`} />
+              <Stat label="Ganan al cierre" value={k.beatClosingPct != null ? `${k.beatClosingPct}%` : '—'} hint={propText(k.beatClosingCI) ? `IC 95%: ${propText(k.beatClosingCI)}` : '% de señales con CLV > 0'} />
+              <div className="col-span-2 sm:col-span-1"><Stat label="Con cuota de cierre" value={`${k.signalsWithClv}`} hint={`${k.progressPct}% de 300 · ${t.signals} señales`} /></div>
             </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/[0.06]" aria-label="Progreso hacia 300 señales">
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/[0.06]" aria-label="Progreso hacia 300 señales con cuota de cierre">
               <div className="h-full rounded-full bg-gradient-to-r from-accent-2 to-accent" style={{ width: `${Math.max(2, k.progressPct)}%` }} />
             </div>
-            <p className="mt-2 text-[11px] text-muted">{k.target}</p>
+            <p className="mt-2 text-[11px] text-muted">{k.stopRule}</p>
           </Card>
 
           {t.signals === 0 ? (
@@ -103,12 +203,12 @@ export function PerformanceView() {
                 <SectionTitle>Resumen · últimos {data.days} días</SectionTitle>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Stat label="Señales" value={t.signals} hint={`${t.resolved} resueltas · ${t.pending} pendientes`} />
-                  <Stat label="Acierto" value={t.hitRatePct != null ? `${t.hitRatePct}%` : '—'} />
+                  <Stat label="Acierto" value={t.hitRatePct != null ? `${t.hitRatePct}%` : '—'} hint={propText(t.hitRateCI) ? `IC 95%: ${propText(t.hitRateCI)}` : undefined} />
                   <Stat label="Beneficio neto" value={money(t.netProfit, data.currency)} tone={tone(t.netProfit)} hint={`Apostado ${money(t.settledStaked, data.currency)}`} />
-                  <Stat label="Yield" value={signedNum(t.yieldPct, 1, '%')} tone={tone(t.yieldPct)} hint="Beneficio / apostado" />
+                  <Stat label="Yield" value={signedNum(t.yieldPct, 1, '%')} tone={ciTone(t.yieldCI) ?? undefined} hint={ciText(t.yieldCI, 0) ? `IC 95%: ${ciText(t.yieldCI, 0)}` : 'Beneficio / apostado'} />
                   <Stat label="ROI" value={signedNum(t.roiPct, 2, '%')} tone={tone(t.roiPct)} hint={`Sobre banca de ${money(data.bankroll, data.currency)}`} />
                   <Stat label="EV medio" value={signedNum(t.avgEvPct, 1, '%')} hint="Esperado al registrar" />
-                  <Stat label="CLV medio" value={signedNum(t.avgClvPct, 2, '%')} tone={tone(t.avgClvPct)} />
+                  <Stat label="CLV medio" value={signedNum(t.avgClvPct, 2, '%')} tone={ciTone(t.clvCI)} hint={ciText(t.clvCI) ? `IC 95%: ${ciText(t.clvCI)}` : undefined} />
                   <Stat label="CLV positivo" value={t.clvPositivePct != null ? `${t.clvPositivePct}%` : '—'} hint={`${t.clvSample} con cierre`} />
                 </div>
               </Card>
@@ -148,6 +248,8 @@ export function PerformanceView() {
               </Card>
             </>
           )}
+
+          <ThresholdCard days={days} />
 
           <Card>
             <SectionTitle>Calibración</SectionTitle>

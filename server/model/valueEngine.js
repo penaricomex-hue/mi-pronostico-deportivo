@@ -4,6 +4,9 @@
  * Flujo de decisión (idéntico en producción y backtest):
  *   1. Probabilidad del modelo (Dixon-Coles) → calibrada por competición y mercado.
  *   2. Probabilidad de mercado sin margen, a partir de varias casas (consenso).
+ *   2b. Probabilidad de decisión = mezcla modelo + mercado (server/model/blend.js).
+ *       El EV se calcula con la mezcla; la regla de los 10 pts compara el modelo
+ *       calibrado (sin mezclar) con el mercado.
  *   3. Cuota REAL de ejecución: la casa configurada en EXECUTION_BOOKMAKER o, si no
  *      hay ninguna configurada, la mejor cuota no atípica disponible.
  *   4. Se recomienda solo si esa cuota deja EV ≥ 5% y el modelo no se separa del
@@ -30,6 +33,7 @@ export const VALUE_RULES = {
  */
 export function evaluateBet({
   modelProbability,
+  decisionProbability = null,
   marketProbability,
   executionOdds,
   minEv = VALUE_RULES.minEv,
@@ -37,7 +41,12 @@ export function evaluateBet({
   pushProbability = 0
 }) {
   const hasOdds = Number(executionOdds) > 1;
-  const ev = hasOdds && Number.isFinite(modelProbability)
+  const pDecision = Number.isFinite(decisionProbability) ? decisionProbability : modelProbability;
+  const ev = hasOdds && Number.isFinite(pDecision)
+    ? (1 - (pushProbability || 0)) * ((pDecision * executionOdds) - 1)
+    : null;
+  // EV que habría dado el modelo calibrado solo (sin mezclar), para comparar
+  const evModel = hasOdds && Number.isFinite(modelProbability)
     ? (1 - (pushProbability || 0)) * ((modelProbability * executionOdds) - 1)
     : null;
   const marketGap = Number.isFinite(modelProbability) && Number.isFinite(marketProbability)
@@ -49,6 +58,7 @@ export function evaluateBet({
 
   return {
     ev,
+    evModel,
     marketGap,
     executionOdds: hasOdds ? Number(executionOdds) : null,
     recommended: isValue && isReasonable && hasOdds,
@@ -80,6 +90,7 @@ export function createValueBettingEngine(rules = {}) {
    * @param {object} c candidato
    * @param {string} c.selection
    * @param {number} c.modelProbability   probabilidad calibrada
+   * @param {number} [c.decisionProbability] mezcla modelo + mercado (para el EV)
    * @param {number} c.marketProbability  consenso sin margen
    * @param {number|null} c.executionOdds
    * @param {number} c.bookmakerCount
@@ -89,6 +100,7 @@ export function createValueBettingEngine(rules = {}) {
   function evaluate(c) {
     const base = evaluateBet({
       modelProbability: c.modelProbability,
+      decisionProbability: c.decisionProbability,
       marketProbability: c.marketProbability,
       executionOdds: c.executionOdds,
       minEv: r.minEv,
@@ -109,10 +121,12 @@ export function createValueBettingEngine(rules = {}) {
       ...base,
       market,
       recommended,
+      // Todas las reglas salvo EV, desviación y límite por jornada (para el estudio de umbrales)
+      rulesOk: blockers.length === 0 && base.executionOdds != null,
       // El motivo principal: el de la regla base si falla; si no, el primer bloqueo.
       reason: !base.recommended ? base.reason : blockers[0] || base.reason,
       blockers,
-      minimumOdds: minimumOddsFor(c.modelProbability, r.minEv, c.pushProbability || 0)
+      minimumOdds: minimumOddsFor(Number.isFinite(c.decisionProbability) ? c.decisionProbability : c.modelProbability, r.minEv, c.pushProbability || 0)
     };
   }
 

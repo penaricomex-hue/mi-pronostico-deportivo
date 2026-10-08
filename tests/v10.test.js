@@ -168,3 +168,64 @@ test('cuota de cierre: sin partidos próximos no vuelve a consultar la base en c
   for (let i = 0; i < 5; i++) assert.equal((await s.captureClosing()).skipped, true);
   assert.equal(calls, 1, 'una sola consulta por hora para conocer los próximos inicios');
 });
+
+/* ---------- v10.1: mezcla modelo + mercado ---------- */
+import { poolVector, poolBinary, blendProbabilities, fitWeight, createBlendResolver } from '../server/model/blend.js';
+import { meanCI, wilsonCI, clvVerdict } from '../server/lib/stats.js';
+
+test('mezcla: w=1 es el modelo, w=0 el mercado, y siempre suma 1', () => {
+  const model = { home: 0.6, draw: 0.25, away: 0.15 }, market = { home: 0.45, draw: 0.28, away: 0.27 };
+  const k = ['home', 'draw', 'away'];
+  const m1 = poolVector(model, market, 1, k), m0 = poolVector(model, market, 0, k), mh = poolVector(model, market, 0.3, k);
+  for (const x of k) { assert.ok(Math.abs(m1[x] - model[x]) < 1e-9); assert.ok(Math.abs(m0[x] - market[x]) < 1e-9); }
+  assert.ok(Math.abs(k.reduce((a, x) => a + mh[x], 0) - 1) < 1e-9);
+  assert.ok(mh.home > market.home && mh.home < model.home);
+  const b = poolBinary(0.6, 0.5, 0.25);
+  assert.ok(b > 0.5 && b < 0.6);
+  const all = blendProbabilities({ ...model, over25: 0.55, under25: 0.45, btts_yes: 0.5, btts_no: 0.5 },
+    { ...market, over25: 0.5, under25: 0.5, btts_yes: 0.52, btts_no: 0.48 }, { '1x2': 0.3, over_under: 0.3, btts: 0.3 });
+  assert.ok(Math.abs(all.dc_1x - (all.home + all.draw)) < 1e-12);
+});
+
+test('mezcla: el EV usa la probabilidad mezclada y la regla de 10 pts el modelo calibrado', () => {
+  const e = createValueBettingEngine();
+  const r = e.evaluate({ selection: 'over25', modelProbability: 0.62, decisionProbability: 0.55, marketProbability: 0.5, executionOdds: 2.0, bookmakerCount: 5 });
+  assert.ok(Math.abs(r.ev - 0.10) < 1e-9);
+  assert.ok(Math.abs(r.evModel - 0.24) < 1e-9);
+  assert.ok(Math.abs(r.marketGap - 0.12) < 1e-9);
+  assert.equal(r.recommended, false, 'el modelo calibrado se desvía más de 10 pts');
+  assert.equal(r.rulesOk, true);
+});
+
+test('ajuste del peso: si el modelo es ruido el peso tiende al mercado', () => {
+  const rows = [];
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 600; i++) {
+    const pm = 0.3 + 0.4 * rnd();
+    const noisy = Math.min(0.95, Math.max(0.05, pm + (rnd() - 0.5) * 0.5));
+    rows.push({ model: { a: noisy, b: 1 - noisy }, market: { a: pm, b: 1 - pm }, outcome: rnd() < pm ? 'a' : 'b' });
+  }
+  const f = fitWeight(rows, ['a', 'b'], { tolerance: 0 });
+  assert.ok(f.fitted && f.weight <= 0.2, `peso ${f.weight}`);
+  const g = fitWeight(rows, ['a', 'b'], { tolerance: 0.002 });
+  assert.ok(g.weight >= f.weight, 'la tolerancia solo puede subir el peso');
+  const res = createBlendResolver({ data: { competitions: { la_liga: { '1x2': 0.25, over_under: 0.3, btts: 0.3 } } } });
+  assert.equal(res.weightsFor('la_liga').over_under, 0.3);
+  assert.equal(createBlendResolver({ enabled: false }).weightsFor('la_liga')['1x2'], 1);
+  assert.equal(createBlendResolver({ modelWeight: 0.4 }).weightsFor('champions_league').btts, 0.4);
+});
+
+/* ---------- v10.1: intervalos y veredicto ---------- */
+test('intervalos de confianza y regla de parada', () => {
+  const ci = meanCI([0.1, -0.05, 0.02, 0.04, -0.01], { scale: 100 });
+  assert.equal(ci.n, 5);
+  assert.ok(ci.lo < ci.mean && ci.mean < ci.hi);
+  const w = wilsonCI(30, 100);
+  assert.ok(w.lo > 20 && w.hi < 40 && w.pct === 30);
+  assert.equal(clvVerdict({ n: 10, mean: 5, lo: -2, hi: 12 }).level, 'insufficient');
+  assert.equal(clvVerdict({ n: 120, mean: -3, lo: -5, hi: -1 }).level, 'negative');
+  assert.equal(clvVerdict({ n: 60, mean: -3, lo: -5, hi: -1 }).level, 'warning');
+  assert.equal(clvVerdict({ n: 150, mean: 2, lo: 0.5, hi: 3.5 }).level, 'positive');
+  assert.equal(clvVerdict({ n: 320, mean: 0.5, lo: -0.5, hi: 1.5 }).level, 'review');
+  assert.equal(clvVerdict({ n: 120, mean: 0.5, lo: -0.5, hi: 1.5 }).level, 'inconclusive');
+});

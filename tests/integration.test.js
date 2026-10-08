@@ -92,8 +92,17 @@ test('flujo completo LaLiga: modelo calibrado, mercado sin margen, cuota de ejec
     assert.ok(s.executionOdds > 1);
     assert.ok(Number.isFinite(s.ev));
     assert.ok(typeof s.reason === 'string');
-    // EV = p_calibrada · cuota_ejecución − 1 (sin push en líneas .5)
-    if (!s.pushProbability) assert.ok(Math.abs(s.ev - (s.calibratedProbability * s.executionOdds - 1)) < 1e-9);
+    // EV = p_decisión (mezcla modelo + mercado) · cuota_ejecución − 1 (sin push en líneas .5)
+    if (!s.pushProbability) {
+      assert.ok(Math.abs(s.ev - (s.probability * s.executionOdds - 1)) < 1e-9);
+      assert.ok(Math.abs(s.evModel - (s.calibratedProbability * s.executionOdds - 1)) < 1e-9);
+      // La mezcla queda entre el modelo calibrado y el mercado (dos vías) o muy cerca (1X2)
+      if (s.blendedProbability != null && ['over_under', 'btts', 'asian_handicap'].includes(s.market)) {
+        const lo = Math.min(s.calibratedProbability, s.marketProbability) - 1e-9;
+        const hi = Math.max(s.calibratedProbability, s.marketProbability) + 1e-9;
+        assert.ok(s.blendedProbability >= lo && s.blendedProbability <= hi, `${s.selection} fuera del rango modelo–mercado`);
+      }
+    }
     // Nunca se recomienda fuera del rango 1.50–4.00
     if (s.recommended) assert.ok(s.executionOdds >= 1.5 && s.executionOdds <= 4);
   }

@@ -1,7 +1,7 @@
 {
   "name": "mi-pronostico-deportivo",
   "private": true,
-  "version": "10.0.0",
+  "version": "10.1.0",
   "description": "MK Bets: pronósticos de fútbol con modelo Dixon-Coles, cuotas reales y backtest fuera de muestra.",
   "type": "module",
   "engines": {

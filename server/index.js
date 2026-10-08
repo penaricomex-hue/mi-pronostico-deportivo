@@ -41,7 +41,7 @@ const calibration = createCalibrationService({ pool: dbPool, method: config.cali
 const ingest = createIngestService({ pool: dbPool, logger, modelVersion: MODEL_VERSION });
 const analysis = createAnalysisService({
   footballData, odds, bigBalls, ratings, teams, store, bankroll: config.bankroll, calibration, ingest,
-  executionBookmaker: config.execution.bookmaker, valueRules: config.valueRules, logger
+  executionBookmaker: config.execution.bookmaker, valueRules: config.valueRules, blend: config.blend, logger
 });
 const bets = createBetsService({ pool, footballData, odds, analysis, teams, bankroll: config.bankroll, logger });
 const signals = createSignalsService({

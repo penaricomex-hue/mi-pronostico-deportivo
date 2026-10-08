@@ -11,6 +11,7 @@ function MetricsTable({ m, hasMarket }: { m: BacktestLeague['test']['metrics']; 
   const rows: Array<[string, ScoreMetrics]> = [
     ['Modelo original', m.model],
     ['Modelo calibrado', m.calibrated],
+    ...(hasMarket && m.blended ? ([['Mezcla modelo + mercado', m.blended]] as Array<[string, ScoreMetrics]>) : []),
     ...(hasMarket ? ([['Mercado sin margen', m.market]] as Array<[string, ScoreMetrics]>) : []),
     ['Azar (33/33/33)', m.uniform]
   ];
@@ -96,6 +97,57 @@ function BettingCard({ b, title, note }: { b: BacktestBetting; title: string; no
   );
 }
 
+function BlendComparison({ data }: { data: BacktestLeague }) {
+  const rows: Array<[string, BacktestBetting | null | undefined]> = [
+    ['Mezcla · cuota media', data.betting],
+    ['Mezcla · mejor cuota', data.bettingBestPrice],
+    ['Solo modelo · cuota media', data.bettingModelOnly],
+    ['Solo modelo · mejor cuota', data.bettingModelOnlyBestPrice]
+  ];
+  const w = data.blendWeights;
+  return (
+    <Card>
+      <SectionTitle>Mezcla modelo + mercado frente a modelo solo</SectionTitle>
+      {w && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {Object.entries(w).map(([g, v]) => (
+            <Badge key={g} tone="accent">{MARKET_LABEL[g] || g}: modelo {Math.round(v.weight * 100)}%{v.inheritedFrom ? ' (heredado)' : ''}</Badge>
+          ))}
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px] text-sm tabular-nums">
+          <thead>
+            <tr className="border-b border-line text-left text-[11px] uppercase text-muted">
+              <th className="py-2 font-medium">Escenario</th>
+              <th className="py-2 text-right font-medium">Señales</th>
+              <th className="py-2 text-right font-medium">Yield</th>
+              <th className="py-2 text-right font-medium">CLV medio</th>
+              <th className="py-2 text-right font-medium">CLV +</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.filter(([, b]) => b).map(([label, b]) => (
+              <tr key={label} className="border-b border-line/60">
+                <td className="py-1.5">{label}</td>
+                <td className="py-1.5 text-right">{b!.bets}</td>
+                <td className="py-1.5 text-right">{signedNum(b!.yieldPct, 1, '%')}</td>
+                <td className={`py-1.5 text-right ${(b!.avgClvPct ?? 0) > 0 ? 'text-good' : b!.avgClvPct != null ? 'text-bad' : ''}`}>{signedNum(b!.avgClvPct, 2, '%')}</td>
+                <td className="py-1.5 text-right">{b!.clvPositivePct != null ? `${b!.clvPositivePct}%` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-[11px] text-muted">
+        El peso se ajusta en las temporadas de entrenamiento: es el mayor peso del modelo cuya log-loss queda a menos de 0.001 del óptimo.
+        Con la mezcla, el EV solo supera el 5% cuando el modelo discrepa del mercado con fuerza y además hay una cuota mejor que el consenso, así que salen menos señales.
+        La rentabilidad con tan pocas señales es casi puro azar: lo que se compara es el CLV.
+      </p>
+    </Card>
+  );
+}
+
 export function BacktestView() {
   const [competition, setCompetition] = useState('PD');
   const [data, setData] = useState<BacktestLeague | null>(null);
@@ -142,8 +194,9 @@ export function BacktestView() {
 
           {data.betting && data.bettingBestPrice ? (
             <>
-              <BettingCard b={data.betting} title="Motor de valor en prueba · cuota media" note="Escenario conservador: la cuota media del mercado, que casi cualquier casa ofrece. CLV contra la cuota justa de cierre." />
-              <BettingCard b={data.bettingBestPrice} title="Mismo motor · mejor cuota del mercado" note="Escenario optimista: requiere tener cuenta en muchas casas. La diferencia con el escenario anterior es el valor de buscar la mejor cuota." />
+              <BlendComparison data={data} />
+              <BettingCard b={data.bettingBestPrice} title="Motor de producción · mejor cuota del mercado" note="Producción usa la mejor cuota no atípica de las casas disponibles, así que este es el escenario más parecido. CLV contra la cuota justa de cierre." />
+              {data.betting.bets > 0 && <BettingCard b={data.betting} title="Mismo motor · cuota media" note="Escenario conservador: la cuota media del mercado, que casi cualquier casa ofrece." />}
             </>
           ) : (
             <Card>
@@ -160,25 +213,25 @@ export function BacktestView() {
             <p className="mt-2 text-[11px] text-muted">Entre paréntesis, número de predicciones. En amarillo, desviaciones de más de 4 puntos.</p>
           </Card>
 
-          {data.betting && data.betting.recentBets.length > 0 && (
+          {data.bettingBestPrice && data.bettingBestPrice.recentBets.length > 0 && (
             <Card>
-              <SectionTitle>Últimas señales del backtest (cuota media)</SectionTitle>
+              <SectionTitle>Últimas señales del backtest (mejor cuota)</SectionTitle>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[640px] text-xs tabular-nums">
                   <thead>
                     <tr className="border-b border-line text-left text-[11px] uppercase text-muted">
                       <th className="py-2 font-medium">Fecha</th><th className="py-2 font-medium">Partido</th><th className="py-2 font-medium">Selección</th>
-                      <th className="py-2 text-right font-medium">Modelo → calibrada</th><th className="py-2 text-right font-medium">Mercado</th>
+                      <th className="py-2 text-right font-medium">Modelo → calibrada → mezcla</th><th className="py-2 text-right font-medium">Mercado</th>
                       <th className="py-2 text-right font-medium">Cuota</th><th className="py-2 text-right font-medium">EV</th><th className="py-2 text-right font-medium">CLV</th><th className="py-2 text-right font-medium">Resultado</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.betting.recentBets.map(b => (
+                    {data.bettingBestPrice.recentBets.map(b => (
                       <tr key={`${b.date}${b.home}${b.selection}`} className="border-b border-line/60">
                         <td className="whitespace-nowrap py-1.5 pr-2">{b.date}</td>
                         <td className="py-1.5">{b.home} {b.score} {b.away}</td>
                         <td className="py-1.5">{b.label}</td>
-                        <td className="py-1.5 text-right">{b.rawProbabilityPct}% → {b.probabilityPct}%</td>
+                        <td className="whitespace-nowrap py-1.5 text-right">{b.rawProbabilityPct}% → {b.calibratedPct ?? b.probabilityPct}% → {b.probabilityPct}%</td>
                         <td className="py-1.5 text-right">{b.marketPct}%</td>
                         <td className="py-1.5 text-right">{odds(b.odds)}</td>
                         <td className="py-1.5 text-right">{signedNum(b.evPct, 1, '%')}</td>

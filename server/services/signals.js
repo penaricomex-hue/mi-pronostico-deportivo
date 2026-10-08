@@ -8,6 +8,10 @@
 import { ACTIVE_SLUGS_SQL, ACTIVE_CODES, codeForSlug, COMPETITION_NAMES } from '../competitions.js';
 import { settleSelection, profitMultiplier, hitValue, MARKETS } from '../model/markets.js';
 import { normalizeFdMatch } from '../providers/footballData.js';
+import { meanCI, wilsonCI, clvVerdict, REVIEW_SAMPLE } from '../lib/stats.js';
+
+export const EV_THRESHOLDS = [0, 0.02, 0.03, 0.05, 0.08, 0.10];
+const SETTLED = ['won', 'lost', 'half_won', 'half_lost', 'void'];
 
 const round = (x, d = 2) => (x == null || !Number.isFinite(Number(x)) ? null : Number(Number(x).toFixed(d)));
 
@@ -34,8 +38,11 @@ function rowToSignal(r) {
     oddsCapturedAt: r.odds_captured_at,
     modelProbability: n(r.model_probability),
     calibratedProbability: n(r.calibrated_probability),
+    blendedProbability: n(r.blended_probability),
+    modelWeight: n(r.model_weight),
     marketProbability: n(r.market_probability),
     ev: n(r.ev),
+    evModel: n(r.ev_model),
     marketGap: n(r.market_gap),
     avgMarketOdds: n(r.avg_market_odds),
     bookmakerCount: r.bookmaker_count,
@@ -128,14 +135,15 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
           const res = await pool.query(
             `INSERT INTO value_signals (match_id, fixture_id, competition_slug, jornada_key, kickoff_utc, home, away, market, selection, line, label,
                bookmaker, odds, odds_captured_at, model_probability, calibrated_probability, market_probability, push_probability, ev, market_gap,
-               avg_market_odds, bookmaker_count, stake, currency, mode, model_version)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+               avg_market_odds, bookmaker_count, stake, currency, mode, model_version, blended_probability, model_weight, ev_model)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
              ON CONFLICT (fixture_id, market, selection, line) DO NOTHING`,
             [
               a.matchId || null, a.id, a.competitionSlug, s.jornadaKey, a.kickoff, a.home, a.away, s.market, s.selection, s.line || 0, s.label,
               s.executionBookmaker, s.executionOdds, a.odds.capturedAt || new Date().toISOString(), s.modelProbability, s.calibratedProbability,
               s.marketProbability, s.pushProbability ?? null, s.ev, s.marketGap, s.avgMarketOdds, s.bookmakerCount,
-              bankroll.flatStake, bankroll.currency, mode, modelVersion
+              bankroll.flatStake, bankroll.currency, mode, modelVersion,
+              s.blendedProbability ?? null, s.blend?.modelWeight ?? null, s.evModel ?? null
             ]
           );
           if (res.rowCount) { recorded++; s.alreadySignaled = true; }
@@ -147,14 +155,54 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
     return { recorded };
   }
 
+  /**
+   * Registra TODAS las evaluaciones (recomendadas o no), una fila por captura de
+   * cuotas. Base del estudio de umbrales: qué EV mínimo habría funcionado mejor.
+   */
+  async function recordEvaluations(analyses) {
+    if (!pool) return { evaluations: 0 };
+    const cols = ['fixture_id', 'match_id', 'competition_slug', 'jornada_key', 'kickoff_utc', 'home', 'away', 'market', 'selection', 'line',
+      'bookmaker', 'odds', 'odds_captured_at', 'avg_market_odds', 'bookmaker_count', 'model_probability', 'calibrated_probability',
+      'blended_probability', 'model_weight', 'market_probability', 'push_probability', 'ev', 'ev_model', 'market_gap', 'rules_ok',
+      'recommended', 'reason', 'model_version'];
+    const values = [];
+    for (const a of analyses) {
+      const capturedAt = a.odds?.capturedAt;
+      if (!capturedAt) continue;
+      for (const s of a.selections || []) {
+        if (!(s.executionOdds > 1) || s.ev == null) continue;
+        values.push([a.id, a.matchId || null, a.competitionSlug, s.jornadaKey, a.kickoff, a.home, a.away, s.market, s.selection, s.line || 0,
+          s.executionBookmaker, s.executionOdds, capturedAt, s.avgMarketOdds ?? null, s.bookmakerCount ?? null, s.modelProbability ?? null,
+          s.calibratedProbability ?? null, s.blendedProbability ?? null, s.blend?.modelWeight ?? null, s.marketProbability ?? null,
+          s.pushProbability ?? null, s.ev, s.evModel ?? null, s.marketGap ?? null, Boolean(s.rulesOk), Boolean(s.recommended), s.reason || null, modelVersion]);
+      }
+    }
+    let inserted = 0;
+    for (let i = 0; i < values.length; i += 100) {
+      const chunk = values.slice(i, i + 100);
+      const params = [];
+      const tuples = chunk.map(row => `(${row.map(v => { params.push(v); return `$${params.length}`; }).join(',')})`);
+      try {
+        const res = await pool.query(
+          `INSERT INTO value_evaluations (${cols.join(',')}) VALUES ${tuples.join(',')}
+           ON CONFLICT (fixture_id, market, selection, line, odds_captured_at) DO NOTHING`, params);
+        inserted += res.rowCount || 0;
+      } catch (err) {
+        logger.warn(`[signals] No se pudieron guardar evaluaciones: ${err.message}`);
+      }
+    }
+    return { evaluations: inserted };
+  }
+
   /** Escaneo programado: próximos 3 días de LaLiga y Champions. */
   async function scan({ days = 3 } = {}) {
     const fromDate = new Date().toISOString().slice(0, 10);
     const { analyses, warnings } = await analysis.analyzeRange({ fromDate, days, competition: null, tzOffset: 0, withInfo: false });
     const capped = await applyJornadaCap(analyses);
     const { recorded } = await recordFromAnalyses(capped);
+    const { evaluations } = await recordEvaluations(capped);
     if (analyses.length) invalidateKickoffs();
-    return { analyzed: analyses.length, recorded, warnings };
+    return { analyzed: analyses.length, recorded, evaluations, warnings };
   }
 
   async function list({ days = 90, status = '' } = {}) {
@@ -240,9 +288,38 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
         }
       }
     }
+    // Evaluaciones (estudio de umbrales): se liquidan por partido
+    let evaluations = 0;
+    try {
+      const { rows: fx } = await pool.query(
+        `SELECT DISTINCT ON (fixture_id) fixture_id, home, away, kickoff_utc, competition_slug FROM value_evaluations
+          WHERE ${ACTIVE_SLUGS_SQL} AND status = 'pending' AND kickoff_utc < now() - interval '2 hours 15 minutes'
+          ORDER BY fixture_id, kickoff_utc LIMIT 60`
+      );
+      for (const f of fx) {
+        const res = await resultForRow(f, results);
+        if (!res) continue;
+        const { rows: evs } = await pool.query(`SELECT id, selection, line FROM value_evaluations WHERE fixture_id = $1 AND status = 'pending'`, [f.fixture_id]);
+        const ids = [], statuses = [];
+        for (const e of evs) {
+          const st = settleSelection(e.selection, Number(e.line), res.homeGoals, res.awayGoals);
+          if (st) { ids.push(e.id); statuses.push(st); }
+        }
+        if (!ids.length) continue;
+        await pool.query(
+          `UPDATE value_evaluations v SET status = u.status, home_goals = $3, away_goals = $4, settled_at = now()
+             FROM unnest($1::bigint[], $2::text[]) AS u(id, status) WHERE v.id = u.id`,
+          [ids, statuses, res.homeGoals, res.awayGoals]
+        );
+        evaluations += ids.length;
+      }
+    } catch (err) {
+      logger.warn(`[signals] Evaluaciones: ${err.message}`);
+    }
+
     // Aprendizaje: cada liquidación (fin de jornada) reajusta los mapas de calibración
     if (predictions > 0 && calibration) await calibration.refit();
-    return { settled, predictions, recalibrated: predictions > 0 };
+    return { settled, predictions, evaluations, recalibrated: predictions > 0 };
   }
 
   /**
@@ -305,6 +382,26 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
           );
           signals++;
         }
+
+        // CLV de todas las evaluaciones del partido (estudio de umbrales)
+        const { rows: evs } = await pool.query(
+          `SELECT id, market, selection, line, odds FROM value_evaluations WHERE fixture_id = $1 AND status = 'pending'`, [m.external_id]
+        );
+        const ids = [], fairs = [], clvs = [];
+        for (const e of evs) {
+          const fair = e.market === 'asian_handicap'
+            ? (market.ah && Number(market.ah.line) === Number(e.line) ? market.ah.fair?.[e.selection] ?? null : null)
+            : market.fair?.[e.selection] ?? null;
+          if (!fair) continue;
+          ids.push(e.id); fairs.push(fair); clvs.push(Number(e.odds) * fair - 1);
+        }
+        if (ids.length) {
+          await pool.query(
+            `UPDATE value_evaluations v SET closing_fair_probability = u.fair, clv = u.clv
+               FROM unnest($1::bigint[], $2::float8[], $3::float8[]) AS u(id, fair, clv) WHERE v.id = u.id`,
+            [ids, fairs, clvs]
+          );
+        }
       } catch (err) {
         logger.warn(`[signals] Cierre ${m.home}-${m.away}: ${err.message}`);
       }
@@ -329,7 +426,12 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
       const staked = list.filter(s => s.status !== 'pending').reduce((a, s) => a + s.stake, 0);
       const profit = list.reduce((a, s) => a + (s.profit || 0), 0);
       const clv = list.filter(s => s.clv != null);
+      const settledList = list.filter(s => SETTLED.includes(s.status) && s.stake > 0);
+      const hits = g.reduce((a, s) => a + hitValue(s.status), 0);
       return {
+        yieldCI: meanCI(settledList.map(s => (s.profit || 0) / s.stake), { scale: 100 }),
+        clvCI: meanCI(clv.map(s => s.clv), { scale: 100 }),
+        hitRateCI: wilsonCI(hits, g.length),
         signals: list.length,
         resolved: list.filter(s => s.status !== 'pending').length,
         hitRatePct: g.length ? round((100 * g.reduce((a, s) => a + hitValue(s.status), 0)) / g.length, 1) : null,
@@ -393,6 +495,7 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
     const minSample = 5;
     const ranked = byMarket.filter(m => m.resolved >= minSample);
     const clvList = all.filter(s => s.clv != null);
+    const clvCI = meanCI(clvList.map(s => s.clv), { scale: 100 });
 
     return {
       days: d,
@@ -413,7 +516,11 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
         beatClosingPct: clvList.length ? round((100 * clvList.filter(s => s.clv > 0).length) / clvList.length, 1) : null,
         avgClvPct: clvList.length ? round((100 * clvList.reduce((a, s) => a + s.clv, 0)) / clvList.length) : null,
         target: 'Acumular 300–500 señales reales antes de concluir si hay ventaja sostenida.',
-        progressPct: round(Math.min(100, (100 * all.length) / 300), 1)
+        progressPct: round(Math.min(100, (100 * clvList.length) / REVIEW_SAMPLE), 1),
+        clvCI,
+        beatClosingCI: wilsonCI(clvList.filter(s => s.clv > 0).length, clvList.length),
+        verdict: clvVerdict(clvCI),
+        stopRule: `Revisión obligatoria a las ${REVIEW_SAMPLE} señales con cuota de cierre: si el intervalo del CLV no está por encima de 0, se cambia el enfoque. Antes, si a las 100 señales el CLV es negativo con 95% de confianza.`
       },
       byCompetition,
       byMarket,
@@ -428,5 +535,79 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
     };
   }
 
-  return { applyJornadaCap, recordFromAnalyses, scan, list, settle, captureClosing, performance };
+  /**
+   * Estudio de umbrales con TODAS las evaluaciones registradas.
+   * Para cada umbral de EV y variante (mezcla vs solo modelo): se toma la PRIMERA
+   * captura en la que cada selección superó el umbral (como haría producción),
+   * una sola selección por partido (la de mayor EV) y apuesta plana de 1 unidad.
+   * Se aplican las demás reglas (cuotas 1.50–4.00, ≥ 3 casas, desviación ≤ 10 pts);
+   * no se aplica el límite de 3 por jornada para no depender del orden.
+   */
+  async function thresholdStudy({ days = 90 } = {}) {
+    requireDb();
+    const d = [7, 30, 60, 90].includes(Number(days)) ? Number(days) : 90;
+    const maxGap = analysis?.engine?.rules?.maxMarketGap ?? 0.10;
+    const { rows } = await pool.query(
+      `SELECT fixture_id, competition_slug, market, selection, line, odds, odds_captured_at, ev, ev_model, market_gap, status, clv
+         FROM value_evaluations
+        WHERE ${ACTIVE_SLUGS_SQL} AND rules_ok AND kickoff_utc >= now() - ($1 || ' days')::interval
+        ORDER BY odds_captured_at`,
+      [String(d)]
+    );
+    const evals = rows.map(r => ({
+      fixtureId: r.fixture_id, slug: r.competition_slug, market: r.market, selection: r.selection, line: Number(r.line),
+      odds: Number(r.odds), at: r.odds_captured_at, ev: r.ev == null ? null : Number(r.ev), evModel: r.ev_model == null ? null : Number(r.ev_model),
+      gap: r.market_gap == null ? null : Number(r.market_gap), status: r.status, clv: r.clv == null ? null : Number(r.clv)
+    })).filter(e => e.gap == null || e.gap <= maxGap);
+
+    function pick(variant, t) {
+      const first = new Map();
+      for (const e of evals) {
+        const ev = variant === 'blend' ? e.ev : e.evModel;
+        if (ev == null || ev < t) continue;
+        const k = `${e.fixtureId}|${e.market}|${e.selection}|${e.line}`;
+        if (!first.has(k)) first.set(k, { ...e, evUsed: ev });
+      }
+      const perMatch = new Map();
+      for (const e of first.values()) {
+        const prev = perMatch.get(e.fixtureId);
+        if (!prev || e.evUsed > prev.evUsed) perMatch.set(e.fixtureId, e);
+      }
+      return [...perMatch.values()];
+    }
+    function metrics(list) {
+      const settled = list.filter(e => SETTLED.includes(e.status));
+      const graded = settled.filter(e => hitValue(e.status) != null);
+      const clv = list.filter(e => e.clv != null);
+      const yieldCI = meanCI(settled.map(e => profitMultiplier(e.status, e.odds)), { scale: 100 });
+      const clvCI = meanCI(clv.map(e => e.clv), { scale: 100 });
+      return {
+        candidates: list.length,
+        settled: settled.length,
+        avgEvPct: list.length ? round((100 * list.reduce((a, e) => a + e.evUsed, 0)) / list.length) : null,
+        hitRateCI: wilsonCI(graded.reduce((a, e) => a + hitValue(e.status), 0), graded.length),
+        yieldCI,
+        clvCI,
+        beatClosingCI: wilsonCI(clv.filter(e => e.clv > 0).length, clv.length),
+        verdict: clvVerdict(clvCI)
+      };
+    }
+    const variants = { blend: 'Mezcla modelo + mercado (producción)', model: 'Solo modelo calibrado (v10.0)' };
+    const table = [];
+    for (const [variant, label] of Object.entries(variants)) {
+      for (const t of EV_THRESHOLDS) table.push({ variant, variantLabel: label, minEvPct: round(t * 100, 0), ...metrics(pick(variant, t)) });
+    }
+    const currentMinEv = analysis?.engine?.rules?.minEv ?? 0.05;
+    return {
+      days: d,
+      evaluations: rows.length,
+      evaluationsSettled: rows.filter(r => SETTLED.includes(r.status)).length,
+      evaluationsWithClv: rows.filter(r => r.clv != null).length,
+      currentMinEvPct: round(currentMinEv * 100, 0),
+      method: 'Primera captura que supera el umbral, una selección por partido, 1 unidad plana; sin el límite de 3 por jornada. Intervalos al 95%.',
+      table
+    };
+  }
+
+  return { applyJornadaCap, recordFromAnalyses, recordEvaluations, scan, list, settle, captureClosing, performance, thresholdStudy };
 }

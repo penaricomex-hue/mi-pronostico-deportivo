@@ -9,6 +9,8 @@
  * 5. Si la competición tiene cuotas históricas (LaLiga), simula el
  *    ValueBettingEngine con las mismas reglas que producción:
  *    EV ≥ 5%, |modelo − mercado| ≤ 10 pts, cuotas 1.50–4.00, máx. 3 por jornada.
+ * 6. El peso de la mezcla modelo + mercado se ajusta en entrenamiento (mínima
+ *    log-loss) y el EV de prueba se calcula con la probabilidad mezclada.
  */
 import { fitDixonColes, DEFAULT_FIT_OPTIONS } from '../model/dixonColes.js';
 import { devig } from '../model/market.js';
@@ -18,6 +20,7 @@ import { emptyBins, addObservation, fitCalibration, calibrateVector, mergeBins }
 import { createValueBettingEngine, VALUE_RULES } from '../model/valueEngine.js';
 import { selectionLabel, settleSelection, profitMultiplier } from '../model/markets.js';
 import { jornadaKey } from '../competitions.js';
+import { BLEND_GROUPS, blendProbabilities, fitWeight, DEFAULT_MODEL_WEIGHT } from '../model/blend.js';
 
 const DAY_MS = 86400000;
 
@@ -136,21 +139,22 @@ function scoreBinary(list) {
  *   'average' → cuota media de mercado (conservador; lo que casi cualquier casa paga)
  *   'best'    → mejor cuota del mercado (optimista; requiere cuentas en muchas casas)
  */
-export function simulateBetting(records, maps, { slug, rules = VALUE_RULES, priceMode = 'average' } = {}) {
+export function simulateBetting(records, maps, { slug, rules = VALUE_RULES, priceMode = 'average', weights = null } = {}) {
   const engine = createValueBettingEngine(rules);
   const candidates = [];
   for (const r of records) {
     if (!r.market) continue;
     const p = calibrateRecord(r, maps);
+    const blended = weights ? blendProbabilities(p, r.market, weights) : null;
     for (const sel of ['home', 'draw', 'away', 'over25', 'under25']) {
       const k = PRICE_KEYS[sel];
       const odds = priceMode === 'best' ? (r.max?.[k] || r.open?.[k]) : r.open?.[k];
       if (!(odds > 1) || r.market[sel] == null) continue;
       const ev = engine.evaluate({
-        selection: sel, modelProbability: p[sel], marketProbability: r.market[sel], executionOdds: odds,
+        selection: sel, modelProbability: p[sel], decisionProbability: blended?.[sel] ?? null, marketProbability: r.market[sel], executionOdds: odds,
         bookmakerCount: rules.minBookmakers, modelAvailable: true
       });
-      candidates.push({ ...ev, r, selection: sel, probability: p[sel], rawProbability: r.model[sel], jornadaKey: jornadaKey(slug, `${r.date}T${r.time || '20:00'}:00Z`) });
+      candidates.push({ ...ev, r, selection: sel, probability: blended?.[sel] ?? p[sel], calibratedProbability: p[sel], rawProbability: r.model[sel], jornadaKey: jornadaKey(slug, `${r.date}T${r.time || '20:00'}:00Z`) });
     }
   }
   // Una selección por partido (la de mayor EV) y máximo 3 por jornada
@@ -181,8 +185,9 @@ export function simulateBetting(records, maps, { slug, rules = VALUE_RULES, pric
       date: c.r.date, home: c.r.home, away: c.r.away, score: `${c.r.hg}-${c.r.ag}`,
       selection: c.selection, label: selectionLabel(c.selection),
       rawProbabilityPct: Number((c.rawProbability * 100).toFixed(1)),
+      calibratedPct: Number((c.calibratedProbability * 100).toFixed(1)),
       probabilityPct: Number((c.probability * 100).toFixed(1)),
-      marketPct: Number(((c.probability - c.marketGap) * 100).toFixed(1)),
+      marketPct: Number(((c.calibratedProbability - c.marketGap) * 100).toFixed(1)),
       odds: c.executionOdds, evPct: Number((c.ev * 100).toFixed(1)),
       clvPct: clv != null ? Number((clv * 100).toFixed(1)) : null,
       result: status, profitUnits: Number(pnl.toFixed(2))
@@ -191,6 +196,7 @@ export function simulateBetting(records, maps, { slug, rules = VALUE_RULES, pric
   const bets = capped.length;
   return {
     priceMode,
+    blended: Boolean(weights),
     bets,
     won,
     hitRatePct: bets ? Number(((100 * won) / bets).toFixed(1)) : null,
@@ -208,8 +214,8 @@ export function simulateBetting(records, maps, { slug, rules = VALUE_RULES, pric
 }
 
 /** Evalúa probabilísticamente un conjunto (modelo original vs calibrado vs mercado). */
-export function evaluateRecords(records, maps) {
-  const sModel = createScorer(), sCal = createScorer(), sMarket = createScorer(), sUniform = createScorer();
+export function evaluateRecords(records, maps, weights = null) {
+  const sModel = createScorer(), sCal = createScorer(), sMarket = createScorer(), sUniform = createScorer(), sBlend = createScorer();
   const bttsRaw = [], bttsCal = [];
   for (const r of records) {
     const o = outcomeOf(r.hg, r.ag);
@@ -219,25 +225,50 @@ export function evaluateRecords(records, maps) {
     sModel.add(r.model, o, r.model.over25, over);
     sCal.add(c, o, c.over25, over);
     sUniform.add(UNIFORM_1X2, o);
-    if (r.market?.home != null) sMarket.add(r.market, o, r.market.over25, r.market.over25 != null ? over : null);
+    if (r.market?.home != null) {
+      sMarket.add(r.market, o, r.market.over25, r.market.over25 != null ? over : null);
+      if (weights) {
+        const b = blendProbabilities(c, r.market, weights);
+        if (b?.home != null) sBlend.add(b, o, b.over25, b.over25 != null ? over : null);
+      }
+    }
     bttsRaw.push([r.model.btts_yes, both]);
     bttsCal.push([c.btts_yes, both]);
   }
   const model = sModel.result(), calibrated = sCal.result(), market = sMarket.result(), uniform = sUniform.result();
+  const blended = weights ? sBlend.result() : null;
   return {
     matches: records.length,
-    metrics: { model, calibrated, market, uniform, bttsModel: scoreBinary(bttsRaw), bttsCalibrated: scoreBinary(bttsCal) },
+    metrics: { model, calibrated, blended, market, uniform, bttsModel: scoreBinary(bttsRaw), bttsCalibrated: scoreBinary(bttsCal) },
     verdicts: {
       modelBrier: verdict(model.brier, market.brier, uniform.brier),
       calibratedBrier: verdict(calibrated.brier, market.brier, uniform.brier),
       modelLogLoss: verdict(model.logLoss, market.logLoss, uniform.logLoss),
-      calibratedLogLoss: verdict(calibrated.logLoss, market.logLoss, uniform.logLoss)
+      calibratedLogLoss: verdict(calibrated.logLoss, market.logLoss, uniform.logLoss),
+      blendedBrier: blended ? verdict(blended.brier, market.brier, uniform.brier) : null,
+      blendedLogLoss: blended ? verdict(blended.logLoss, market.logLoss, uniform.logLoss) : null
     },
     calibration: {
       model: bandTable(records, r => r.model),
       calibrated: bandTable(records, r => calibrateRecord(r, maps))
     }
   };
+}
+
+/** Peso óptimo de la mezcla por grupo, con probabilidades calibradas de entrenamiento. */
+export function fitBlendWeights(records, maps) {
+  const rows1x2 = [], rowsOu = [];
+  for (const r of records) {
+    if (!r.market) continue;
+    const c = calibrateRecord(r, maps);
+    rows1x2.push({ model: c, market: r.market, outcome: outcomeOf(r.hg, r.ag) });
+    rowsOu.push({ model: c, market: r.market, outcome: r.hg + r.ag >= 3 ? 'over25' : 'under25' });
+  }
+  const w1x2 = fitWeight(rows1x2, BLEND_GROUPS['1x2']);
+  const wOu = fitWeight(rowsOu, BLEND_GROUPS.over_under);
+  // Sin cuotas históricas de ambos marcan: se usa el peso de más/menos (también de goles)
+  const wBtts = { weight: wOu.fitted ? wOu.weight : DEFAULT_MODEL_WEIGHT, samples: 0, fitted: false, inheritedFrom: 'over_under' };
+  return { '1x2': w1x2, over_under: wOu, btts: wBtts };
 }
 
 /**
@@ -257,6 +288,8 @@ export function runLeagueBacktest(matches, { slug, trainSeasons, testSeasons, xi
   const train = bestRecords.filter(r => trainSeasons.includes(r.season));
   const test = bestRecords.filter(r => testSeasons.includes(r.season));
   const trainMaps = fitMaps(calibrationBins(train), method);
+  const blend = hasOdds ? fitBlendWeights(train, trainMaps) : null;
+  const weights = blend ? Object.fromEntries(Object.entries(blend).map(([g, v]) => [g, v.weight])) : null;
 
   const out = {
     competitionSlug: slug,
@@ -265,20 +298,26 @@ export function runLeagueBacktest(matches, { slug, trainSeasons, testSeasons, xi
     testSeasons,
     rules,
     calibrationMaps: Object.fromEntries(Object.entries(trainMaps).map(([g, m]) => [g, { method: m.method, samples: m.samples }])),
-    train: evaluateRecords(train, trainMaps),
-    test: evaluateRecords(test, trainMaps),
+    blendWeights: blend,
+    train: evaluateRecords(train, trainMaps, weights),
+    test: evaluateRecords(test, trainMaps, weights),
     betting: null,
-    bettingBestPrice: null
+    bettingBestPrice: null,
+    bettingModelOnly: null,
+    bettingModelOnlyBestPrice: null
   };
 
   if (hasOdds) {
-    out.betting = simulateBetting(test, trainMaps, { slug, rules, priceMode: 'average' });
-    out.bettingBestPrice = simulateBetting(test, trainMaps, { slug, rules, priceMode: 'best' });
+    // Producción v10.1: EV con la mezcla. Se conserva la versión "solo modelo" para comparar.
+    out.betting = simulateBetting(test, trainMaps, { slug, rules, priceMode: 'average', weights });
+    out.bettingBestPrice = simulateBetting(test, trainMaps, { slug, rules, priceMode: 'best', weights });
+    out.bettingModelOnly = simulateBetting(test, trainMaps, { slug, rules, priceMode: 'average' });
+    out.bettingModelOnlyBestPrice = simulateBetting(test, trainMaps, { slug, rules, priceMode: 'best' });
   }
 
   // Semilla de producción: TODOS los registros fuera de muestra (entrenamiento + prueba)
   const seed = calibrationBins(bestRecords);
-  return { report: out, seed };
+  return { report: out, seed, weights };
 }
 
 export { mergeBins };
