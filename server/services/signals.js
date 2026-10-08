@@ -150,7 +150,7 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
   /** Escaneo programado: próximos 3 días de LaLiga y Champions. */
   async function scan({ days = 3 } = {}) {
     const fromDate = new Date().toISOString().slice(0, 10);
-    const { analyses, warnings } = await analysis.analyzeRange({ fromDate, days, competition: null, tzOffset: 0 });
+    const { analyses, warnings } = await analysis.analyzeRange({ fromDate, days, competition: null, tzOffset: 0, withInfo: false });
     const capped = await applyJornadaCap(analyses);
     const { recorded } = await recordFromAnalyses(capped);
     return { analyzed: analyses.length, recorded, warnings };

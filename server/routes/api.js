@@ -95,7 +95,7 @@ export function createApiRouter({ analysis, bets, signals, calibration, ratings,
     const { competition, tzOffset, date } = parseCommon(req);
     const days = Math.min(5, Math.max(1, Number(req.query.days) || 3));
     const includeNearMisses = req.query.includeNearMisses === 'true' || req.query.includeUnvalidated === 'true';
-    const { analyses: raw, warnings } = await analysis.analyzeRange({ fromDate: date, days, competition, tzOffset });
+    const { analyses: raw, warnings } = await analysis.analyzeRange({ fromDate: date, days, competition, tzOffset, withInfo: false });
     const analyses = signals ? await signals.applyJornadaCap(raw) : raw;
     // Paper trading: cada recomendación queda registrada con la cuota exacta del momento.
     const recorded = signals ? (await signals.recordFromAnalyses(analyses).catch(() => ({ recorded: 0 }))).recorded : 0;

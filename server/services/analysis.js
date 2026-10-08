@@ -179,7 +179,7 @@ export function createAnalysisService({
     return MARKETS[SELECTION_MARKET[sel]]?.calibrationGroup || null;
   }
 
-  async function analyzeFixture(fixture, { withExtras = true, persist = true } = {}) {
+  async function analyzeFixture(fixture, { withExtras = true, persist = true, withInfo = true } = {}) {
     const comp = fixture.competitionCode;
     if (!isActiveCompetition(comp)) {
       const err = new Error('Competición desactivada: MK Bets v10 solo analiza LaLiga y Champions.');
@@ -304,7 +304,7 @@ export function createAnalysisService({
 
     let secondOpinion = null;
     let injuries = null;
-    if (withExtras && bigBalls?.configured) {
+    if (withExtras && withInfo && bigBalls?.configured) {
       try {
         [secondOpinion, injuries] = await Promise.all([
           bigBalls.secondOpinion(fixture.home, fixture.away, comp),
@@ -350,7 +350,7 @@ export function createAnalysisService({
   }
 
   /** Analiza los partidos de varios días (para valor y señales). */
-  async function analyzeRange({ fromDate, days = 3, competition = null, tzOffset = 0, persist = true }) {
+  async function analyzeRange({ fromDate, days = 3, competition = null, tzOffset = 0, persist = true, withInfo = true }) {
     const warnings = [];
     const analyses = [];
     const seen = new Set();
@@ -363,7 +363,7 @@ export function createAnalysisService({
         if (new Date(f.kickoff).getTime() < Date.now()) continue;
         seen.add(f.id);
         try {
-          analyses.push(await analyzeFixture(f, { withExtras: true, persist }));
+          analyses.push(await analyzeFixture(f, { withExtras: true, persist, withInfo }));
         } catch (err) {
           logger.error(`[analysis] ${f.home} - ${f.away}: ${err.message}`);
           warnings.push(`Error analizando ${f.home} - ${f.away}`);
