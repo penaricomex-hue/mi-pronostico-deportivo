@@ -1,42 +1,41 @@
 {
   "name": "mi-pronostico-deportivo",
   "private": true,
-  "version": "8.0.4",
+  "version": "9.0.0",
+  "description": "MK Bets: pronósticos de fútbol con modelo Dixon-Coles, cuotas reales y backtest fuera de muestra.",
   "type": "module",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
     "start": "node server.js",
+    "dev": "vite",
+    "dev:server": "node --watch server.js",
     "build": "vite build",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit -p . && node scripts/check-syntax.js",
+    "test": "node --test tests/*.test.js",
+    "check": "npm run lint && npm test && npm run build",
+    "backtest": "node scripts/run-backtest.js",
+    "fetch-history": "node scripts/fetch-history.js",
+    "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@google/genai": "^2.4.0",
-    "@tailwindcss/vite": "^4.3.3",
-    "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
-    "pg": "^8.23.0",
-    "react": "^19.0.1",
-    "react-dom": "^19.0.1",
-    "vite": "^8.3.0"
+    "pg": "^8.23.0"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.14.0",
-    "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "autoprefixer": "^10.4.21",
-    "esbuild": "^0.28.2",
+    "@vitejs/plugin-react": "^6.1.1",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
     "tailwindcss": "^4.3.3",
-    "tsx": "^4.21.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
   }
 }

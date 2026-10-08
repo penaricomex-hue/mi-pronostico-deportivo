@@ -1,31 +1,55 @@
-# Render Blueprint Specification (render.yaml)
-# Despliegue automático con un solo clic en Render
+# Render Blueprint. Si el servicio se creó a mano (sin Blueprint), copia
+# buildCommand y startCommand en Settings → Build & Deploy del panel de Render.
 services:
   - type: web
     name: mi-pronostico-deportivo
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install
+    # --include=dev: Vite y Tailwind son dependencias de compilación.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: node server.js
     healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 10000
-      - key: STAKE_EUR
-        value: "10"
+      - key: NODE_VERSION
+        value: "22"
+      # Acceso (obligatorio: sin estas dos variables la app responde 503)
+      - key: APP_USERNAME
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      # Proveedores de datos
       - key: FOOTBALL_DATA_TOKEN
         sync: false
       - key: ODDS_API_KEY
         sync: false
       - key: BIGBALLS_KEY
         sync: false
+      # PostgreSQL: apuestas simuladas, caché y consumo de cuota persistentes
       - key: DATABASE_URL
         sync: false
-      - key: APP_USERNAME
+      - key: DATABASE_CA_CERT
         sync: false
-      - key: APP_PASSWORD
-        sync: false
+      # Banca
+      - key: CURRENCY
+        value: MXN
+      - key: STAKE
+        value: "100"
+      - key: BANKROLL
+        value: "5000"
+      - key: KELLY_FRACTION
+        value: "0.25"
+      - key: MAX_STAKE_PCT
+        value: "0.02"
+      # Protección de créditos de The Odds API
+      - key: ODDS_CACHE_MINUTES
+        value: "20"
+      - key: ODDS_DAILY_CREDIT_BUDGET
+        value: "30"
+      - key: ODDS_RESERVE_CREDITS
+        value: "40"
+      - key: TRACK_CLOSING_ODDS
+        value: "false"

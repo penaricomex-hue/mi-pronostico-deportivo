@@ -1,160 +1,78 @@
-name: Build Android APK
+name: Android APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-apk.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    name: Build APK
+    name: Compilar APK
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Add Android cmdline-tools to PATH
+      - name: Instalar plataforma Android 35
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          SDKMANAGER_PATH=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" -iname sdkmanager -type f 2>/dev/null | head -n1)
-          if [ -z "$SDKMANAGER_PATH" ]; then
-            echo "No se encontro sdkmanager."
-            exit 1
-          fi
-          CMDLINE_TOOLS_BIN=$(dirname "$SDKMANAGER_PATH")
-          echo "$CMDLINE_TOOLS_BIN" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          SDKMANAGER=$(find "$ANDROID_HOME" -iname sdkmanager -type f | head -n1)
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Accept Android SDK licenses
-        run: |
-          yes | sdkmanager --licenses --sdk_root="${ANDROID_HOME}"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
-      - name: Install Android SDK
-        run: |
-          sdkmanager --sdk_root="${ANDROID_HOME}" "platform-tools"
-          sdkmanager --sdk_root="${ANDROID_HOME}" "platforms;android-35"
-          sdkmanager --sdk_root="${ANDROID_HOME}" "build-tools;35.0.0"
-
-      - name: Install Gradle 8.9
-        run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip
-          unzip -q gradle-8.9-bin.zip
-          echo "$GITHUB_WORKSPACE/gradle-8.9/bin" >> "$GITHUB_PATH"
-
-      - name: Ensure Android resources and manifest exist
-        run: |
-          mkdir -p android/app/src/main/res/drawable
-          mkdir -p android/app/src/main/res/mipmap-anydpi-v26
-          mkdir -p android/app/src/main/res/values
-
-          cat << 'EOF' > android/app/src/main/res/drawable/ic_launcher_background.xml
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="108dp"
-              android:height="108dp"
-              android:viewportWidth="108"
-              android:viewportHeight="108">
-              <path
-                  android:fillColor="#0f172a"
-                  android:pathData="M0,0h108v108h-108z"/>
-          </vector>
-          EOF
-
-          cat << 'EOF' > android/app/src/main/res/drawable/ic_launcher_foreground.xml
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="108dp"
-              android:height="108dp"
-              android:viewportWidth="108"
-              android:viewportHeight="108">
-              <path
-                  android:pathData="M 24,76 L 24,32 L 48,60 L 72,32 L 72,76"
-                  android:strokeColor="#ffb45d"
-                  android:strokeWidth="7"
-                  android:strokeLineCap="round"
-                  android:strokeLineJoin="round" />
-              <path
-                  android:pathData="M 72,54 L 94,31"
-                  android:strokeColor="#ffb45d"
-                  android:strokeWidth="7"
-                  android:strokeLineCap="round" />
-              <path
-                  android:pathData="M 72,54 L 94,77"
-                  android:strokeColor="#ffb45d"
-                  android:strokeWidth="7"
-                  android:strokeLineCap="round" />
-          </vector>
-          EOF
-
-          cat << 'EOF' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@drawable/ic_launcher_background"/>
-              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
-          </adaptive-icon>
-          EOF
-
-          cat << 'EOF' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@drawable/ic_launcher_background"/>
-              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
-          </adaptive-icon>
-          EOF
-
-          cat << 'EOF' > android/app/src/main/res/values/colors.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <color name="ic_launcher_background">#0f172a</color>
-          </resources>
-          EOF
-
-          cat << 'EOF' > android/app/src/main/res/values/themes.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="Theme.MiPronosticoDeportivo" parent="@android:style/Theme.NoTitleBar">
-              </style>
-          </resources>
-          EOF
-
-          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <application
-                  android:allowBackup="true"
-                  android:label="MK Bets"
-                  android:icon="@mipmap/ic_launcher"
-                  android:roundIcon="@mipmap/ic_launcher_round"
-                  android:supportsRtl="true"
-                  android:theme="@style/Theme.MiPronosticoDeportivo">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-      - name: Build Android APK
+      - name: APK de depuración
         working-directory: android
-        run: |
-          gradle assembleDebug
+        run: gradle --no-daemon assembleDebug
 
-      - name: Verify APK
+      - name: APK de release firmado (solo si hay secretos de firma)
+        if: github.event_name != 'pull_request'
+        working-directory: android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          ls -lh android/app/build/outputs/apk/debug/app-debug.apk
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "Sin ANDROID_KEYSTORE_BASE64: se omite el APK firmado."
+            exit 0
+          fi
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          echo "$KEYSTORE_B64" | base64 -d > "$ANDROID_KEYSTORE_PATH"
+          gradle --no-daemon assembleRelease
+          rm -f "$ANDROID_KEYSTORE_PATH"
 
-      - name: Upload APK
+      - name: Subir APK de depuración
         uses: actions/upload-artifact@v4
         with:
-          name: Mi-Pronostico-Deportivo-debug
+          name: MK-Bets-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Subir APK firmado
+        uses: actions/upload-artifact@v4
+        with:
+          name: MK-Bets-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: ignore
+          retention-days: 30

@@ -1,43 +1,75 @@
-name: CI - Verificación de Calidad y Despliegue
+name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+  workflow_dispatch:
+
+# Mínimo privilegio: el token del workflow solo puede leer el repositorio.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  verificar:
+    name: Lint, pruebas y build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Checkout del repositorio
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configurar Node.js 22
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
 
-      - name: Instalación reproducible con npm ci
+      - name: Instalar dependencias (reproducible)
         run: npm ci
 
-      - name: Validación de sintaxis en server.js y engine.js
-        run: |
-          node -c server.js
-          node -c engine.js
+      - name: Auditoría de dependencias (falla con vulnerabilidades altas o críticas)
+        run: npm audit --audit-level=high
 
-      - name: Compilación del frontend Vite
+      - name: Lint (TypeScript + sintaxis del servidor)
+        run: npm run lint
+
+      - name: Pruebas
+        run: npm test
+
+      - name: Build del frontend
         run: npm run build
 
-      - name: Comprobación de versión del modelo V8.0.4
+      - name: Verificar datos versionados
         run: |
           node -e "
           import fs from 'fs';
-          const s = fs.readFileSync('server.js', 'utf8');
-          if (!s.includes(\"const MODEL_VERSION = 'V8.0.4';\")) {
-            console.error('ERROR: server.js no contiene MODEL_VERSION V8.0.4');
-            process.exit(1);
+          const leagues = ['PL','PD','SA','BL1','FL1'];
+          for (const l of leagues) {
+            const d = JSON.parse(fs.readFileSync('data/history/' + l + '.json', 'utf8'));
+            const n = (d.matches || d).length;
+            if (n < 1000) throw new Error(l + ': historial incompleto (' + n + ' partidos)');
           }
-          console.log('MODEL_VERSION V8.0.4 verificado con éxito.');
+          const r = JSON.parse(fs.readFileSync('data/backtest-report.json', 'utf8'));
+          const p = JSON.parse(fs.readFileSync('data/model-params.json', 'utf8'));
+          if (r.modelVersion !== p.modelVersion) throw new Error('backtest-report y model-params con versiones distintas');
+          JSON.parse(fs.readFileSync('data/teams.json', 'utf8'));
+          console.log('Datos OK');
           "
+
+  secretos:
+    name: Búsqueda de secretos filtrados
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks (todo el historial)
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            detect --source /repo --redact --verbose --exit-code 1
