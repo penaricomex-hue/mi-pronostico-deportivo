@@ -48,8 +48,27 @@ services:
       - key: ODDS_CACHE_MINUTES
         value: "20"
       - key: ODDS_DAILY_CREDIT_BUDGET
-        value: "30"
+        value: "15"
       - key: ODDS_RESERVE_CREDITS
         value: "40"
       - key: TRACK_CLOSING_ODDS
-        value: "false"
+        value: "true"
+      - key: ODDS_MARKETS
+        value: h2h,totals,spreads
+      # Motor de valor V10 (LaLiga + Champions, ejecución en Caliente MX)
+      - key: PAPER_TRADING
+        value: "true"
+      - key: ENGINE_MIN_EV
+        value: "0.05"
+      - key: ENGINE_MAX_MARKET_GAP
+        value: "0.10"
+      - key: ENGINE_MIN_ODDS
+        value: "1.50"
+      - key: ENGINE_MAX_ODDS
+        value: "4.00"
+      - key: ENGINE_MAX_BETS_PER_MATCHDAY
+        value: "3"
+      - key: CALIENTE_FEED_URL
+        sync: false
+      - key: CALIENTE_FEED_TOKEN
+        sync: false

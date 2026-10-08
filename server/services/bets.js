@@ -3,6 +3,7 @@
  * partido, cuota de cierre y CLV.
  */
 import { SELECTIONS, SELECTION_LABELS, SELECTION_MARKET } from '../model/predict.js';
+import { ACTIVE_SLUG_SQL, slugForCode, isActiveCompetition } from '../competitions.js';
 
 export function evaluateSelectionResult(selection, homeGoals, awayGoals) {
   if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return null;
@@ -94,20 +95,26 @@ export function createBetsService({ pool, footballData, odds, analysis, teams, b
       err.status = 400;
       throw err;
     }
+    if (competition && !isActiveCompetition(competition)) {
+      const err = new Error('Solo se registran apuestas de LaLiga EA Sports y UEFA Champions League.');
+      err.status = 400;
+      throw err;
+    }
     const maxStake = bankroll.bankroll * 0.1;
     const finalStake = Number.isFinite(Number(stake)) && Number(stake) > 0 ? Math.min(Number(stake), maxStake) : bankroll.flatStake;
     const matchDate = kickoff ? String(kickoff).slice(0, 10) : null;
 
     const { rows } = await pool.query(
       `INSERT INTO simulated_bets
-        (match_date, kickoff_utc, fixture_id, home, away, competition, market, outcome, selection, market_name, odds, model_probability, stake, currency, status, legs_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15) RETURNING *`,
+        (match_date, kickoff_utc, fixture_id, home, away, competition, market, outcome, selection, market_name, odds, model_probability, stake, currency, status, legs_json, competition_slug)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15,$16) RETURNING *`,
       [
         matchDate, kickoff || null, fixtureId || null, home, away, competition || null,
         isParlay ? 'parlay' : SELECTION_MARKET[selection], selection, selection,
         isParlay ? `Combinada (${legs.length} patas)` : SELECTION_LABELS[selection],
         Number(price), probability != null ? Number(probability) : null, finalStake, bankroll.currency,
-        isParlay ? JSON.stringify(legs.map(l => ({ ...l, status: 'pending' }))) : null
+        isParlay ? JSON.stringify(legs.map(l => ({ ...l, status: 'pending' }))) : null,
+        isParlay ? (legs.every(l => isActiveCompetition(l.competitionCode)) ? slugForCode(legs[0].competitionCode) : 'excluded') : slugForCode(competition)
       ]
     );
     return rowToBet(rows[0]);
@@ -117,8 +124,8 @@ export function createBetsService({ pool, footballData, odds, analysis, teams, b
     requireDb();
     const intervals = { week: '7 days', month: '30 days', year: '365 days' };
     const params = [];
-    let where = '';
-    if (intervals[period]) { params.push(intervals[period]); where = 'WHERE created_at >= now() - $1::interval'; }
+    let where = `WHERE ${ACTIVE_SLUG_SQL}`;
+    if (intervals[period]) { params.push(intervals[period]); where += ' AND created_at >= now() - $1::interval'; }
     const { rows } = await pool.query(`SELECT * FROM simulated_bets ${where} ORDER BY created_at DESC LIMIT 500`, params);
     return rows.map(rowToBet);
   }
@@ -169,7 +176,7 @@ export function createBetsService({ pool, footballData, odds, analysis, teams, b
   async function autoSettle() {
     if (!pool) return { settled: 0, checked: 0 };
     const { rows } = await pool.query(
-      `SELECT * FROM simulated_bets WHERE status = 'pending'
+      `SELECT * FROM simulated_bets WHERE status = 'pending' AND ${ACTIVE_SLUG_SQL}
          AND (kickoff_utc IS NULL OR kickoff_utc < now() - interval '2 hours 15 minutes')
        ORDER BY kickoff_utc NULLS LAST LIMIT 100`
     );
@@ -223,7 +230,7 @@ export function createBetsService({ pool, footballData, odds, analysis, teams, b
   async function captureClosingOdds() {
     if (!pool) return { captured: 0 };
     const { rows } = await pool.query(
-      `SELECT * FROM simulated_bets WHERE status = 'pending' AND market <> 'parlay' AND closing_odds IS NULL
+      `SELECT * FROM simulated_bets WHERE status = 'pending' AND ${ACTIVE_SLUG_SQL} AND market <> 'parlay' AND closing_odds IS NULL
          AND kickoff_utc BETWEEN now() AND now() + interval '25 minutes'`
     );
     let captured = 0;
@@ -248,7 +255,7 @@ export function createBetsService({ pool, footballData, odds, analysis, teams, b
     requireDb();
     const interval = { week: '7 days', month: '30 days', year: '365 days', all: '100 years' }[period] || '30 days';
     const { rows } = await pool.query(
-      `SELECT * FROM simulated_bets WHERE created_at >= now() - $1::interval`,
+      `SELECT * FROM simulated_bets WHERE ${ACTIVE_SLUG_SQL} AND created_at >= now() - $1::interval`,
       [interval]
     );
     const bets = rows.map(rowToBet);

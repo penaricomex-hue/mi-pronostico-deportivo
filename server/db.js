@@ -70,6 +70,134 @@ export const MIGRATIONS = [
         expires_at TIMESTAMPTZ
       );
       CREATE INDEX IF NOT EXISTS kv_store_expires_idx ON kv_store (expires_at);`
+  },
+  {
+    id: 3,
+    name: 'v10: LaLiga + Champions, competition_slug, bookmaker_odds (Caliente MX), señales y calibración',
+    sql: `
+      -- Partidos ingeridos (calendario + resultado). Se conserva todo el histórico.
+      CREATE TABLE IF NOT EXISTS matches (
+        id SERIAL PRIMARY KEY,
+        external_id TEXT NOT NULL UNIQUE,
+        league_name TEXT NOT NULL,
+        competition_code TEXT,
+        match_date DATE NOT NULL,
+        kickoff_utc TIMESTAMPTZ,
+        matchday INT,
+        stage TEXT,
+        home TEXT NOT NULL,
+        away TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'SCHEDULED',
+        home_goals INT,
+        away_goals INT,
+        odds_event_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      -- Columna de control de competición
+      ALTER TABLE matches
+      ADD COLUMN IF NOT EXISTS competition_slug VARCHAR(50);
+
+      UPDATE matches
+      SET competition_slug = CASE
+      WHEN league_name ILIKE '%la liga%' OR league_name ILIKE '%laliga%' THEN 'la_liga'
+      WHEN league_name ILIKE '%champions%' THEN 'champions_league'
+      ELSE 'excluded'
+      END;
+
+      CREATE INDEX IF NOT EXISTS idx_matches_competition
+      ON matches (competition_slug, match_date);
+
+      -- Cuotas por casa: Caliente MX (ejecución) + casas de referencia (mercado sin margen)
+      CREATE TABLE IF NOT EXISTS bookmaker_odds (
+        id SERIAL PRIMARY KEY,
+        match_id INTEGER NOT NULL REFERENCES matches(id),
+        bookmaker VARCHAR(50) NOT NULL,
+        market VARCHAR(50) NOT NULL,
+        selection VARCHAR(50) NOT NULL,
+        odds NUMERIC(10, 3) NOT NULL,
+        captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        is_closing BOOLEAN NOT NULL DEFAULT FALSE,
+        UNIQUE (match_id, bookmaker, market, selection, captured_at)
+      );
+      ALTER TABLE bookmaker_odds ADD COLUMN IF NOT EXISTS is_opening BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE bookmaker_odds ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'api';
+      CREATE INDEX IF NOT EXISTS idx_bookmaker_odds_lookup
+        ON bookmaker_odds (match_id, bookmaker, market, selection, captured_at DESC);
+
+      -- Predicción original del modelo (para calibrar después de cada jornada)
+      CREATE TABLE IF NOT EXISTS model_predictions (
+        id SERIAL PRIMARY KEY,
+        match_id INTEGER NOT NULL REFERENCES matches(id),
+        competition_slug VARCHAR(50) NOT NULL,
+        market VARCHAR(50) NOT NULL,
+        selection VARCHAR(50) NOT NULL,
+        raw_probability NUMERIC(8, 6) NOT NULL,
+        calibrated_probability NUMERIC(8, 6),
+        market_probability NUMERIC(8, 6),
+        model_version TEXT,
+        predicted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        result VARCHAR(12),
+        UNIQUE (match_id, market, selection)
+      );
+      CREATE INDEX IF NOT EXISTS idx_model_predictions_comp ON model_predictions (competition_slug, market);
+
+      -- Señales / apuestas registradas (paper trading o real)
+      CREATE TABLE IF NOT EXISTS bet_signals (
+        id SERIAL PRIMARY KEY,
+        match_id INTEGER NOT NULL REFERENCES matches(id),
+        competition_slug VARCHAR(50) NOT NULL,
+        matchday_key VARCHAR(80) NOT NULL,
+        market VARCHAR(50) NOT NULL,
+        selection VARCHAR(50) NOT NULL,
+        label TEXT,
+        model_version TEXT,
+        model_probability_raw NUMERIC(8, 6) NOT NULL,
+        model_probability NUMERIC(8, 6) NOT NULL,
+        market_probability NUMERIC(8, 6) NOT NULL,
+        market_books INT,
+        market_avg_odds NUMERIC(10, 3),
+        caliente_odds NUMERIC(10, 3) NOT NULL,
+        caliente_captured_at TIMESTAMPTZ NOT NULL,
+        ev NUMERIC(10, 6) NOT NULL,
+        market_gap NUMERIC(10, 6) NOT NULL,
+        stake NUMERIC(12, 2) NOT NULL,
+        currency VARCHAR(8) NOT NULL DEFAULT 'MXN',
+        mode VARCHAR(10) NOT NULL DEFAULT 'paper',
+        status VARCHAR(12) NOT NULL DEFAULT 'pending',
+        profit NUMERIC(12, 2),
+        closing_caliente_odds NUMERIC(10, 3),
+        closing_market_probability NUMERIC(8, 6),
+        closing_market_avg_odds NUMERIC(10, 3),
+        clv NUMERIC(10, 6),
+        home_goals INT,
+        away_goals INT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        settled_at TIMESTAMPTZ,
+        UNIQUE (match_id, market, selection)
+      );
+      CREATE INDEX IF NOT EXISTS idx_bet_signals_comp ON bet_signals (competition_slug, created_at);
+
+      -- Calibradores ajustados por competición y mercado
+      CREATE TABLE IF NOT EXISTS calibration_models (
+        key VARCHAR(80) PRIMARY KEY,
+        method VARCHAR(20) NOT NULL,
+        n INT NOT NULL,
+        model JSONB NOT NULL,
+        fitted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      -- Apuestas simuladas anteriores: se conservan, marcadas por competición
+      ALTER TABLE simulated_bets ADD COLUMN IF NOT EXISTS competition_slug VARCHAR(50);
+      UPDATE simulated_bets
+      SET competition_slug = CASE
+      WHEN competition = 'PD' OR competition ILIKE '%la liga%' OR competition ILIKE '%laliga%' THEN 'la_liga'
+      WHEN competition = 'CL' OR competition ILIKE '%champions%' THEN 'champions_league'
+      ELSE 'excluded'
+      END
+      WHERE competition_slug IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_simulated_bets_competition ON simulated_bets (competition_slug, created_at);`
   }
 ];
 

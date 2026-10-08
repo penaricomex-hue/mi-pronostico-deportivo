@@ -1,18 +1,14 @@
 import type { ReactNode } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 
+/** MK Bets solo cubre LaLiga EA Sports y UEFA Champions League. */
 export const COMPETITIONS: Array<{ code: string; name: string }> = [
-  { code: '', name: 'Todas' },
-  { code: 'PL', name: 'Premier League' },
+  { code: '', name: 'Ambas' },
   { code: 'PD', name: 'LaLiga' },
-  { code: 'SA', name: 'Serie A' },
-  { code: 'BL1', name: 'Bundesliga' },
-  { code: 'FL1', name: 'Ligue 1' },
-  { code: 'CL', name: 'Champions' },
-  { code: 'EL', name: 'Europa League' }
+  { code: 'CL', name: 'Champions' }
 ];
 
-export const MODEL_LEAGUES = ['PL', 'PD', 'SA', 'BL1', 'FL1'];
+export const MODEL_LEAGUES = ['PD', 'CL'];
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <div className={`glass fade-in rounded-2xl p-4 sm:p-5 ${className}`}>{children}</div>;

@@ -29,7 +29,42 @@ export const COUK_DIVISION = {
   FL1: 'F1'
 };
 
-export const SUPPORTED_MODEL_LEAGUES = Object.keys(COUK_DIVISION);
+/**
+ * Ligas con modelo propio. Solo LaLiga (PD) y Champions (CL): el resto de
+ * divisiones de COUK_DIVISION se conserva para `npm run fetch-history`, pero
+ * queda desactivado en producción y backtest.
+ */
+export const SUPPORTED_MODEL_LEAGUES = ['PD', 'CL'];
+
+/** Ligas cuyo historial sale de football-data.org (sin cuotas). */
+export const FD_HISTORY_LEAGUES = ['CL'];
+
+/**
+ * Partido terminado de football-data.org -> formato de historial.
+ * En eliminatorias se usa el marcador de los 90 minutos (regularTime) para
+ * no contaminar el modelo con prórrogas.
+ */
+export function normalizeFdHistoryMatch(m) {
+  if (!m || m.status !== 'FINISHED') return null;
+  const sc = m.score || {};
+  const reg = sc.duration && sc.duration !== 'REGULAR' && sc.regularTime && Number.isFinite(sc.regularTime.home) ? sc.regularTime : sc.fullTime;
+  if (!reg || !Number.isFinite(reg.home) || !Number.isFinite(reg.away)) return null;
+  const date = String(m.utcDate || '').slice(0, 10);
+  if (!date) return null;
+  return {
+    season: seasonCode(m.utcDate),
+    date,
+    time: String(m.utcDate).slice(11, 16) || null,
+    home: m.homeTeam?.name,
+    away: m.awayTeam?.name,
+    hg: reg.home,
+    ag: reg.away,
+    stage: m.stage || null,
+    open: null,
+    max: null,
+    close: null
+  };
+}
 
 /** '2627' para la temporada 2026-27. La temporada europea arranca en julio. */
 export function seasonCode(date = new Date()) {
@@ -149,7 +184,7 @@ export async function downloadSeason(league, season, { fetchImpl = fetch, timeou
  * Historial completo (incluido + temporada actual en vivo) con caché.
  * @param {object} deps { store, logger }
  */
-export function createHistoryProvider({ store, logger = console, fetchImpl = fetch, liveTtlSeconds = 12 * 3600 } = {}) {
+export function createHistoryProvider({ store, footballData = null, logger = console, fetchImpl = fetch, liveTtlSeconds = 12 * 3600 } = {}) {
   const bundled = new Map();
 
   function getBundled(league) {
@@ -157,7 +192,27 @@ export function createHistoryProvider({ store, logger = console, fetchImpl = fet
     return bundled.get(league);
   }
 
+  /** Temporada en curso de la Champions vía football-data.org. */
+  async function getLiveFdSeason(league) {
+    if (!footballData?.configured) return [];
+    const now = new Date();
+    const startYear = now.getUTCMonth() >= 6 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+    const key = `history:live-fd:${league}:${startYear}`;
+    const cached = store ? await store.get(key) : null;
+    if (cached) return cached;
+    try {
+      const raw = await footballData.getCompetitionMatches(league, startYear, { ttlSeconds: liveTtlSeconds });
+      const rows = raw.map(normalizeFdHistoryMatch).filter(Boolean);
+      if (store && rows.length) await store.set(key, rows, liveTtlSeconds);
+      return rows;
+    } catch (err) {
+      logger.warn(`[history] Temporada en curso no disponible para ${league}: ${err.message}`);
+      return [];
+    }
+  }
+
   async function getLiveSeason(league) {
+    if (FD_HISTORY_LEAGUES.includes(league)) return getLiveFdSeason(league);
     const season = seasonCode();
     const key = `history:live:${league}:${season}`;
     const cached = store ? await store.get(key) : null;
@@ -173,7 +228,7 @@ export function createHistoryProvider({ store, logger = console, fetchImpl = fet
   }
 
   async function getHistory(league, { includeLive = true } = {}) {
-    if (!COUK_DIVISION[league]) return [];
+    if (!SUPPORTED_MODEL_LEAGUES.includes(league)) return [];
     const base = getBundled(league);
     if (!includeLive) return base;
     const live = await getLiveSeason(league);

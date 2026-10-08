@@ -37,12 +37,36 @@ export const config = {
     apiKey: process.env.ODDS_API_KEY || process.env.THE_ODDS_API_KEY || '',
     baseUrl: process.env.ODDS_API_BASE_URL || 'https://api.the-odds-api.com/v4',
     regions: process.env.ODDS_REGIONS || 'eu',
+    // h2h = 1X2, totals = O/U 2.5, spreads = hándicap asiático
+    markets: process.env.ODDS_MARKETS || 'h2h,totals,spreads',
+    // Mercados por evento (cuestan créditos extra por partido): btts,double_chance
+    eventMarkets: process.env.ODDS_EVENT_MARKETS || '',
     cacheMinutes: num('ODDS_CACHE_MINUTES', 20),
     // Créditos que nunca se gastan (reserva). The Odds API devuelve los restantes en cada respuesta.
     reserveCredits: num('ODDS_RESERVE_CREDITS', 40),
     dailyCreditBudget: num('ODDS_DAILY_CREDIT_BUDGET', 30),
     preferredBookmaker: process.env.PREFERRED_BOOKMAKER || ''
   },
+
+  // Caliente MX: casa de ejecución principal
+  caliente: {
+    // Feed opcional en JSON (p. ej. tu propio capturador). Ver README.
+    feedUrl: process.env.CALIENTE_FEED_URL || '',
+    feedToken: process.env.CALIENTE_FEED_TOKEN || '',
+    feedEveryMinutes: num('CALIENTE_FEED_MINUTES', 30)
+  },
+
+  engine: {
+    minEv: num('ENGINE_MIN_EV', 0.05),
+    maxMarketGap: num('ENGINE_MAX_MARKET_GAP', 0.10),
+    minOdds: num('ENGINE_MIN_ODDS', 1.50),
+    maxOdds: num('ENGINE_MAX_ODDS', 4.00),
+    maxBetsPerMatchday: num('ENGINE_MAX_BETS_PER_MATCHDAY', 3),
+    minMarketBooks: num('ENGINE_MIN_MARKET_BOOKS', 3)
+  },
+
+  // Paper trading: las señales se registran sin dinero real (30–60 días mínimo).
+  paperTrading: bool('PAPER_TRADING', true),
 
   bigBalls: {
     apiKey: process.env.BIGBALLS_KEY || ''
@@ -62,7 +86,9 @@ export const config = {
   jobs: {
     enabled: bool('ENABLE_JOBS', true),
     settleEveryMinutes: num('SETTLE_EVERY_MINUTES', 60),
-    trackClosingOdds: bool('TRACK_CLOSING_ODDS', false)
+    trackClosingOdds: bool('TRACK_CLOSING_ODDS', true),
+    signalsEveryMinutes: num('SIGNALS_EVERY_MINUTES', 60),
+    calibrateEveryHours: num('CALIBRATE_EVERY_HOURS', 24)
   }
 };
 
@@ -78,6 +104,11 @@ export function publicConfig() {
     kellyFraction: config.bankroll.kellyFraction,
     maxStakePct: config.bankroll.maxStakePct,
     oddsCacheMinutes: config.odds.cacheMinutes,
-    trackClosingOdds: config.jobs.trackClosingOdds
+    trackClosingOdds: config.jobs.trackClosingOdds,
+    paperTrading: config.paperTrading,
+    calienteFeedConfigured: Boolean(config.caliente.feedUrl),
+    oddsMarkets: config.odds.markets,
+    oddsEventMarkets: config.odds.eventMarkets,
+    engine: config.engine
   };
 }

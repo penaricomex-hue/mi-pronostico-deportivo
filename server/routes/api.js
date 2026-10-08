@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { MODEL_VERSION, MODEL_NAME } from '../version.js';
 import { publicConfig } from '../config.js';
 import { ALL_COMPETITIONS, COMPETITION_NAMES } from '../services/analysis.js';
+import { ACTIVE_COMPETITIONS, EXCLUDED_COMPETITIONS } from '../competitions.js';
 import { collectValuePicks, buildParlays } from '../services/picks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,7 +15,12 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function parseCommon(req) {
   const comp = String(req.query.competition || '').trim().toUpperCase();
-  const competition = ALL_COMPETITIONS.includes(comp) ? comp : null;
+  if (comp && !ALL_COMPETITIONS.includes(comp)) {
+    const err = new Error('Competición desactivada: MK Bets solo cubre LaLiga EA Sports (PD) y UEFA Champions League (CL).');
+    err.status = 400;
+    throw err;
+  }
+  const competition = comp || null;
   const tzRaw = Number(req.query.tz);
   const tzOffset = Number.isFinite(tzRaw) && Math.abs(tzRaw) <= 840 ? tzRaw : 0;
   const dateRaw = String(req.query.date || '').trim();
@@ -41,7 +47,16 @@ function loadReport() {
   return reportCache;
 }
 
-export function createApiRouter({ analysis, bets, ratings, footballData, odds, store, teams, bankroll }) {
+function requireService(svc, name) {
+  if (!svc) {
+    const err = new Error(`${name} no disponible: configura DATABASE_URL.`);
+    err.status = 503;
+    throw err;
+  }
+  return svc;
+}
+
+export function createApiRouter({ analysis, bets, ratings, footballData, odds, store, teams, bankroll, signals = null, caliente = null, calibration = null, engineRules = null }) {
   const r = express.Router();
 
   r.get('/status', wrap(async (_req, res) => {
@@ -53,6 +68,10 @@ export function createApiRouter({ analysis, bets, ratings, footballData, odds, s
       config: publicConfig(),
       persistentStore: store.persistent,
       competitions: COMPETITION_NAMES,
+      activeCompetitions: ACTIVE_COMPETITIONS,
+      excludedCompetitions: EXCLUDED_COMPETITIONS,
+      engineRules,
+      calibration: calibration ? calibration.summary().map(c => ({ key: c.key, method: c.method, n: c.n, liveSamples: c.liveSamples })) : [],
       model: ratings.summary(),
       providers: {
         footballData: footballData.stats(),
@@ -147,14 +166,55 @@ export function createApiRouter({ analysis, bets, ratings, footballData, odds, s
     const { competition } = parseCommon(req);
     if (competition) {
       const lg = report.leagues[competition];
+      if (lg && !ALL_COMPETITIONS.includes(competition)) return res.status(404).json({ ok: false, error: 'Competición desactivada.' });
       if (!lg) return res.status(404).json({ ok: false, error: 'Esta competición no tiene backtest (sin historial con cuotas).' });
       return res.json({ ok: true, modelVersion: report.modelVersion, generatedAt: report.generatedAt, competition, ...lg });
     }
-    const leagues = Object.fromEntries(Object.entries(report.leagues).map(([k, v]) => [k, {
+    const leagues = Object.fromEntries(Object.entries(report.leagues).filter(([k]) => ALL_COMPETITIONS.includes(k)).map(([k, v]) => [k, {
       xi: v.xi, weights: v.weights, valueEnabled: v.valueEnabled, trainSeasons: v.trainSeasons, testSeasons: v.testSeasons,
       test: { matches: v.test.matches, metrics: v.test.metrics, verdicts: v.test.verdicts, betting: { ...v.test.betting, recentBets: undefined } }
     }]));
     res.json({ ok: true, modelVersion: report.modelVersion, generatedAt: report.generatedAt, leagues });
+  }));
+
+  // Motor de valor: señales con la cuota real de Caliente MX
+  r.get('/signals/preview', wrap(async (req, res) => {
+    const { competition, tzOffset } = parseCommon(req);
+    const days = Math.min(7, Math.max(1, Number(req.query.days) || 4));
+    res.json({ ok: true, modelVersion: MODEL_VERSION, rules: engineRules, ...(await requireService(signals, 'Señales').preview({ days, tzOffset, competition })) });
+  }));
+  r.get('/signals', wrap(async (req, res) => {
+    res.json({ ok: true, signals: await requireService(signals, 'Señales').list({ days: Number(req.query.days) || 30 }) });
+  }));
+  r.post('/signals/generate', wrap(async (req, res) => {
+    const { tzOffset } = parseCommon(req);
+    res.json({ ok: true, ...(await requireService(signals, 'Señales').generate({ tzOffset, dryRun: req.query.dryRun === 'true' })) });
+  }));
+  r.post('/signals/settle', wrap(async (_req, res) => {
+    const svc = requireService(signals, 'Señales');
+    const settled = await svc.settle();
+    const clv = await svc.computeClv();
+    res.json({ ok: true, ...settled, clvUpdated: clv });
+  }));
+  r.get('/performance', wrap(async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, ...(await requireService(signals, 'Rendimiento').performance({ days: Number(req.query.days) || 30 })) });
+  }));
+
+  // Caliente MX: captura de cuotas (manual o feed)
+  r.post('/caliente/odds', wrap(async (req, res) => {
+    res.status(201).json({ ok: true, ...(await requireService(caliente, 'Caliente MX').saveManual(req.body)) });
+  }));
+  r.post('/caliente/sync', wrap(async (_req, res) => {
+    res.json({ ok: true, ...(await requireService(caliente, 'Caliente MX').syncFeed()) });
+  }));
+
+  // Calibración por competición y mercado
+  r.get('/calibration', wrap(async (_req, res) => {
+    res.json({ ok: true, models: requireService(calibration, 'Calibración').summary() });
+  }));
+  r.post('/calibration/refit', wrap(async (_req, res) => {
+    res.json({ ok: true, ...(await requireService(calibration, 'Calibración').refit()) });
   }));
 
   // Apuestas simuladas

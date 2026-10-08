@@ -20,13 +20,15 @@ export function loadModelParams() {
 }
 
 const DEFAULT_LEAGUE_PARAMS = { xi: 0.0019, w1x2: 0.5, wOU: 0.5, valueEnabled: false };
+// Champions: pocos partidos por equipo y temporada → decaimiento más lento.
+const COMPETITION_DEFAULTS = { CL: { xi: 0.0012 } };
 
 export function createRatingsService({ history, logger = console, refreshHours = 6 }) {
   const params = loadModelParams();
   const cache = new Map(); // liga -> { fittedAt, model, promise }
 
   function leagueParams(league) {
-    return { ...DEFAULT_LEAGUE_PARAMS, ...(params.leagues?.[league] || {}) };
+    return { ...DEFAULT_LEAGUE_PARAMS, ...(COMPETITION_DEFAULTS[league] || {}), ...(params.leagues?.[league] || {}) };
   }
 
   async function getRatings(league) {

@@ -100,6 +100,26 @@ export function BacktestView() {
             </p>
           </Card>
 
+          {data.engine ? (
+            <Card className="border-accent/30">
+              <SectionTitle aside={<Badge tone="accent">Nuevo enfoque</Badge>}>Motor de valor calibrado (reglas de Caliente MX)</SectionTitle>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <Stat label="Señales" value={data.engine.bets} hint={data.engine.hitRatePct != null ? `Acierto ${data.engine.hitRatePct}%` : undefined} />
+                <Stat label="Yield" value={signedNum(data.engine.yieldPct, 1, '%')} tone={(data.engine.yieldPct ?? 0) >= 0 ? 'good' : 'bad'} hint={`${signedNum(data.engine.profitUnits, 2)} u`} />
+                <Stat label="CLV medio" value={signedNum(data.engine.avgClvPct, 2, '%')} tone={(data.engine.avgClvPct ?? 0) > 0 ? 'good' : 'bad'} hint={data.engine.clvPositivePct != null ? `${data.engine.clvPositivePct}% con CLV > 0` : undefined} />
+                <Stat label="Mercados" value={Object.keys(data.engine.byMarket).length} hint={Object.entries(data.engine.byMarket).map(([k, v]) => `${k}: ${signedNum(v.yieldPct, 1, '%')}`).join(' · ')} />
+              </div>
+              <p className="mt-2 text-[11px] text-muted">
+                EV ≥ 5%, modelo − mercado ≤ 10 pts, cuotas 1.50–4.00, máx. 3 por jornada, probabilidad calibrada con temporadas de entrenamiento.
+                Cuota de ejecución: {data.engine.proxy.toLowerCase()}. Por eso el CLV parte con el margen de la casa en contra.
+              </p>
+            </Card>
+          ) : (
+            <Card>
+              <p className="text-sm text-muted">La Champions no tiene cuotas históricas públicas: aquí se mide la precisión del modelo; el ROI y el CLV se medirán con las señales reales en Caliente MX (panel Rendimiento).</p>
+            </Card>
+          )}
+
           <Card>
             <SectionTitle>Calibración (probabilidad final)</SectionTitle>
             <div className="overflow-x-auto">
@@ -156,7 +176,7 @@ export function BacktestView() {
             </Card>
           )}
 
-          <p className="text-[11px] text-muted">Datos: football-data.co.uk (resultados y cuotas reales). Generado {new Date(data.generatedAt).toLocaleString('es-MX')} · {data.modelVersion}</p>
+          <p className="text-[11px] text-muted">Datos: {competition === 'CL' ? 'football-data.org (resultados de Champions, sin cuotas)' : 'football-data.co.uk (resultados y cuotas reales)'}. Generado {new Date(data.generatedAt).toLocaleString('es-MX')} · {data.modelVersion}</p>
         </>
       )}
     </div>

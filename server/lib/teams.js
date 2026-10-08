@@ -161,6 +161,21 @@ export function createTeamRegistry(raw = null) {
     if (direct.length > 1) return null; // ambiguo: mejor no emparejar
     const rev = events.filter(e => timeOk(e) && sameTeam(fixture.home, e.away, league) && sameTeam(fixture.away, e.home, league));
     if (rev.length === 1) return { event: rev[0], reversed: true };
+    // Respaldo (Champions: rivales fuera de las grandes ligas, p. ej. "Sporting CP" vs
+    // "Sporting Lisbon"): misma hora exacta (±15 min), un equipo idéntico y el otro parecido.
+    if (t0) {
+      const near = events.filter(e => e.kickoff && Math.abs(new Date(e.kickoff).getTime() - t0) <= 15 * 60000);
+      // El otro equipo debe parecerse y no estar identificado como un equipo distinto.
+      const looseOk = (a, b) => {
+        if (tokenSimilarity(a, b) < 0.3) return false;
+        const ra = resolve(a, league), rb = resolve(b, league);
+        return !(ra && rb && ra.canonical !== rb.canonical);
+      };
+      const loose = near.filter(e =>
+        (sameTeam(fixture.home, e.home, league) && looseOk(fixture.away, e.away)) ||
+        (sameTeam(fixture.away, e.away, league) && looseOk(fixture.home, e.home)));
+      if (loose.length === 1) return { event: loose[0], reversed: false };
+    }
     return null;
   }
 

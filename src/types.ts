@@ -54,7 +54,59 @@ export interface LeagueInfo {
   testBets: number | null;
 }
 
+export type EngineMarket = '1x2' | 'double_chance' | 'over_under' | 'btts' | 'asian_handicap';
+
+export interface CalibrationExplain {
+  raw: number;
+  calibrated: number;
+  method: 'identity' | 'platt' | 'isotonic';
+  sample: number;
+  text: string;
+}
+
+export interface EngineSelection {
+  selection: string;
+  market: EngineMarket;
+  marketLabel: string;
+  label: string;
+  modelRaw: number | null;
+  modelProbability: number | null;
+  calibration: CalibrationExplain | null;
+  marketProbability: number | null;
+  marketBooks: number;
+  marketAvgOdds: number | null;
+  bestOtherOdds: number | null;
+  fairOdds: number | null;
+  minCalienteOdds: number | null;
+  stakeAtRisk: number;
+  caliente: { odds: number | null; capturedAt: string | null; source: string | null; opening: number | null; openingAt: string | null; closing: number | null } | null;
+  calienteVsMarketPct: number | null;
+  ev: number | null;
+  marketGap: number | null;
+  recommended: boolean;
+  reason: string;
+  blockers: string[];
+  suggestedStake: number;
+  flatStake: number;
+}
+
+export interface EngineRules {
+  minEv: number;
+  maxMarketGap: number;
+  minOdds: number;
+  maxOdds: number;
+  maxBetsPerMatchday: number;
+  minMarketBooks: number;
+  enabledMarkets: EngineMarket[];
+}
+
 export interface Analysis extends Fixture {
+  competitionSlug: string;
+  matchId: number | null;
+  matchdayKey: string;
+  engine: EngineSelection[];
+  engineRules: EngineRules;
+  recommended: EngineSelection[];
   canonical: { home: string; away: string };
   modelAvailable: boolean;
   dataQuality: 'alta' | 'media' | 'baja' | null;
@@ -64,7 +116,7 @@ export interface Analysis extends Fixture {
   probabilities: { model: Probabilities | null; market: Probabilities | null; final: Probabilities };
   weights: { w1x2: number; wOU: number };
   league: LeagueInfo;
-  odds: { available: boolean; bookmakers: number; fromCache: boolean; eventId: string | null };
+  odds: { available: boolean; bookmakers: number; fromCache: boolean; eventId: string | null; books?: string[] };
   selections: SelectionEval[];
   bestValue: SelectionEval | null;
   secondOpinion: { source: string; home: number | null; draw: number | null; away: number | null } | null;
@@ -180,6 +232,17 @@ export interface BacktestLeague {
   test: BacktestSplit;
   generatedAt: string;
   modelVersion: string;
+  engine?: {
+    proxy: string;
+    bets: number;
+    hitRatePct: number | null;
+    profitUnits: number;
+    yieldPct: number | null;
+    avgClvPct: number | null;
+    clvPositivePct: number | null;
+    byMarket: Record<string, { bets: number; won: number; profit: number; hitRatePct: number | null; yieldPct: number | null }>;
+    calibrators: Record<string, { method: string; n: number }>;
+  } | null;
 }
 
 export interface Bet {
@@ -252,4 +315,109 @@ export interface Status {
     oddsApi: { remaining: number | null; used: number | null; todayUsed: number; dailyBudget: number; reserve: number; costPerCall: number; blocked: boolean; blockedReason: string | null };
   };
   unresolvedTeams: string[];
+}
+
+export interface SignalCandidate extends EngineSelection {
+  fixtureId: string;
+  matchId: number | null;
+  matchdayKey: string;
+  competitionSlug: string;
+  competition: string;
+  competitionCode: string;
+  home: string;
+  away: string;
+  kickoff: string;
+  homeCrest: string | null;
+  awayCrest: string | null;
+  droppedReason?: string;
+}
+
+export interface CalienteCheck {
+  fixtureId: string;
+  competitionCode: string;
+  competition: string;
+  kickoff: string;
+  home: string;
+  away: string;
+  selection: string;
+  label: string;
+  market: EngineMarket;
+  modelProbability: number;
+  marketProbability: number;
+  marketAvgOdds: number | null;
+  minCalienteOdds: number;
+}
+
+export interface SignalsPreview {
+  analyzed: number;
+  recommended: SignalCandidate[];
+  capped: SignalCandidate[];
+  toCheckInCaliente: CalienteCheck[];
+  rules: EngineRules;
+  warnings: string[];
+}
+
+export interface Signal {
+  id: number;
+  matchId: number;
+  competitionSlug: string;
+  competition: string;
+  matchdayKey: string;
+  home: string;
+  away: string;
+  kickoff: string;
+  market: EngineMarket;
+  marketLabel: string;
+  selection: string;
+  label: string;
+  modelProbabilityRaw: number;
+  modelProbability: number;
+  marketProbability: number;
+  marketAvgOdds: number | null;
+  calienteOdds: number;
+  calienteCapturedAt: string;
+  ev: number;
+  marketGap: number;
+  stake: number;
+  currency: string;
+  mode: 'paper' | 'real';
+  status: 'pending' | 'won' | 'lost' | 'void' | 'half_won' | 'half_lost';
+  profit: number | null;
+  closingCalienteOdds: number | null;
+  closingMarketProbability: number | null;
+  clv: number | null;
+  score: string | null;
+}
+
+export interface PerfGroup {
+  key: string;
+  competitionSlug: string;
+  competition: string;
+  market: string;
+  marketLabel: string;
+  signals: number;
+  settled: number;
+  hitRatePct: number | null;
+  profit: number | null;
+  yieldPct: number | null;
+  avgEvPct: number | null;
+  avgClvPct: number | null;
+}
+
+export interface Performance {
+  days: number;
+  mode: 'paper' | 'real';
+  currency: string;
+  totals: {
+    signals: number; pending: number; settled: number; won: number; lost: number; void: number;
+    hitRatePct: number | null; staked: number | null; profit: number | null; roiPct: number | null; yieldPct: number | null;
+    avgEvPct: number | null; avgClvPct: number | null; clvPositivePct: number | null; clvSample: number;
+  };
+  byCompetition: PerfGroup[];
+  byCompetitionMarket: PerfGroup[];
+  calibration: Array<{ range: string; signals: number; predictedPct: number | null; actualPct: number | null; rawPredictedPct: number | null }>;
+  calienteVsMarket: { signals: number; avgCalienteOdds: number | null; avgMarketOdds: number | null; avgPremiumPct: number | null; betterThanMarketPct: number | null; beatCalienteClosePct: number | null };
+  bestMarkets: PerfGroup[];
+  worstMarkets: PerfGroup[];
+  keyQuestion: { text: string; clvPositivePct: number | null; avgClvPct: number | null; verdict: string };
 }

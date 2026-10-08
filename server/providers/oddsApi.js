@@ -6,16 +6,19 @@
  * almacén persistente para que el control sobreviva a reinicios.
  */
 import { fetchJson } from '../lib/http.js';
+import { ACTIVE_COMPETITIONS } from '../competitions.js';
+import { ahSelection } from '../model/markets.js';
 
-export const ODDS_SPORT_BY_COMPETITION = {
-  PL: 'soccer_epl',
-  PD: 'soccer_spain_la_liga',
-  BL1: 'soccer_germany_bundesliga',
-  SA: 'soccer_italy_serie_a',
-  FL1: 'soccer_france_ligue_one',
-  CL: 'soccer_uefa_champs_league',
-  EL: 'soccer_uefa_europa_league'
-};
+/** Solo LaLiga y Champions. Las demás ligas ya no consumen créditos. */
+export const ODDS_SPORT_BY_COMPETITION = Object.fromEntries(
+  Object.values(ACTIVE_COMPETITIONS).map(c => [c.code, c.oddsSport])
+);
+
+/** Clave de casa normalizada (Caliente MX siempre como caliente_mx). */
+export function bookmakerKey(b) {
+  const k = String(b?.key || b?.title || b || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  return /caliente/.test(k) ? 'caliente_mx' : k;
+}
 
 const QUOTA_KEY = 'quota:odds-api';
 
@@ -23,8 +26,8 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function createOddsProvider({ apiKey, baseUrl, regions = 'eu', cacheMinutes = 20, reserveCredits = 40, dailyCreditBudget = 30, store, logger = console, fetchImpl = fetch }) {
-  const markets = 'h2h,totals';
+export function createOddsProvider({ apiKey, baseUrl, regions = 'eu', markets = 'h2h,totals,spreads', eventMarkets = '', cacheMinutes = 20, reserveCredits = 40, dailyCreditBudget = 30, store, logger = console, fetchImpl = fetch }) {
+
   const costPerCall = markets.split(',').length * regions.split(',').length;
 
   async function getQuota() {
@@ -126,34 +129,87 @@ export function createOddsProvider({ apiKey, baseUrl, regions = 'eu', cacheMinut
     }
   }
 
-  return { configured: Boolean(apiKey), getEvents, getScores, quotaStatus, costPerCall };
+  /**
+   * Mercados adicionales de un evento (btts, double_chance). Se piden uno a uno
+   * en /events/{id}/odds, así que solo se usan si ODDS_EVENT_MARKETS está
+   * configurado y hay créditos.
+   */
+  async function getEventMarkets(competition, eventId) {
+    if (!apiKey || !eventMarkets || !eventId) return null;
+    const sport = ODDS_SPORT_BY_COMPETITION[competition];
+    if (!sport) return null;
+    const key = `odds-event:${sport}:${eventId}:${eventMarkets}:${regions}`;
+    const cached = await store.get(key);
+    if (cached) return cached;
+    const cost = eventMarkets.split(',').length * regions.split(',').length;
+    const quota = await quotaStatus();
+    if (quota.remaining != null && quota.remaining - cost < reserveCredits) return null;
+    if (quota.todayUsed + cost > dailyCreditBudget) return null;
+    try {
+      const url = `${baseUrl}/sports/${sport}/events/${encodeURIComponent(eventId)}/odds?regions=${encodeURIComponent(regions)}&markets=${encodeURIComponent(eventMarkets)}&oddsFormat=decimal&apiKey=${encodeURIComponent(apiKey)}`;
+      const { data, headers } = await fetchJson(url, { fetchImpl });
+      await recordCall(headers);
+      const ev = normalizeOddsEvent(data || {});
+      await store.set(key, ev, cacheMinutes * 60);
+      return ev;
+    } catch (err) {
+      if (err.headers) await recordCall(err.headers).catch(() => {});
+      logger.warn(`[odds-api] evento ${eventId}: ${err.message}`);
+      return null;
+    }
+  }
+
+  return { configured: Boolean(apiKey), getEvents, getEventMarkets, getScores, quotaStatus, costPerCall, eventMarketsEnabled: Boolean(eventMarkets) };
 }
 
 /**
  * Convierte un evento de The Odds API a:
- * { id, home, away, kickoff, books: [{ bookmaker, prices: { home, draw, away, over25, under25 } }] }
- * Los nombres de outcome h2h coinciden exactamente con home_team/away_team del evento.
+ * { id, home, away, kickoff, books: [{ bookmaker, title, prices: { home, draw, away, over25, under25,
+ *   btts_yes, btts_no, dc_1x, dc_12, dc_x2, 'ah_home@-0.5', 'ah_away@+0.5', ... } }] }
+ * Los nombres de outcome h2h/spreads coinciden exactamente con home_team/away_team del evento.
  */
 export function normalizeOddsEvent(e) {
   const books = [];
+  const H = e.home_team, A = e.away_team;
   for (const b of e.bookmakers || []) {
     const prices = {};
     for (const m of b.markets || []) {
-      if (m.key === 'h2h') {
-        for (const o of m.outcomes || []) {
-          if (o.name === e.home_team) prices.home = Number(o.price);
-          else if (o.name === e.away_team) prices.away = Number(o.price);
+      const outs = m.outcomes || [];
+      if (m.key === 'h2h' || m.key === 'h2h_3_way') {
+        for (const o of outs) {
+          if (o.name === H) prices.home = Number(o.price);
+          else if (o.name === A) prices.away = Number(o.price);
           else if (/^(draw|tie|empate)$/i.test(o.name)) prices.draw = Number(o.price);
         }
       } else if (m.key === 'totals') {
-        for (const o of m.outcomes || []) {
+        for (const o of outs) {
           if (Number(o.point) !== 2.5) continue;
           if (/^over$/i.test(o.name)) prices.over25 = Number(o.price);
           if (/^under$/i.test(o.name)) prices.under25 = Number(o.price);
         }
+      } else if (m.key === 'spreads') {
+        for (const o of outs) {
+          const line = Number(o.point);
+          if (!Number.isFinite(line)) continue;
+          if (o.name === H) prices[ahSelection('home', line)] = Number(o.price);
+          else if (o.name === A) prices[ahSelection('away', line)] = Number(o.price);
+        }
+      } else if (m.key === 'btts') {
+        for (const o of outs) {
+          if (/^yes$/i.test(o.name)) prices.btts_yes = Number(o.price);
+          if (/^no$/i.test(o.name)) prices.btts_no = Number(o.price);
+        }
+      } else if (m.key === 'double_chance') {
+        for (const o of outs) {
+          const n = String(o.name);
+          const hasH = n.includes(H), hasA = n.includes(A), hasD = /draw/i.test(n);
+          if (hasH && hasD) prices.dc_1x = Number(o.price);
+          else if (hasH && hasA) prices.dc_12 = Number(o.price);
+          else if (hasA && hasD) prices.dc_x2 = Number(o.price);
+        }
       }
     }
-    if (Object.keys(prices).length) books.push({ bookmaker: b.title || b.key, prices });
+    if (Object.keys(prices).length) books.push({ bookmaker: bookmakerKey(b), title: b.title || b.key, lastUpdate: b.last_update || null, prices });
   }
-  return { id: e.id, home: e.home_team, away: e.away_team, kickoff: e.commence_time, books };
+  return { id: e.id, home: H, away: A, kickoff: e.commence_time, books };
 }

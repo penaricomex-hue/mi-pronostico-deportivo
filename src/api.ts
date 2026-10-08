@@ -1,4 +1,4 @@
-import type { Analysis, BacktestLeague, Bet, BetStatus, BetSummary, Fixture, Parlay, Pick, Status } from './types';
+import type { Analysis, BacktestLeague, Bet, BetStatus, BetSummary, Fixture, Parlay, Performance, Pick, Signal, SignalsPreview, Status } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -59,6 +59,19 @@ export const api = {
     request<{ asOf: string; homeAdvantage: number; rho: number; matches: number; teams: Array<{ name: string; attack: number; defense: number; matches: number; effectiveMatches: number }> }>(
       `/api/ratings?competition=${encodeURIComponent(competition)}`
     ),
+
+  signals: {
+    preview: (competition: string, days = 4) => request<SignalsPreview>(`/api/signals/preview?${qs({ competition, days })}`),
+    list: (days = 30) => request<{ signals: Signal[] }>(`/api/signals?days=${days}`),
+    generate: () => request<{ created: number; candidates: number; analyzed: number }>(`/api/signals/generate?${qs({})}`, { method: 'POST' })
+  },
+
+  performance: (days: number) => request<Performance>(`/api/performance?days=${days}`),
+
+  caliente: {
+    save: (body: { fixtureId: string; date: string; competition: string; entries: Array<{ selection: string; odds: number }> }) =>
+      request<{ matchId: number; saved: number }>('/api/caliente/odds', { method: 'POST', body: JSON.stringify({ ...body, tz: tz() }) })
+  },
 
   bets: {
     list: (period = '') => request<{ bets: Bet[] }>(`/api/bets?period=${period}`),

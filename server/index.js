@@ -11,15 +11,24 @@ import { createRatingsService } from './services/ratings.js';
 import { createAnalysisService } from './services/analysis.js';
 import { createBetsService } from './services/bets.js';
 import { createApp } from './app.js';
+import { createMatchesRepo } from './services/matchesRepo.js';
+import { createOddsStore } from './services/oddsStore.js';
+import { createCalibrationService } from './services/calibrationService.js';
+import { createCalienteService } from './services/caliente.js';
+import { createSignalsService } from './services/signals.js';
+import { ACTIVE_CODES } from './competitions.js';
+import { DEFAULT_ENGINE_RULES } from './model/valueEngine.js';
 
 const logger = console;
 
 const pool = createPool({ databaseUrl: config.databaseUrl, caCert: config.databaseCa, logger });
 const store = createStore({ pool, logger });
 
+let migrated = false;
 if (pool) {
   try {
     await migrate(pool, logger);
+    migrated = true;
   } catch (err) {
     logger.error(`[db] Migraciones fallidas, se continúa sin persistencia de caché: ${err.message}`);
     store.disableDb();
@@ -27,16 +36,30 @@ if (pool) {
 }
 
 const teams = createTeamRegistry();
+const db = pool && migrated ? pool : null;
+const engineRules = { ...DEFAULT_ENGINE_RULES, ...config.engine };
 const footballData = createFootballDataProvider({ ...config.footballData, store, logger });
 const odds = createOddsProvider({ ...config.odds, store, logger });
 const bigBalls = createBigBallsProvider({ apiKey: config.bigBalls.apiKey, store, teams, logger });
-const history = createHistoryProvider({ store, logger });
+const history = createHistoryProvider({ store, footballData, logger });
 const ratings = createRatingsService({ history, logger });
-const analysis = createAnalysisService({ footballData, odds, bigBalls, ratings, teams, store, bankroll: config.bankroll, logger });
+const matchesRepo = db ? createMatchesRepo({ pool: db, logger }) : null;
+const oddsStore = db ? createOddsStore({ pool: db, logger }) : null;
+const calibration = createCalibrationService({ pool: db, logger });
+await calibration.loadFromDb();
+const analysis = createAnalysisService({
+  footballData, odds, bigBalls, ratings, teams, store, bankroll: config.bankroll, logger,
+  matchesRepo, oddsStore, calibration, engineRules
+});
 const bets = createBetsService({ pool, footballData, odds, analysis, teams, bankroll: config.bankroll, logger });
+const caliente = db ? createCalienteService({ pool: db, oddsStore, matchesRepo, analysis, teams, feedUrl: config.caliente.feedUrl, feedToken: config.caliente.feedToken, logger }) : null;
+const signals = db ? createSignalsService({
+  pool: db, analysis, footballData, matchesRepo, oddsStore, calibration, odds, teams,
+  bankroll: config.bankroll, paperTrading: config.paperTrading, engineRules, logger
+}) : null;
 
 const app = createApp(
-  { analysis, bets, ratings, footballData, odds, store, teams, bankroll: config.bankroll },
+  { analysis, bets, ratings, footballData, odds, store, teams, bankroll: config.bankroll, signals, caliente, calibration, engineRules },
   {
     auth: config.auth,
     production: config.auth.required,
@@ -59,24 +82,46 @@ app.listen(config.port, '0.0.0.0', () => {
 });
 
 // Tareas periódicas (en Render free solo corren mientras el servicio está despierto)
-if (config.jobs.enabled && pool) {
-  const settleMs = config.jobs.settleEveryMinutes * 60000;
+function every(minutes, name, fn) {
   setInterval(() => {
-    bets.autoSettle()
-      .then(r => r.settled && logger.log(`[jobs] ${r.settled} apuestas liquidadas`))
-      .catch(err => logger.warn(`[jobs] autoSettle: ${err.message}`));
-  }, settleMs).unref();
+    fn().then(r => r && logger.log(`[jobs] ${name}: ${JSON.stringify(r)}`)).catch(err => logger.warn(`[jobs] ${name}: ${err.message}`));
+  }, minutes * 60000).unref();
+}
+
+if (config.jobs.enabled && pool) {
+  every(config.jobs.settleEveryMinutes, 'autoSettle', async () => {
+    const a = await bets.autoSettle();
+    const b = signals ? await signals.settle() : null;
+    return a.settled || b?.settled || b?.predictions ? { bets: a.settled, ...b } : null;
+  });
 
   if (config.jobs.trackClosingOdds) {
-    setInterval(() => {
-      bets.captureClosingOdds()
-        .then(r => r.captured && logger.log(`[jobs] ${r.captured} cuotas de cierre guardadas`))
-        .catch(err => logger.warn(`[jobs] closingOdds: ${err.message}`));
-    }, 10 * 60000).unref();
+    every(10, 'closingOdds', async () => {
+      const a = await bets.captureClosingOdds();
+      const b = signals ? await signals.captureClosing() : null;
+      return a.captured || b?.captured ? { bets: a.captured, matches: b?.captured } : null;
+    });
+  }
+
+  if (signals) {
+    // Señales en paper trading con la cuota real de Caliente MX
+    every(config.jobs.signalsEveryMinutes, 'signals', async () => {
+      const r = await signals.generate({ days: 4 });
+      return r.created ? { created: r.created, candidates: r.candidates } : null;
+    });
+    // Calibración después de cada jornada (diaria)
+    every(config.jobs.calibrateEveryHours * 60, 'calibration', async () => {
+      const r = await calibration.refit();
+      return { models: r.models.length };
+    });
+  }
+
+  if (caliente?.feedConfigured) {
+    every(config.caliente.feedEveryMinutes, 'calienteFeed', async () => caliente.syncFeed());
   }
 
   setInterval(() => store.purgeExpired().catch(() => {}), 6 * 3600000).unref();
 }
 
-// Calentar los modelos de liga en segundo plano
-for (const lg of ['PL', 'PD', 'SA', 'BL1', 'FL1']) ratings.getRatings(lg).catch(() => {});
+// Calentar los modelos de LaLiga y Champions en segundo plano
+for (const lg of ACTIVE_CODES) ratings.getRatings(lg).catch(() => {});

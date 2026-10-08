@@ -1,22 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Activity, BarChart3, Calendar, Layers, ShieldCheck, Settings, Wallet } from 'lucide-react';
+import { Activity, BarChart3, Calendar, LineChart, ShieldCheck, Settings, Wallet } from 'lucide-react';
 import { api } from './api';
 import type { Status } from './types';
 import { useBets } from './hooks/useBets';
 import { LogoMark, Wordmark } from './components/Logo';
 import { MatchesView } from './views/MatchesView';
-import { ValueView } from './views/ValueView';
-import { ParlayView } from './views/ParlayView';
+import { SignalsView } from './views/SignalsView';
+import { PerformanceView } from './views/PerformanceView';
 import { BacktestView } from './views/BacktestView';
 import { BetsView } from './views/BetsView';
 import { StatusView } from './views/StatusView';
 
-type Tab = 'matches' | 'value' | 'parlay' | 'bets' | 'backtest' | 'status';
+type Tab = 'matches' | 'value' | 'performance' | 'bets' | 'backtest' | 'status';
 
 const TABS: Array<{ id: Tab; label: string; short: string; icon: typeof Calendar; title: string; subtitle: string }> = [
   { id: 'matches', label: 'Partidos', short: 'Partidos', icon: Calendar, title: 'Partidos', subtitle: 'Elige un partido para ver probabilidades, cuotas y valor.' },
-  { id: 'value', label: 'Valor', short: 'Valor', icon: Activity, title: 'Apuestas de valor', subtitle: 'Cuotas que pagan más de lo que dice la probabilidad.' },
-  { id: 'parlay', label: 'Combinadas', short: 'Combis', icon: Layers, title: 'Combinadas', subtitle: 'Selecciones de valor de partidos distintos.' },
+  { id: 'value', label: 'Señales', short: 'Señales', icon: Activity, title: 'Señales Caliente MX', subtitle: 'Apuestas con EV positivo a la cuota que realmente puedes tomar en Caliente MX.' },
+  { id: 'performance', label: 'Rendimiento', short: 'Rendim.', icon: LineChart, title: 'Rendimiento — LaLiga y Champions', subtitle: 'ROI, yield, CLV y calibración de las señales registradas.' },
   { id: 'bets', label: 'Mis apuestas', short: 'Apuestas', icon: Wallet, title: 'Mis apuestas', subtitle: 'Tu registro simulado, resultados y CLV.' },
   { id: 'backtest', label: 'Backtest', short: 'Backtest', icon: BarChart3, title: 'Backtest', subtitle: 'Cómo le habría ido al modelo con partidos reales.' },
   { id: 'status', label: 'Estado', short: 'Estado', icon: Settings, title: 'Estado y equipos', subtitle: 'Conexiones, créditos y fuerza de cada equipo.' }
@@ -43,7 +43,7 @@ function Hero({ status, compact }: { status: Status | null; compact: boolean }) 
             <LogoMark size={compact ? 48 : 72} className="shrink-0 drop-shadow-[0_8px_24px_rgba(255,160,70,0.35)]" />
             <div className="min-w-0">
               <h1><Wordmark className={compact ? 'text-4xl' : 'text-5xl md:text-6xl'} /></h1>
-              <p className="mt-1.5 text-[13px] text-text/80 md:text-sm">Pronósticos de fútbol con modelo estadístico y cuotas reales</p>
+              <p className="mt-1.5 text-[13px] text-text/80 md:text-sm">LaLiga y Champions · modelo calibrado · ejecución en Caliente MX</p>
             </div>
           </div>
           {!compact && (
@@ -51,8 +51,8 @@ function Hero({ status, compact }: { status: Status | null; compact: boolean }) 
               <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">
                 <ShieldCheck className="h-3.5 w-3.5 text-accent" aria-hidden /> Modelo {status?.modelVersion || 'V9'}
               </span>
-              <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">5 ligas · 7 competiciones</span>
-              <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">Cuotas de +10 casas</span>
+              <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">LaLiga EA Sports · UEFA Champions League</span>
+              <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-text/90 backdrop-blur">Ejecución en Caliente MX</span>
             </div>
           )}
         </div>
@@ -62,7 +62,7 @@ function Hero({ status, compact }: { status: Status | null; compact: boolean }) 
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>(() => (new URLSearchParams(location.search).get('tab') as Tab) || 'matches');
+  const [tab, setTab] = useState<Tab>(() => (() => { const t = new URLSearchParams(location.search).get('tab') as Tab; return TABS.some(x => x.id === t) ? t : 'matches'; })());
   const [status, setStatus] = useState<Status | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
@@ -114,8 +114,8 @@ export default function App() {
         </div>
         <div key={tab} className="fade-in">
           {tab === 'matches' && <MatchesView bets={bets} />}
-          {tab === 'value' && <ValueView bets={bets} currency={currency} />}
-          {tab === 'parlay' && <ParlayView bets={bets} currency={currency} />}
+          {tab === 'value' && <SignalsView currency={currency} />}
+          {tab === 'performance' && <PerformanceView />}
           {tab === 'bets' && <BetsView bets={bets} currency={currency} />}
           {tab === 'backtest' && <BacktestView />}
           {tab === 'status' && <StatusView status={status} error={statusError} />}

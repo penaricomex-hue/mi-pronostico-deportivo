@@ -8,7 +8,10 @@
 import { fetchJson, HttpError } from '../lib/http.js';
 import { createRateLimiter } from '../lib/rateLimiter.js';
 
-export const FOOTBALL_DATA_COMPETITIONS = ['PL', 'PD', 'SA', 'BL1', 'FL1', 'CL'];
+import { ACTIVE_CODES } from '../competitions.js';
+
+/** Solo LaLiga y Champions: el resto de competiciones ya no se ingiere. */
+export const FOOTBALL_DATA_COMPETITIONS = ACTIVE_CODES;
 
 export function createFootballDataProvider({ token, baseUrl, requestsPerMinute = 10, store, logger = console, fetchImpl = fetch }) {
   const limiter = createRateLimiter({ limit: requestsPerMinute, windowMs: 60000 });
@@ -53,6 +56,12 @@ export function createFootballDataProvider({ token, baseUrl, requestsPerMinute =
     return Array.isArray(data?.matches) ? data.matches : [];
   }
 
+  /** Todos los partidos de una competición y temporada (año de inicio). */
+  async function getCompetitionMatches(competition, season, { ttlSeconds = 12 * 3600 } = {}) {
+    const data = await request(`/competitions/${encodeURIComponent(competition)}/matches?season=${Number(season)}`, { ttlSeconds });
+    return Array.isArray(data?.matches) ? data.matches : [];
+  }
+
   async function getMatch(id, { ttlSeconds = 1800 } = {}) {
     const data = await request(`/matches/${encodeURIComponent(id)}`, { ttlSeconds });
     return data?.match || data || null;
@@ -62,6 +71,7 @@ export function createFootballDataProvider({ token, baseUrl, requestsPerMinute =
     configured: Boolean(token),
     getMatches,
     getMatch,
+    getCompetitionMatches,
     stats: () => ({ ...stats, limiter: limiter.stats() })
   };
 }
@@ -75,6 +85,8 @@ export function normalizeFdMatch(m) {
     competitionCode: m.competition?.code || null,
     competition: m.competition?.name || m.competition?.code || null,
     kickoff: m.utcDate || null,
+    matchday: Number.isFinite(m.matchday) ? m.matchday : null,
+    stage: m.stage || null,
     status: m.status || 'SCHEDULED',
     home: m.homeTeam?.name || m.homeTeam?.shortName || null,
     away: m.awayTeam?.name || m.awayTeam?.shortName || null,
