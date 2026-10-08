@@ -71,7 +71,7 @@ Consulta `.env.example`. Las principales:
 | `APP_USERNAME`, `APP_PASSWORD` | Obligatorias. Sin ellas la app responde 503 |
 | `FOOTBALL_DATA_TOKEN` | Calendario y resultados |
 | `ODDS_API_KEY` | Cuotas (plan gratuito: 500 créditos/mes) |
-| `DATABASE_URL` | Señales, cuotas, predicciones y calibración persistentes |
+| `DATABASE_URL` | Señales, cuotas, predicciones y calibración persistentes (en producción: Neon Free, 1 GB y 100 CU-h/mes; la app evita mantener despierto el cómputo) |
 | `EXECUTION_BOOKMAKER` | Casa de ejecución; vacío = mejor cuota no atípica |
 | `VALUE_MIN_EV`, `VALUE_MAX_MARKET_GAP`, `VALUE_MIN_ODDS`, `VALUE_MAX_ODDS`, `VALUE_MAX_BETS_PER_JORNADA` | Reglas del motor |
 | `ODDS_MARKETS`, `ODDS_EXTRA_MARKETS`, `ODDS_EXTRAS_*` | Mercados de The Odds API (BTTS y doble oportunidad cuestan créditos por partido) |

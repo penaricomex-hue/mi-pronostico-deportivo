@@ -159,3 +159,12 @@ test('día sin partidos en football-data.org no consulta The Odds API', async ()
   assert.equal(r.fixtures.length, 0);
   assert.equal(oddsCalls, 0);
 });
+
+test('cuota de cierre: sin partidos próximos no vuelve a consultar la base en cada ciclo', async () => {
+  const { createSignalsService } = await import('../server/services/signals.js');
+  let calls = 0;
+  const ingest = { upcomingMatches: async () => { calls++; return []; } };
+  const s = createSignalsService({ pool: { query: async () => ({ rows: [] }) }, ingest, logger: { log() {}, warn() {} } });
+  for (let i = 0; i < 5; i++) assert.equal((await s.captureClosing()).skipped, true);
+  assert.equal(calls, 1, 'una sola consulta por hora para conocer los próximos inicios');
+});
