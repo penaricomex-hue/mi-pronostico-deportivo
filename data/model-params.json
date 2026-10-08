@@ -1,0 +1,51 @@
+{
+  "leagues": {
+    "PD": {
+      "xi": 0.0012,
+      "w1x2": 0,
+      "wOU": 0.05,
+      "valueEnabled": false,
+      "testClvPct": 1.59,
+      "testRoiPct": -38.55,
+      "testBets": 31
+    },
+    "PL": {
+      "xi": 0.003,
+      "w1x2": 0,
+      "wOU": 0,
+      "valueEnabled": false,
+      "testClvPct": 4.26,
+      "testRoiPct": 44.41,
+      "testBets": 29
+    },
+    "SA": {
+      "xi": 0.003,
+      "w1x2": 0,
+      "wOU": 0,
+      "valueEnabled": false,
+      "testClvPct": 4.64,
+      "testRoiPct": -32.61,
+      "testBets": 18
+    },
+    "BL1": {
+      "xi": 0.003,
+      "w1x2": 0,
+      "wOU": 0.1,
+      "valueEnabled": false,
+      "testClvPct": 3.18,
+      "testRoiPct": -42,
+      "testBets": 24
+    },
+    "FL1": {
+      "xi": 0.003,
+      "w1x2": 0,
+      "wOU": 0.1,
+      "valueEnabled": false,
+      "testClvPct": 2.72,
+      "testRoiPct": 13.68,
+      "testBets": 25
+    }
+  },
+  "modelVersion": "V9.0.0",
+  "generatedAt": "2026-10-08T03:49:58.827Z"
+}
