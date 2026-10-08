@@ -153,6 +153,7 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
     const { analyses, warnings } = await analysis.analyzeRange({ fromDate, days, competition: null, tzOffset: 0, withInfo: false });
     const capped = await applyJornadaCap(analyses);
     const { recorded } = await recordFromAnalyses(capped);
+    if (analyses.length) invalidateKickoffs();
     return { analyzed: analyses.length, recorded, warnings };
   }
 
@@ -251,8 +252,23 @@ export function createSignalsService({ pool, analysis, footballData, odds, teams
    */
   // Se repite cada 5 min dentro de la ventana; la última captura antes del inicio
   // sobrescribe a la anterior (con caché de 15 min casi siempre sin coste extra).
+  // Caché en memoria de los próximos inicios: el job corre cada 5 min, pero solo
+  // consulta la base (Neon, que se suspende tras 5 min sin actividad) una vez por
+  // hora o cuando de verdad hay un partido a punto de empezar.
+  let kickoffCache = { at: 0, times: [] };
+  async function nextKickoffs() {
+    if (Date.now() - kickoffCache.at < 60 * 60000) return kickoffCache.times;
+    const rows = await ingest.upcomingMatches(26 * 60);
+    kickoffCache = { at: Date.now(), times: rows.map(r => new Date(r.kickoff_utc).getTime()) };
+    return kickoffCache.times;
+  }
+  function invalidateKickoffs() { kickoffCache.at = 0; }
+
   async function captureClosing({ windowMinutes = 20 } = {}) {
     if (!pool || !ingest) return { matches: 0, signals: 0 };
+    const now = Date.now();
+    const soon = (await nextKickoffs()).some(t => t >= now && t <= now + windowMinutes * 60000);
+    if (!soon) return { matches: 0, signals: 0, skipped: true };
     const upcoming = await ingest.upcomingMatches(windowMinutes);
     let matches = 0, signals = 0;
     for (const m of upcoming) {
