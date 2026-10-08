@@ -21,7 +21,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "dotenv": "^17.2.3",
+    "dotenv": "^18.0.5",
     "express": "^4.21.2",
     "pg": "^8.23.0"
   },
