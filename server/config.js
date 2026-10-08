@@ -35,7 +35,7 @@ export const config = {
 
   odds: {
     apiKey: process.env.ODDS_API_KEY || process.env.THE_ODDS_API_KEY || '',
-    baseUrl: 'https://api.the-odds-api.com/v4',
+    baseUrl: process.env.ODDS_API_BASE_URL || 'https://api.the-odds-api.com/v4',
     regions: process.env.ODDS_REGIONS || 'eu',
     cacheMinutes: num('ODDS_CACHE_MINUTES', 20),
     // Créditos que nunca se gastan (reserva). The Odds API devuelve los restantes en cada respuesta.

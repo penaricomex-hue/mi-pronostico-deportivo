@@ -3,20 +3,17 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Escudo MK Bets (igual que el logo de la web) -->
     <path
-        android:pathData="M 30,70 L 30,38 L 46,58 L 62,38 L 62,70"
+        android:pathData="M54,29.25 L74.25,35.25 L74.25,52.5 C74.25,65.6 65.25,74.6 54,78.75 C42.75,74.6 33.75,65.6 33.75,52.5 L33.75,35.25 Z"
+        android:fillColor="#0D141C"
         android:strokeColor="#FFB45D"
-        android:strokeWidth="6"
-        android:strokeLineCap="round"
+        android:strokeWidth="2.6"
         android:strokeLineJoin="round" />
     <path
-        android:pathData="M 62,54 L 80,36"
+        android:pathData="M41.25,63 L41.25,45 L48.4,54.75 L55.5,45 L55.5,63 M55.5,54.75 L66.75,45 M55.5,54.75 L66.75,63"
         android:strokeColor="#FFB45D"
-        android:strokeWidth="6"
-        android:strokeLineCap="round" />
-    <path
-        android:pathData="M 62,54 L 80,72"
-        android:strokeColor="#FFB45D"
-        android:strokeWidth="6"
-        android:strokeLineCap="round" />
+        android:strokeWidth="3.75"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 </vector>

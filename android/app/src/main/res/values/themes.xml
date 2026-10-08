@@ -3,7 +3,7 @@
     <style name="Theme.MiPronosticoDeportivo" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/ic_launcher_background</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#080B10</item>
-        <item name="android:navigationBarColor">#080B10</item>
+        <item name="android:statusBarColor">#06090D</item>
+        <item name="android:navigationBarColor">#06090D</item>
     </style>
 </resources>
