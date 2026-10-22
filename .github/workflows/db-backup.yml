@@ -77,7 +77,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Guardar artefacto (90 días)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: neon-backup-${{ env.STAMP }}
           path: |
