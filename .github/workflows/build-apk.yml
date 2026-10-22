@@ -62,7 +62,7 @@ jobs:
           rm -f "$ANDROID_KEYSTORE_PATH"
 
       - name: Subir APK de depuración
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MK-Bets-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
@@ -70,7 +70,7 @@ jobs:
           retention-days: 14
 
       - name: Subir APK firmado
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MK-Bets-release
           path: android/app/build/outputs/apk/release/app-release.apk
