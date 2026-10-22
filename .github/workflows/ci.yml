@@ -47,11 +47,11 @@ jobs:
         run: |
           node -e "
           import fs from 'fs';
-          const leagues = ['PL','PD','SA','BL1','FL1'];
-          for (const l of leagues) {
+          const min = { PD: 1000, CL: 600, PL: 1000, SA: 1000, BL1: 1000, FL1: 1000 };
+          for (const [l, need] of Object.entries(min)) {
             const d = JSON.parse(fs.readFileSync('data/history/' + l + '.json', 'utf8'));
             const n = (d.matches || d).length;
-            if (n < 1000) throw new Error(l + ': historial incompleto (' + n + ' partidos)');
+            if (n < need) throw new Error(l + ': historial incompleto (' + n + ' partidos, mínimo ' + need + ')');
           }
           const r = JSON.parse(fs.readFileSync('data/backtest-report.json', 'utf8'));
           const p = JSON.parse(fs.readFileSync('data/model-params.json', 'utf8'));

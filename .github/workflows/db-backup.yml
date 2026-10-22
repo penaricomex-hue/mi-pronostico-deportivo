@@ -2,9 +2,12 @@
 # El plan gratuito de Neon solo permite restaurar las últimas 6 horas; esto
 # protege las señales, evaluaciones, cuotas y calibración del seguimiento.
 #
-# Requiere el secreto NEON_DATABASE_URL (la misma cadena que DATABASE_URL en Render).
+# Requiere el secreto NEON_DATABASE_URL (la misma cadena que DATABASE_URL en Render)
+# y BACKUP_PASSPHRASE (no se sube el volcado en claro: el repositorio es público).
 # Se usa la conexión directa (sin "-pooler"), recomendada para pg_dump.
-# Restaurar:  pg_restore --no-owner --no-privileges --clean --if-exists -d "$DESTINO" mkbets.dump
+# Restaurar:
+#   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in mkbets.dump.enc -out mkbets.dump -pass env:BACKUP_PASSPHRASE
+#   pg_restore --no-owner --no-privileges --clean --if-exists -d "$DESTINO" mkbets.dump
 name: db-backup
 
 on:
@@ -27,10 +30,15 @@ jobs:
       - name: Volcado con pg_dump (PostgreSQL 18)
         env:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           set -euo pipefail
           if [ -z "${DATABASE_URL:-}" ]; then
             echo "::error::Falta el secreto NEON_DATABASE_URL en el repositorio."
+            exit 1
+          fi
+          if [ -z "${BACKUP_PASSPHRASE:-}" ]; then
+            echo "::error::Falta el secreto BACKUP_PASSPHRASE. No se sube un volcado sin cifrar."
             exit 1
           fi
           URL="${DATABASE_URL/-pooler./.}"
@@ -53,6 +61,9 @@ jobs:
             echo "::error::El respaldo parece incompleto ($TABLES tablas con datos)."
             exit 1
           fi
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+            -in backup/mkbets.dump -out backup/mkbets.dump.enc -pass env:BACKUP_PASSPHRASE
+          rm -f backup/mkbets.dump
           echo "STAMP=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
           {
             echo "## Respaldo de la base de datos"
@@ -70,7 +81,7 @@ jobs:
         with:
           name: neon-backup-${{ env.STAMP }}
           path: |
-            backup/mkbets.dump
+            backup/mkbets.dump.enc
             backup/contents.txt
             backup/rows.txt
           retention-days: 90

@@ -78,6 +78,6 @@ export function createStore({ pool = null, logger = console, now = () => Date.no
   return {
     get, set, del, remember, purgeExpired,
     disableDb() { dbFailed = true; },
-    persistent: Boolean(pool)
+    get persistent() { return Boolean(pool) && !dbFailed; }
   };
 }

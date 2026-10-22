@@ -10,16 +10,20 @@ export class ApiError extends Error {
 
 const tz = () => new Date().getTimezoneOffset();
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, attempt = 0): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) }
+    headers: { 'Content-Type': 'application/json', 'X-MK-Request': '1', ...(init?.headers || {}) }
   });
   let data: any = null;
   try {
     data = await res.json();
   } catch {
     throw new ApiError(`Respuesta no válida del servidor (HTTP ${res.status})`, res.status);
+  }
+  if (res.status === 503 && attempt < 5 && String(data?.error || '').includes('arrancando')) {
+    await new Promise(r => setTimeout(r, 2000));
+    return request<T>(path, init, attempt + 1);
   }
   if (!res.ok || data?.ok === false) throw new ApiError(data?.error || `HTTP ${res.status}`, res.status);
   return data as T;
@@ -47,7 +51,7 @@ export const api = {
     request<{
       analyzed: number; withOdds: number; picks: Pick[]; nearMisses: Pick[]; recorded: number; rules: ValueRules;
       execution: { bookmaker: string | null; mode: 'fixed' | 'best' | null }; warnings: string[];
-    }>(`/api/value-bets?${qs({ competition, days, includeNearMisses })}`),
+    }>(`/api/value-bets?${qs({ competition, days, includeNearMisses })}`, { method: 'POST' }),
 
   parlays: (competition: string, legs: number) =>
     request<{ parlays: Parlay[]; candidates: number; assumption: string; warnings: string[] }>(

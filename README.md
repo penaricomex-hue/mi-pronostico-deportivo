@@ -94,9 +94,11 @@ API: `GET /api/performance?days=7|30|60|90`, `GET /api/evaluations/thresholds?da
 
 ## Respaldo de la base de datos
 
-`.github/workflows/db-backup.yml` hace un `pg_dump` semanal (lunes 09:30 UTC) de Neon con PostgreSQL 18 y lo guarda 90 días como artefacto de GitHub Actions (`neon-backup-AAAA-MM-DD`). Se puede lanzar a mano desde *Actions → db-backup → Run workflow*. Necesita el secreto `NEON_DATABASE_URL` (la misma cadena que `DATABASE_URL`). Para restaurar:
+`.github/workflows/db-backup.yml` hace un `pg_dump` semanal (lunes 09:30 UTC) de Neon con PostgreSQL 18, lo cifra y lo guarda 90 días como artefacto (`neon-backup-AAAA-MM-DD`). Se puede lanzar a mano desde *Actions → db-backup → Run workflow*. Necesita los secretos `NEON_DATABASE_URL` (la misma cadena que `DATABASE_URL`) y `BACKUP_PASSPHRASE`. Para restaurar:
 
 ```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+  -in mkbets.dump.enc -out mkbets.dump -pass env:BACKUP_PASSPHRASE
 pg_restore --no-owner --no-privileges --clean --if-exists -d "postgresql://…/destino" mkbets.dump
 ```
 

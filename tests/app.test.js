@@ -60,7 +60,55 @@ test('bloquea la IP tras 10 intentos fallidos', async () => {
     for (let i = 0; i < 10; i++) assert.equal((await fetch(`${base}/api/status`, bad)).status, 401);
     assert.equal((await fetch(`${base}/api/status`, bad)).status, 429);
     const good = { headers: { Authorization: `Basic ${Buffer.from('mk:secreto-largo').toString('base64')}` } };
-    assert.equal((await fetch(`${base}/api/status`, good)).status, 429, 'también bloquea credenciales buenas desde esa IP');
+    const after = await fetch(`${base}/api/nope`, good);
+    assert.equal(after.status, 404, 'la contraseña correcta levanta el bloqueo');
+    assert.equal((await fetch(`${base}/api/status`, bad)).status, 401, 'tras entrar, el contador vuelve a empezar');
+  });
+});
+
+test('el bloqueo de contraseña sobrevive a un reinicio si hay almacén', async () => {
+  const mem = new Map();
+  const store = {
+    persistent: true,
+    get: async k => mem.get(k) ?? null,
+    set: async (k, v) => { mem.set(k, v); },
+    del: async k => { mem.delete(k); }
+  };
+  const deps = { ...fakeDeps, store };
+  const opts = { auth: { username: 'mk', password: 'secreto-largo' }, logger: { warn() {}, error() {} } };
+  const bad = { headers: { Authorization: `Basic ${Buffer.from('mk:x').toString('base64')}` } };
+  const app1 = createApp(deps, opts);
+  await withServer(app1, async base => {
+    for (let i = 0; i < 10; i++) assert.equal((await fetch(`${base}/api/status`, bad)).status, 401);
+  });
+  const app2 = createApp(deps, opts);
+  await withServer(app2, async base => {
+    assert.equal((await fetch(`${base}/api/status`, bad)).status, 429);
+    const good = { headers: { Authorization: `Basic ${Buffer.from('mk:secreto-largo').toString('base64')}` } };
+    assert.equal((await fetch(`${base}/api/nope`, good)).status, 404);
+  });
+  assert.equal(mem.size, 0, 'entrar borra el bloqueo guardado');
+});
+
+test('POST sin la cabecera de la app se rechaza', async () => {
+  const app = createApp(fakeDeps, {});
+  await withServer(app, async base => {
+    const res = await fetch(`${base}/api/bets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(res.status, 403);
+  });
+});
+
+test('/health dice si la base falló', async () => {
+  let database = 'migrating';
+  const app = createApp(fakeDeps, { healthStatus: () => ({ ok: database !== 'error', database }) });
+  await withServer(app, async base => {
+    const pending = await fetch(`${base}/health`);
+    assert.equal(pending.status, 200);
+    assert.equal((await pending.json()).database, 'migrating');
+    database = 'error';
+    const failed = await fetch(`${base}/health`);
+    assert.equal(failed.status, 503);
+    assert.equal((await failed.json()).database, 'error');
   });
 });
 
@@ -85,7 +133,11 @@ test('limita peticiones por minuto a la API', async () => {
 test('JSON mal formado devuelve 400 sin traza', async () => {
   const app = createApp(fakeDeps, { logger: { error() {} } });
   await withServer(app, async base => {
-    const res = await fetch(`${base}/api/bets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{mal' });
+    const res = await fetch(`${base}/api/bets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-MK-Request': '1' },
+      body: '{mal'
+    });
     assert.equal(res.status, 400);
     const body = await res.text();
     assert.ok(!body.includes('at '), 'sin traza de pila');

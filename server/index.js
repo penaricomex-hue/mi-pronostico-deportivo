@@ -20,14 +20,16 @@ const logger = console;
 
 const pool = createPool({ databaseUrl: config.databaseUrl, caCert: config.databaseCa, logger });
 const store = createStore({ pool, logger });
+// pending: el puerto ya escucha (Render no mata el arranque) pero /api espera.
+// error: la migración falló; no se consulta la base ni se gastan créditos en tareas.
+const migration = { state: pool ? 'pending' : 'disabled' };
 
-if (pool) {
-  try {
-    await migrate(pool, logger);
-  } catch (err) {
-    logger.error(`[db] Migraciones fallidas, se continúa sin persistencia de caché: ${err.message}`);
-    store.disableDb();
-  }
+function disableQueries(db) {
+  db.query = async () => {
+    const err = new Error('La base de datos no está disponible.');
+    err.status = 503;
+    throw err;
+  };
 }
 
 const teams = createTeamRegistry();
@@ -36,7 +38,7 @@ const odds = createOddsProvider({ ...config.odds, store, logger });
 const bigBalls = createBigBallsProvider({ apiKey: config.bigBalls.apiKey, store, teams, logger });
 const history = createHistoryProvider({ store, logger });
 const ratings = createRatingsService({ history, footballData, teams, logger });
-const dbPool = store.persistent ? pool : null;
+const dbPool = pool;
 const calibration = createCalibrationService({ pool: dbPool, method: config.calibration.method, logger });
 const ingest = createIngestService({ pool: dbPool, logger, modelVersion: MODEL_VERSION });
 const analysis = createAnalysisService({
@@ -49,19 +51,23 @@ const signals = createSignalsService({
   mode: config.tradingMode, modelVersion: MODEL_VERSION, logger
 });
 
-calibration.refit().catch(err => logger.warn(`[calibration] ${err.message}`));
-
 const app = createApp(
   { analysis, bets, signals, calibration, ratings, footballData, odds, store, teams, bankroll: config.bankroll },
   {
     auth: config.auth,
     production: config.auth.required,
     apiRateLimitPerMinute: config.apiRateLimitPerMinute,
-    logger
+    logger,
+    healthStatus() {
+      if (migration.state === 'error') return { ok: false, database: 'error' };
+      const database = migration.state === 'ok' ? 'ok' : migration.state === 'pending' ? 'migrating' : 'disabled';
+      return { ok: true, database };
+    },
+    isReady() { return migration.state !== 'pending'; }
   }
 );
 
-app.listen(config.port, '0.0.0.0', () => {
+const server = app.listen(config.port, '0.0.0.0', () => {
   logger.log(`MK Bets ${MODEL_VERSION} escuchando en el puerto ${config.port}`);
   const { username, password, required } = config.auth;
   if (username && password) {
@@ -73,9 +79,9 @@ app.listen(config.port, '0.0.0.0', () => {
     logger.warn('[auth] APP_USERNAME/APP_PASSWORD no configurados: la app es pública (solo desarrollo local).');
   }
 });
+server.on('error', err => logger.error(`[server] No se pudo escuchar: ${err.message}`));
 
-// Tareas periódicas (en Render free solo corren mientras el servicio está despierto)
-if (config.jobs.enabled && pool) {
+function startJobs() {
   const runSettle = () => {
     bets.autoSettle()
       .then(r => r.settled && logger.log(`[jobs] ${r.settled} apuestas manuales liquidadas`))
@@ -114,6 +120,27 @@ if (config.jobs.enabled && pool) {
   // Recalibración semanal de respaldo (además de la que ocurre tras cada liquidación)
   setInterval(() => calibration.refit().catch(() => {}), 7 * 86400000).unref();
 }
+
+async function bootDatabase() {
+  if (!pool) {
+    calibration.refit().catch(err => logger.warn(`[calibration] ${err.message}`));
+    return;
+  }
+  try {
+    await migrate(pool, logger);
+    migration.state = 'ok';
+    calibration.refit().catch(err => logger.warn(`[calibration] ${err.message}`));
+    if (config.jobs.enabled) startJobs();
+  } catch (err) {
+    migration.state = 'error';
+    store.disableDb();
+    disableQueries(pool);
+    logger.error(`[db] Migraciones fallidas. No se usará la base ni se gastarán créditos en tareas: ${err.message}`);
+    calibration.refit().catch(err2 => logger.warn(`[calibration] ${err2.message}`));
+  }
+}
+
+bootDatabase();
 
 // Calentar los modelos (solo LaLiga y Champions) en segundo plano
 for (const lg of ACTIVE_CODES) ratings.getRatings(lg).catch(() => {});

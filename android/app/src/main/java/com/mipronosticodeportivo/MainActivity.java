@@ -43,7 +43,12 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ProgressBar progress;
     private LinearLayout errorView;
-    private int authAttempts = 0;
+    private boolean triedStored = false;
+    private boolean dialogVisible = false;
+    private HttpAuthHandler dialogHandler = null;
+    private final java.util.ArrayList<HttpAuthHandler> waitingAuth = new java.util.ArrayList<>();
+    private String pendingUser = null;
+    private String pendingPass = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -85,7 +90,18 @@ public class MainActivity extends Activity {
         configureWebView();
 
         if (savedInstanceState != null) webView.restoreState(savedInstanceState);
-        else webView.loadUrl(APP_URL);
+        else loadApp();
+    }
+
+    /** Manda la clave guardada antes de cargar, para no abrir un diálogo por cada recurso. */
+    @SuppressWarnings("deprecation")
+    private void loadApp() {
+        SharedPreferences prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String user = prefs.getString("user", null);
+        String pass = prefs.getString("pass", null);
+        triedStored = user != null && pass != null && !pass.isEmpty();
+        webView.setHttpAuthUsernamePassword(APP_HOST, "MK Bets", triedStored ? user : "", triedStored ? pass : "");
+        webView.loadUrl(APP_URL);
     }
 
     private void configureWebView() {
@@ -124,7 +140,18 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (errorView.getVisibility() != View.VISIBLE) authAttempts = 0;
+                if (pendingUser == null || errorView.getVisibility() == View.VISIBLE) return;
+                // Si la clave era mala, el servidor vuelve a pedir auth enseguida.
+                // Solo entonces se guarda: nunca antes de saber que entró.
+                view.postDelayed(() -> {
+                    if (pendingUser == null || dialogVisible || errorView.getVisibility() == View.VISIBLE) return;
+                    getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                        .putString("user", pendingUser)
+                        .putString("pass", pendingPass)
+                        .apply();
+                    pendingUser = null;
+                    pendingPass = null;
+                }, 500);
             }
 
             @Override
@@ -138,20 +165,38 @@ public class MainActivity extends Activity {
                     handler.cancel();
                     return;
                 }
+                if (dialogVisible) {
+                    waitingAuth.add(handler);
+                    return;
+                }
                 SharedPreferences prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
                 String user = prefs.getString("user", null);
                 String pass = prefs.getString("pass", null);
-                authAttempts++;
-                if (user != null && pass != null && authAttempts == 1 && handler.useHttpAuthUsernamePassword()) {
-                    handler.proceed(user, pass);
-                } else {
-                    askCredentials(handler, user);
-                }
+                pendingUser = null;
+                pendingPass = null;
+                askCredentials(handler, user, pass);
             }
         });
     }
 
-    private void askCredentials(final HttpAuthHandler handler, String lastUser) {
+    @SuppressWarnings("deprecation")
+    private void proceedAuth(HttpAuthHandler handler, String user, String pass, boolean saveIfPageLoads) {
+        if (saveIfPageLoads) {
+            pendingUser = user;
+            pendingPass = pass;
+            webView.setHttpAuthUsernamePassword(APP_HOST, "MK Bets", user, pass);
+        }
+        handler.proceed(user, pass);
+        for (HttpAuthHandler extra : waitingAuth) {
+            if (extra.useHttpAuthUsernamePassword()) extra.proceed(user, pass);
+            else extra.cancel();
+        }
+        waitingAuth.clear();
+    }
+
+    private void askCredentials(final HttpAuthHandler handler, String lastUser, String lastPass) {
+        dialogVisible = true;
+        dialogHandler = handler;
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), 0);
@@ -166,20 +211,26 @@ public class MainActivity extends Activity {
         pass.setHint("Contraseña");
         pass.setSingleLine(true);
         pass.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        if (lastPass != null) pass.setText(lastPass);
         box.addView(pass);
 
         new AlertDialog.Builder(this)
-            .setTitle(authAttempts > 1 ? "Usuario o contraseña incorrectos" : "Iniciar sesión en MK Bets")
+            .setTitle(triedStored ? "No se pudo entrar con la clave guardada" : "Iniciar sesión en MK Bets")
             .setView(box)
             .setCancelable(false)
             .setPositiveButton("Entrar", (d, w) -> {
+                dialogVisible = false;
+                dialogHandler = null;
                 String u = user.getText().toString().trim();
                 String p = pass.getText().toString();
-                getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("user", u).putString("pass", p).apply();
-                handler.proceed(u, p);
+                proceedAuth(handler, u, p, true);
             })
             .setNegativeButton("Cancelar", (d, w) -> {
+                dialogVisible = false;
+                dialogHandler = null;
                 handler.cancel();
+                for (HttpAuthHandler extra : waitingAuth) extra.cancel();
+                waitingAuth.clear();
                 showError();
             })
             .show();
@@ -211,10 +262,21 @@ public class MainActivity extends Activity {
         retry.setText("Reintentar");
         retry.setOnClickListener(x -> {
             errorView.setVisibility(View.GONE);
-            authAttempts = 0;
-            webView.reload();
+            loadApp();
         });
         v.addView(retry);
+
+        Button forget = new Button(this);
+        forget.setText("Olvidar usuario");
+        forget.setOnClickListener(x -> {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply();
+            triedStored = false;
+            pendingUser = null;
+            pendingPass = null;
+            errorView.setVisibility(View.GONE);
+            loadApp();
+        });
+        v.addView(forget);
         return v;
     }
 

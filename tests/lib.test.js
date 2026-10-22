@@ -24,6 +24,13 @@ test('el limitador nunca supera N llamadas por ventana', async () => {
   assert.ok(limiter.stats().blockedForMs > 0);
 });
 
+test('disableDb apaga la persistencia aunque el pool siga existiendo', () => {
+  const store = createStore({ pool: { query() { throw new Error('no'); } }, logger: { warn() {} } });
+  assert.equal(store.persistent, true);
+  store.disableDb();
+  assert.equal(store.persistent, false);
+});
+
 test('store.remember cachea y respeta la caducidad', async () => {
   let t = 0;
   const store = createStore({ now: () => t, logger: { warn() {} } });
