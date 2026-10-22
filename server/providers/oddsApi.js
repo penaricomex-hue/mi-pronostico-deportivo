@@ -15,7 +15,13 @@ export const ODDS_SPORT_BY_COMPETITION = Object.fromEntries(ACTIVE_CODES.map(c =
 const QUOTA_KEY = 'quota:odds-api';
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  // El presupuesto diario es del usuario (México), no del reloj UTC del servidor.
+  const tz = process.env.QUOTA_TIMEZONE || 'America/Mexico_City';
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
 }
 
 export function createOddsProvider({

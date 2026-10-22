@@ -9,9 +9,13 @@ export function createPool({ databaseUrl, caCert = '', logger = console } = {}) 
   const isLocal = /localhost|127\.0\.0\.1/.test(databaseUrl);
   let ssl = false;
   if (!isLocal) {
-    // Con DATABASE_CA_CERT se valida el certificado. Sin él, se mantiene el
-    // comportamiento compatible con Render (TLS sin validar la cadena).
-    ssl = caCert ? { ca: caCert, rejectUnauthorized: true } : { rejectUnauthorized: false };
+    // Por defecto se valida el certificado (Neon y el resto de Postgres en la
+    // nube usan una CA pública). DATABASE_SSL_INSECURE=true solo si el
+    // proveedor usa un certificado que Node no puede verificar.
+    const insecure = ['1', 'true', 'yes', 'si', 'sí'].includes(String(process.env.DATABASE_SSL_INSECURE || '').toLowerCase());
+    ssl = caCert
+      ? { ca: caCert, rejectUnauthorized: true }
+      : { rejectUnauthorized: !insecure };
   }
   const pool = new pg.Pool({ connectionString: databaseUrl, ssl, max: 5 });
   pool.on('error', err => logger.warn(`[db] Error en conexión inactiva: ${err.message}`));

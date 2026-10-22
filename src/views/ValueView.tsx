@@ -61,13 +61,13 @@ export function ValueView({ bets, currency }: { bets: BetsApi; currency: string 
     setLoading(true);
     setError(null);
     try {
-      setResult(await api.valueBets(competition, Number(days), true));
+      setResult(await api.valueBets(competition, Number(days), showNear));
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [competition, days]);
+  }, [competition, days, showNear]);
 
   const save = async (p: Pick) => {
     try {

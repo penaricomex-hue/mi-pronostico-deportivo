@@ -41,38 +41,94 @@ export function createIpCounter({ windowMs, max, now = () => Date.now() }) {
     hit(ip) { const e = entry(ip); e.count++; return e.count; },
     blocked(ip) { return entry(ip).count >= max; },
     retryAfterSec(ip) { const e = entry(ip); return Math.max(1, Math.ceil((e.start + windowMs - now()) / 1000)); },
-    reset(ip) { hits.delete(ip); }
+    reset(ip) { hits.delete(ip); },
+    snapshot(ip) {
+      const e = hits.get(ip);
+      if (!e || now() - e.start >= windowMs) return null;
+      return { start: e.start, count: e.count };
+    },
+    seed(ip, saved) {
+      const start = Number(saved?.start);
+      const count = Number(saved?.count);
+      if (!Number.isFinite(start) || !Number.isFinite(count)) return;
+      if (now() - start >= windowMs) return;
+      const cur = hits.get(ip);
+      if (!cur || count > cur.count) hits.set(ip, { start, count });
+    }
   };
 }
 
 /**
  * Basic Auth para TODO salvo /health (necesario para el health check de Render).
- * Tras 10 intentos fallidos en 15 minutos, la IP queda bloqueada temporalmente.
+ * Tras 10 intentos fallidos en 15 minutos, la IP queda bloqueada. La contraseña
+ * correcta levanta el bloqueo: un error propio no deja fuera al dueño.
+ * Si hay almacén, el conteo sobrevive a que Render duerma el proceso.
  */
-export function basicAuth({ username, password, maxFailures = 10, windowMs = 15 * 60000, logger = console }) {
+function readBasic(req) {
+  const [scheme, encoded] = String(req.headers.authorization || '').split(' ');
+  if (scheme !== 'Basic' || !encoded) return null;
+  let decoded = '';
+  try { decoded = Buffer.from(encoded, 'base64').toString('utf8'); } catch { return { user: '', pass: '' }; }
+  const sep = decoded.indexOf(':');
+  return {
+    user: sep >= 0 ? decoded.slice(0, sep) : decoded,
+    pass: sep >= 0 ? decoded.slice(sep + 1) : ''
+  };
+}
+
+export function basicAuth({ username, password, maxFailures = 10, windowMs = 15 * 60000, logger = console, store = null }) {
   const failures = createIpCounter({ windowMs, max: maxFailures });
-  return (req, res, next) => {
-    if (req.path === '/health') return next();
-    const ip = clientIp(req);
-    if (failures.blocked(ip)) {
-      res.set('Retry-After', String(failures.retryAfterSec(ip)));
-      return res.status(429).send('Demasiados intentos fallidos. Espera unos minutos.');
+  const hydrated = new Set();
+  const keyFor = ip => `authfail:${ip}`;
+
+  async function hydrate(ip) {
+    if (hydrated.has(ip) || !store || typeof store.get !== 'function') return;
+    hydrated.add(ip);
+    try {
+      const saved = await store.get(keyFor(ip));
+      if (saved) failures.seed(ip, saved);
+    } catch { /* sigue valiendo el conteo en memoria */ }
+  }
+
+  function remember(ip) {
+    if (!store || typeof store.set !== 'function') return;
+    const snap = failures.snapshot(ip);
+    const ttl = snap ? Math.max(1, Math.ceil((snap.start + windowMs - Date.now()) / 1000)) : 1;
+    const op = snap
+      ? store.set(keyFor(ip), snap, ttl)
+      : (typeof store.del === 'function' ? store.del(keyFor(ip)) : null);
+    if (op && typeof op.catch === 'function') op.catch(() => {});
+  }
+
+  return async (req, res, next) => {
+    try {
+      if (req.path === '/health') return next();
+      const ip = clientIp(req);
+      await hydrate(ip);
+      const creds = readBasic(req);
+      if (creds) {
+        const okUser = safeEqual(creds.user, username);
+        const okPass = safeEqual(creds.pass, password);
+        if (okUser && okPass) {
+          failures.reset(ip);
+          remember(ip);
+          return next();
+        }
+      }
+      if (failures.blocked(ip)) {
+        res.set('Retry-After', String(failures.retryAfterSec(ip)));
+        return res.status(429).send('Demasiados intentos fallidos. Espera unos minutos.');
+      }
+      if (creds) {
+        const n = failures.hit(ip);
+        remember(ip);
+        if (n === maxFailures) logger.warn(`[auth] IP ${ip} bloqueada tras ${n} intentos fallidos.`);
+      }
+      res.set('WWW-Authenticate', 'Basic realm="MK Bets", charset="UTF-8"');
+      return res.status(401).send('Acceso restringido.');
+    } catch (err) {
+      next(err);
     }
-    const [scheme, encoded] = String(req.headers.authorization || '').split(' ');
-    if (scheme === 'Basic' && encoded) {
-      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-      const sep = decoded.indexOf(':');
-      const user = sep >= 0 ? decoded.slice(0, sep) : decoded;
-      const pass = sep >= 0 ? decoded.slice(sep + 1) : '';
-      // Evaluar ambas comparaciones siempre (sin cortocircuito)
-      const okUser = safeEqual(user, username);
-      const okPass = safeEqual(pass, password);
-      if (okUser && okPass) return next();
-      const n = failures.hit(ip);
-      if (n === maxFailures) logger.warn(`[auth] IP ${ip} bloqueada tras ${n} intentos fallidos.`);
-    }
-    res.set('WWW-Authenticate', 'Basic realm="MK Bets", charset="UTF-8"');
-    return res.status(401).send('Acceso restringido.');
   };
 }
 
@@ -119,9 +175,10 @@ function securityHeaders(production) {
  * @param {object} opts
  * @param {{username?:string, password?:string, required?:boolean}} [opts.auth]
  * @param {boolean} [opts.production]
- * @param {number} [opts.apiRateLimitPerMinute]
+ * @param {() => {ok?: boolean}} [opts.healthStatus] detalle de /health (la base, sobre todo)
+ * @param {() => boolean} [opts.isReady] mientras sea false, /api responde 503
  */
-export function createApp(deps, { auth, production = false, apiRateLimitPerMinute = 120, logger = console } = {}) {
+export function createApp(deps, { auth, production = false, apiRateLimitPerMinute = 120, logger = console, healthStatus = null, isReady = null } = {}) {
   const app = express();
   app.disable('x-powered-by');
   // Render (y casi cualquier PaaS) pone un proxy delante: confiar en el primero para obtener la IP real.
@@ -129,13 +186,15 @@ export function createApp(deps, { auth, production = false, apiRateLimitPerMinut
   app.use(securityHeaders(production));
 
   app.get('/health', (_req, res) => {
+    const extra = typeof healthStatus === 'function' ? healthStatus() : {};
+    const ok = extra.ok !== false;
     res.set('Cache-Control', 'no-store');
-    res.json({ ok: true, modelVersion: MODEL_VERSION });
+    res.status(ok ? 200 : 503).json({ modelVersion: MODEL_VERSION, ...extra, ok });
   });
 
   const hasCredentials = Boolean(auth?.username && auth?.password);
   if (hasCredentials) {
-    app.use(basicAuth({ username: auth.username, password: auth.password, logger }));
+    app.use(basicAuth({ username: auth.username, password: auth.password, logger, store: deps?.store }));
   } else if (auth?.required) {
     // Fallar cerrado: sin credenciales configuradas no se sirve nada.
     app.use((_req, res) => res.status(503).send(
@@ -143,6 +202,20 @@ export function createApp(deps, { auth, production = false, apiRateLimitPerMinut
     ));
   }
 
+  app.use('/api', (req, res, next) => {
+    if (typeof isReady === 'function' && !isReady()) {
+      res.set('Retry-After', '5');
+      return res.status(503).json({ ok: false, error: 'El servidor está arrancando. Inténtalo en unos segundos.' });
+    }
+    next();
+  });
+  // Un formulario de otro sitio no puede añadir esta cabecera; las peticiones
+  // que cambian datos o gastan créditos quedan así fuera del alcance de un CSRF.
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    if (req.get('x-mk-request') === '1') return next();
+    return res.status(403).json({ ok: false, error: 'Petición rechazada.' });
+  });
   app.use('/api', apiRateLimit(apiRateLimitPerMinute), express.json({ limit: '100kb' }));
   app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   app.use('/api', createApiRouter(deps));

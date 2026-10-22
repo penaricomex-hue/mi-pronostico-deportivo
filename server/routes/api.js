@@ -35,7 +35,7 @@ const wrap = fn => async (req, res) => {
   } catch (err) {
     const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
     if (status === 500) console.error(`[api] ${req.method} ${req.path}: ${err.stack || err.message}`);
-    res.status(status).json({ ok: false, error: err.message });
+    res.status(status).json({ ok: false, error: status >= 500 ? 'Error interno.' : err.message });
   }
 };
 
@@ -92,15 +92,16 @@ export function createApiRouter({ analysis, bets, signals, calibration, ratings,
     res.json({ ok: true, modelVersion: MODEL_VERSION, analysis: result });
   }));
 
-  r.get('/value-bets', wrap(async (req, res) => {
+  async function valueBets(req, res) {
     const { competition, tzOffset, date } = parseCommon(req);
     const days = Math.min(5, Math.max(1, Number(req.query.days) || 3));
     const includeNearMisses = req.query.includeNearMisses === 'true' || req.query.includeUnvalidated === 'true';
     const { analyses: raw, warnings } = await analysis.analyzeRange({ fromDate: date, days, competition, tzOffset, withInfo: false });
     const analyses = signals ? await signals.applyJornadaCap(raw) : raw;
-    // Paper trading: cada recomendación queda registrada con la cuota exacta del momento.
-    const recorded = signals ? (await signals.recordFromAnalyses(analyses).catch(() => ({ recorded: 0 }))).recorded : 0;
-    if (signals) signals.recordEvaluations(analyses).catch(() => {});
+    // Solo POST registra señales. Un GET (prefetch, enlace, CSRF) no escribe ni debe contarse como apuesta.
+    const persist = req.method === 'POST';
+    const recorded = persist && signals ? (await signals.recordFromAnalyses(analyses).catch(() => ({ recorded: 0 }))).recorded : 0;
+    if (persist && signals) signals.recordEvaluations(analyses).catch(() => {});
     const picks = collectValuePicks(analyses, { includeNearMisses });
     res.json({
       ok: true,
@@ -114,7 +115,9 @@ export function createApiRouter({ analysis, bets, signals, calibration, ratings,
       execution: { bookmaker: analyses[0]?.odds?.executionBookmaker || null, mode: analyses[0]?.odds?.executionMode || null },
       warnings
     });
-  }));
+  }
+  r.get('/value-bets', wrap(valueBets));
+  r.post('/value-bets', wrap(valueBets));
 
   r.get('/parlay', wrap(async (req, res) => {
     const { competition, tzOffset, date } = parseCommon(req);
