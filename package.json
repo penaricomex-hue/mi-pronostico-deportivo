@@ -23,7 +23,7 @@
   "dependencies": {
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "nodemailer": "^7.0.13",
+    "nodemailer": "^10.1.4",
     "pg": "^8.23.0"
   },
   "devDependencies": {
