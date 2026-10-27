@@ -7,6 +7,7 @@ import { publicConfig } from '../config.js';
 import { ALL_COMPETITIONS, COMPETITION_NAMES } from '../services/analysis.js';
 import { ACTIVE_COMPETITIONS, DISABLED_COMPETITIONS } from '../competitions.js';
 import { collectValuePicks, buildParlays } from '../services/picks.js';
+import { REASON_TAGS } from '../services/lessons.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPORT_FILE = path.resolve(__dirname, '..', '..', 'data', 'backtest-report.json');
@@ -47,7 +48,7 @@ function loadReport() {
   return reportCache;
 }
 
-export function createApiRouter({ analysis, bets, signals, calibration, ratings, footballData, odds, store, teams, bankroll }) {
+export function createApiRouter({ analysis, bets, signals, calibration, ratings, footballData, odds, store, teams, bankroll, lessons = null, reports = null }) {
   const r = express.Router();
 
   r.get('/status', wrap(async (_req, res) => {
@@ -214,6 +215,27 @@ export function createApiRouter({ analysis, bets, signals, calibration, ratings,
   }));
   r.get('/bets/summary', wrap(async (req, res) => {
     res.json({ ok: true, ...(await bets.summary({ period: String(req.query.period || 'month') })) });
+  }));
+  r.get('/bets/criteria', wrap(async (_req, res) => {
+    const data = lessons ? await lessons.criteria() : { sport: 'football', minSample: 8, groups: [], byKey: {} };
+    res.json({ ok: true, tags: REASON_TAGS, ...data });
+  }));
+  r.get('/reports', wrap(async (_req, res) => {
+    if (!reports) return res.status(503).json({ ok: false, error: 'Informes no disponibles.' });
+    const report = await reports.snapshot();
+    res.json({ ok: true, to: reports.to, mailConfigured: reports.smtpReady(), text: report.text });
+  }));
+  r.post('/reports/send', wrap(async (_req, res) => {
+    if (!reports) return res.status(503).json({ ok: false, error: 'Informes no disponibles.' });
+    const result = await reports.deliver({ force: true });
+    if (result.needsSmtp) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Falta el correo de envío (SMTP_HOST, SMTP_USER y SMTP_PASS en Render). El informe está listo, pero no se pudo mandar.',
+        text: result.report.text
+      });
+    }
+    res.json({ ok: true, sent: result.sent, to: reports.to });
   }));
   r.post('/bets', wrap(async (req, res) => {
     res.status(201).json({ ok: true, bet: await bets.create(req.body) });

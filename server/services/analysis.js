@@ -39,7 +39,7 @@ function dataQuality(homeSample, awaySample) {
 
 export function createAnalysisService({
   footballData, odds, bigBalls, ratings, teams, store, bankroll, calibration, ingest = null,
-  executionBookmaker = '', valueRules = {}, blend = null, logger = console
+  executionBookmaker = '', valueRules = {}, blend = null, lessons = null, logger = console
 }) {
   const engine = createValueBettingEngine(valueRules);
   const blender = blend?.weightsFor ? blend : createBlendResolver(blend || {});
@@ -219,6 +219,25 @@ export function createAnalysisService({
     const selections = [];
     const weights = blender.weightsFor(slug);
     const blended = market.available && cal ? blendProbabilities(cal, market.fair, weights) : null;
+    const criteria = lessons ? await lessons.criteria().catch(() => null) : null;
+
+    function criterionFor(group) {
+      const row = group && criteria?.byKey ? criteria.byKey[`${slug}|${group}`] : null;
+      const delta = row?.minEvDelta || 0;
+      const minEv = Math.min(0.08, Math.max(0.03, Number((engine.rules.minEv + delta).toFixed(4))));
+      return { row, delta, minEv };
+    }
+
+    function withCriterion(ev, group) {
+      const { row, delta, minEv } = criterionFor(group);
+      if (!row || !delta) return ev;
+      const note = `Tu criterio en ${row.groupLabel} (${row.n} apuestas, acierto ${row.hitPct}%): el EV mínimo ${delta > 0 ? 'sube' : 'baja'} a ${(minEv * 100).toFixed(1)}%.`;
+      return {
+        ...ev,
+        userCriterion: note,
+        reason: ev.recommended ? `${ev.reason}. ${note}` : ev.reason
+      };
+    }
 
     if (market.available) {
       for (const sel of FIXED_SELECTIONS) {
@@ -229,15 +248,17 @@ export function createAnalysisService({
         const pb = blended?.[sel] ?? null;
         const pDecision = pb ?? p;
         const group = groupFor(sel);
-        const ev = engine.evaluate({
+        const floor = criterionFor(group);
+        const ev = withCriterion(engine.evaluate({
           selection: sel,
           modelProbability: p,
           decisionProbability: pb,
           marketProbability: market.fair[sel] ?? null,
           executionOdds: pr.odds,
           bookmakerCount: pr.fairCount,
-          modelAvailable: Boolean(rawModel)
-        });
+          modelAvailable: Boolean(rawModel),
+          minEv: floor.minEv
+        }), group);
         const explain = group && raw != null && !sel.startsWith('dc_') ? calibration.explain(slug, group, raw, p) : null;
         selections.push({
           selection: sel,
@@ -269,7 +290,7 @@ export function createAnalysisService({
           const pMkt = market.ah.fair?.[sel] ?? null;
           const pb = poolBinary(r.probability, pMkt, weights['1x2']);
           const pDecision = pb ?? r.probability;
-          const ev = engine.evaluate({
+          const ev = withCriterion(engine.evaluate({
             selection: sel,
             modelProbability: r.probability,
             decisionProbability: pb,
@@ -278,7 +299,7 @@ export function createAnalysisService({
             bookmakerCount: pr.fairCount,
             pushProbability: r.push,
             modelAvailable: Boolean(rawModel)
-          });
+          }), null);
           selections.push({
             selection: sel,
             market: 'asian_handicap',

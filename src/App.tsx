@@ -19,7 +19,7 @@ const TABS: Array<{ id: Tab; label: string; short: string; icon: typeof Calendar
   { id: 'value', label: 'Valor', short: 'Valor', icon: Activity, title: 'Apuestas de valor', subtitle: 'EV ≥ 5%, cerca del mercado, cuotas 1.50–4.00 y máximo 3 por jornada.' },
   { id: 'performance', label: 'Rendimiento', short: 'Rendim.', icon: Gauge, title: 'Rendimiento — LaLiga y Champions', subtitle: 'Señales registradas, ROI, yield, CLV y calibración.' },
   { id: 'parlay', label: 'Combinadas', short: 'Combis', icon: Layers, title: 'Combinadas', subtitle: 'Selecciones de valor de partidos distintos.' },
-  { id: 'bets', label: 'Mis apuestas', short: 'Apuestas', icon: Wallet, title: 'Mis apuestas', subtitle: 'Tu registro simulado, resultados y CLV.' },
+  { id: 'bets', label: 'Mis apuestas', short: 'Apuestas', icon: Wallet, title: 'Mis apuestas', subtitle: 'Registra tus apuestas de fútbol. El porqué entra en el criterio del modelo.' },
   { id: 'backtest', label: 'Backtest', short: 'Backtest', icon: BarChart3, title: 'Backtest', subtitle: 'Cómo le habría ido al modelo con partidos reales.' },
   { id: 'status', label: 'Estado', short: 'Estado', icon: Settings, title: 'Estado y equipos', subtitle: 'Conexiones, créditos y fuerza de cada equipo.' }
 ];

@@ -106,6 +106,19 @@ export const config = {
     scanEveryMinutes: num('SIGNAL_SCAN_EVERY_MINUTES', 120),
     // Cuota de cierre: imprescindible para medir CLV. Activado por defecto en v10.
     trackClosingOdds: bool('TRACK_CLOSING_ODDS', true)
+  },
+
+  /** Informe por correo. El destinatario no se acepta desde el cliente. */
+  reports: {
+    to: process.env.REPORT_EMAIL || 'penaricomex@gmail.com',
+    everyHours: num('REPORT_EVERY_HOURS', 24 * 7),
+    smtp: {
+      host: process.env.SMTP_HOST || '',
+      port: num('SMTP_PORT', 465),
+      user: process.env.SMTP_USER || '',
+      pass: process.env.SMTP_PASS || '',
+      from: process.env.SMTP_FROM || process.env.SMTP_USER || ''
+    }
   }
 };
 
@@ -128,6 +141,8 @@ export function publicConfig() {
     valueRules: config.valueRules,
     tradingMode: config.tradingMode,
     calibrationMethod: config.calibration.method,
-    blend: config.blend
+    blend: config.blend,
+    reportEmail: config.reports.to,
+    mailConfigured: Boolean(config.reports.smtp.host && config.reports.smtp.user && config.reports.smtp.pass)
   };
 }

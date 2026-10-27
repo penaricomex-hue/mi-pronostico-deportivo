@@ -13,6 +13,8 @@ import { createBetsService } from './services/bets.js';
 import { createCalibrationService } from './services/calibration.js';
 import { createIngestService } from './services/ingest.js';
 import { createSignalsService } from './services/signals.js';
+import { createLessonsService } from './services/lessons.js';
+import { createReportService } from './services/reports.js';
 import { ACTIVE_CODES } from './competitions.js';
 import { createApp } from './app.js';
 
@@ -40,19 +42,28 @@ const history = createHistoryProvider({ store, logger });
 const ratings = createRatingsService({ history, footballData, teams, logger });
 const dbPool = pool;
 const calibration = createCalibrationService({ pool: dbPool, method: config.calibration.method, logger });
+const lessons = createLessonsService({ pool: dbPool, calibration, logger });
 const ingest = createIngestService({ pool: dbPool, logger, modelVersion: MODEL_VERSION });
 const analysis = createAnalysisService({
   footballData, odds, bigBalls, ratings, teams, store, bankroll: config.bankroll, calibration, ingest,
-  executionBookmaker: config.execution.bookmaker, valueRules: config.valueRules, blend: config.blend, logger
+  executionBookmaker: config.execution.bookmaker, valueRules: config.valueRules, blend: config.blend, lessons, logger
 });
-const bets = createBetsService({ pool, footballData, odds, analysis, teams, bankroll: config.bankroll, logger });
+const bets = createBetsService({ pool, footballData, odds, analysis, teams, bankroll: config.bankroll, lessons, logger });
 const signals = createSignalsService({
   pool: dbPool, analysis, footballData, odds, teams, ingest, calibration, bankroll: config.bankroll,
   mode: config.tradingMode, modelVersion: MODEL_VERSION, logger
 });
+const reports = createReportService({
+  to: config.reports.to,
+  smtp: config.reports.smtp,
+  bets, signals, lessons, calibration, store, pool: dbPool,
+  currency: config.bankroll.currency,
+  everyMs: config.reports.everyHours * 3600000,
+  logger
+});
 
 const app = createApp(
-  { analysis, bets, signals, calibration, ratings, footballData, odds, store, teams, bankroll: config.bankroll },
+  { analysis, bets, signals, calibration, ratings, footballData, odds, store, teams, bankroll: config.bankroll, lessons, reports },
   {
     auth: config.auth,
     production: config.auth.required,
@@ -119,6 +130,15 @@ function startJobs() {
 
   // Recalibración semanal de respaldo (además de la que ocurre tras cada liquidación)
   setInterval(() => calibration.refit().catch(() => {}), 7 * 86400000).unref();
+
+  const runReport = () => reports.deliver()
+    .then(r => {
+      if (r.sent) logger.log(`[jobs] Informe enviado a ${reports.to}`);
+      else if (r.needsSmtp) logger.warn('[jobs] Informe listo, pero falta SMTP_HOST/SMTP_USER/SMTP_PASS para enviarlo.');
+    })
+    .catch(err => logger.warn(`[jobs] informe: ${err.message}`));
+  setInterval(runReport, 6 * 3600000).unref();
+  setTimeout(runReport, 120000).unref();
 }
 
 async function bootDatabase() {

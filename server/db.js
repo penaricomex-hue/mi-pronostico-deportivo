@@ -264,6 +264,27 @@ export const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_value_evaluations_comp ON value_evaluations (competition_slug, kickoff_utc);
       CREATE INDEX IF NOT EXISTS idx_value_evaluations_fixture ON value_evaluations (fixture_id);
       CREATE INDEX IF NOT EXISTS idx_value_evaluations_status ON value_evaluations (status, kickoff_utc);`
+  },
+  {
+    id: 5,
+    name: 'v10.2: apuestas manuales de fútbol que entran en el criterio',
+    sql: `
+      ALTER TABLE simulated_bets ADD COLUMN IF NOT EXISTS reason TEXT;
+      ALTER TABLE simulated_bets ADD COLUMN IF NOT EXISTS tags TEXT;
+      ALTER TABLE simulated_bets ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'pick';
+      ALTER TABLE simulated_bets ADD COLUMN IF NOT EXISTS learned_at TIMESTAMPTZ;
+
+      -- Resultado de una apuesta hecha a mano, con la probabilidad que tenía el modelo.
+      -- market aquí es el grupo de calibración (1x2, over_under, btts), no el mercado comercial.
+      CREATE TABLE IF NOT EXISTS manual_outcomes (
+        bet_id INTEGER PRIMARY KEY,
+        competition_slug VARCHAR(50) NOT NULL,
+        market VARCHAR(50) NOT NULL,
+        model_probability NUMERIC(8, 5) NOT NULL,
+        outcome SMALLINT NOT NULL,
+        settled_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_manual_outcomes_calib ON manual_outcomes (competition_slug, market);`
   }
 ];
 

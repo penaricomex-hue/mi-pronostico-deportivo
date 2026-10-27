@@ -117,10 +117,21 @@ Consulta `.env.example`. Las principales:
 | `ODDS_MARKETS`, `ODDS_EXTRA_MARKETS`, `ODDS_EXTRAS_*` | Mercados de The Odds API (BTTS y doble oportunidad cuestan créditos por partido) |
 | `ODDS_DAILY_CREDIT_BUDGET`, `ODDS_CLOSING_RESERVE_CREDITS`, `ODDS_CACHE_MINUTES` | Presupuesto diario; parte reservada para la cuota de cierre |
 | `TRACK_CLOSING_ODDS` | `true` por defecto (necesario para el CLV) |
+| `REPORT_EMAIL` | Destinatario del informe semanal. Por defecto `penaricomex@gmail.com` |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Envío del informe. Sin esto la app lo muestra, pero no lo manda |
 | `TRADING_MODE` | `paper` (por defecto) o `live` |
 | `CALIBRATION_METHOD` | `auto`, `isotonic` o `platt` |
 | `BLEND_ENABLED`, `BLEND_MODEL_WEIGHT` | Mezcla modelo + mercado (activada por defecto; el peso fuerza un valor global 0–1) |
 | `SIGNAL_SCAN_EVERY_MINUTES` | Frecuencia del escaneo automático de señales |
+
+## Apuestas manuales
+
+En **Mis apuestas** se registra un partido de LaLiga o Champions, la selección, la cuota y **por qué** se hace. Al liquidarse:
+
+- el acierto de ese mercado entra en el criterio (con 8 o más resultados el EV mínimo se mueve ±1 punto, siempre entre 3% y 8%);
+- si el partido estaba en la lista y el modelo tenía probabilidad, el resultado también entra en la calibración.
+
+No hay baloncesto ni otras ligas.
 
 ## Comandos
 

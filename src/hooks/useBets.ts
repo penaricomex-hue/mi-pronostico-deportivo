@@ -75,6 +75,27 @@ export function useBets(currency: string) {
     setBets(next);
   }, [mode, refresh, currency]);
 
+  const addManual = useCallback(async (input: {
+    fixtureId?: string | null; competition: string; kickoff: string; home: string; away: string;
+    selection: string; odds: number; stake: number; line?: number | null; reason: string; tags: string[];
+  }) => {
+    const body = { ...input, source: 'manual' };
+    if (mode === 'server') {
+      await api.bets.create(body);
+      return refresh();
+    }
+    const bet: Bet = {
+      id: `local-${Date.now()}`, createdAt: new Date().toISOString(), matchDate: input.kickoff.slice(0, 10), kickoff: input.kickoff,
+      fixtureId: input.fixtureId || null, home: input.home, away: input.away, competition: input.competition, market: '1x2',
+      selection: input.selection as Bet['selection'], label: input.selection, odds: input.odds, probability: null, stake: input.stake, currency,
+      status: 'pending', profit: null, settledAt: null, score: null, closingOdds: null, clvPct: null, legs: null,
+      source: 'manual', reason: input.reason, tags: input.tags
+    };
+    const next = [bet, ...readLocal()];
+    writeLocal(next);
+    setBets(next);
+  }, [mode, refresh, currency]);
+
   const addParlay = useCallback(async (parlay: Parlay, stake: number) => {
     const first = parlay.legs[0];
     const body = {
@@ -129,7 +150,7 @@ export function useBets(currency: string) {
     return r;
   }, [mode, refresh]);
 
-  return { bets, mode, error, refresh, addPick, addParlay, settle, remove, autoSettle };
+  return { bets, mode, error, refresh, addPick, addParlay, addManual, settle, remove, autoSettle };
 }
 
 export type BetsApi = ReturnType<typeof useBets>;

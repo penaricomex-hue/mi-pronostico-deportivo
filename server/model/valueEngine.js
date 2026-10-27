@@ -98,12 +98,13 @@ export function createValueBettingEngine(rules = {}) {
    * @param {boolean} [c.modelAvailable]
    */
   function evaluate(c) {
+    const minEv = Number.isFinite(c.minEv) ? c.minEv : r.minEv;
     const base = evaluateBet({
       modelProbability: c.modelProbability,
       decisionProbability: c.decisionProbability,
       marketProbability: c.marketProbability,
       executionOdds: c.executionOdds,
-      minEv: r.minEv,
+      minEv,
       maxMarketGap: r.maxMarketGap,
       pushProbability: c.pushProbability || 0
     });
@@ -126,7 +127,7 @@ export function createValueBettingEngine(rules = {}) {
       // El motivo principal: el de la regla base si falla; si no, el primer bloqueo.
       reason: !base.recommended ? base.reason : blockers[0] || base.reason,
       blockers,
-      minimumOdds: minimumOddsFor(Number.isFinite(c.decisionProbability) ? c.decisionProbability : c.modelProbability, r.minEv, c.pushProbability || 0)
+      minimumOdds: minimumOddsFor(Number.isFinite(c.decisionProbability) ? c.decisionProbability : c.modelProbability, minEv, c.pushProbability || 0)
     };
   }
 

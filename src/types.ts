@@ -356,6 +356,25 @@ export interface Bet {
   closingOdds: number | null;
   clvPct: number | null;
   legs: Array<Pick & { status?: BetStatus }> | null;
+  source?: 'manual' | 'pick';
+  reason?: string | null;
+  tags?: string[];
+  learnedAt?: string | null;
+}
+
+export interface UserCriterion {
+  key: string;
+  competitionSlug: string;
+  group: string;
+  groupLabel: string;
+  n: number;
+  hits: number;
+  hitPct: number;
+  roiPct: number | null;
+  minEvDelta: number;
+  stance: string;
+  topTag: string | null;
+  topTagLabel: string | null;
 }
 
 export interface BetSummary {
@@ -390,6 +409,8 @@ export interface Status {
     maxStakePct: number;
     oddsCacheMinutes: number;
     trackClosingOdds: boolean;
+    reportEmail?: string;
+    mailConfigured?: boolean;
   };
   persistentStore: boolean;
   competitions: Record<string, string>;

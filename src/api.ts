@@ -1,4 +1,4 @@
-import type { Analysis, BacktestLeague, Bet, BetStatus, BetSummary, Fixture, Parlay, Performance, Pick, Signal, Status, ThresholdStudy, ValueRules } from './types';
+import type { Analysis, BacktestLeague, Bet, BetStatus, BetSummary, Fixture, Parlay, Performance, Pick, Signal, Status, ThresholdStudy, UserCriterion, ValueRules } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -73,9 +73,15 @@ export const api = {
     list: (period = '') => request<{ bets: Bet[] }>(`/api/bets?period=${period}`),
     summary: (period = 'month') => request<BetSummary>(`/api/bets/summary?period=${period}`),
     create: (body: Record<string, unknown>) => request<{ bet: Bet }>('/api/bets', { method: 'POST', body: JSON.stringify(body) }),
+    criteria: () => request<{ sport: string; minSample: number; groups: UserCriterion[]; tags: Array<{ id: string; label: string }> }>('/api/bets/criteria'),
     settle: (id: Bet['id'], result: BetStatus) =>
       request<{ bet: Bet }>(`/api/bets/${id}/settle`, { method: 'POST', body: JSON.stringify({ result }) }),
     remove: (id: Bet['id']) => request<{ ok: boolean }>(`/api/bets/${id}`, { method: 'DELETE' }),
     autoSettle: () => request<{ settled: number; checked: number }>('/api/bets/auto-settle', { method: 'POST' })
+  },
+
+  reports: {
+    latest: () => request<{ to: string; mailConfigured: boolean; text: string }>('/api/reports'),
+    send: () => request<{ sent: boolean; to: string }>('/api/reports/send', { method: 'POST' })
   }
 };

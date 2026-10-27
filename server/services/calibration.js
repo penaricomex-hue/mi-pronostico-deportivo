@@ -51,6 +51,20 @@ export function createCalibrationService({ pool = null, method = 'auto', logger 
         if (!out.has(key)) out.set(key, emptyBins());
         addObservation(out.get(key), Number(r.model_probability), Number(r.outcome) === 1);
       }
+      try {
+        const manual = await pool.query(
+          `SELECT competition_slug, market, model_probability, outcome
+             FROM manual_outcomes
+            WHERE market IN ('1x2', 'over_under', 'btts')`
+        );
+        for (const r of manual.rows) {
+          const key = mapKey(r.competition_slug, r.market);
+          if (!out.has(key)) out.set(key, emptyBins());
+          addObservation(out.get(key), Number(r.model_probability), Number(r.outcome) === 1);
+        }
+      } catch (err) {
+        logger.warn(`[calibration] Apuestas manuales no disponibles: ${err.message}`);
+      }
     } catch (err) {
       logger.warn(`[calibration] No se pudieron leer predicciones resueltas: ${err.message}`);
     }
